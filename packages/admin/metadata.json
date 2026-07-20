@@ -1,0 +1,7 @@
+{
+  "name": "QuestGuild: Family Task RPG",
+  "description": "A gamified task management system where parents are Guild Masters and children are Adventurers. Features seasonal progression, XP-based leveling, privilege unlocking, and AI-powered quest generation.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

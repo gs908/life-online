@@ -1,0 +1,62 @@
+# server/config.yaml
+# 配置文件:结构化默认值在这里,所有敏感/环境相关值通过 ${env:VAR_NAME} 从 .env 注入。
+# 占位符格式:${env:VAR}      (必填,缺失报错)
+# 带默认值的占位符格式:${env:VAR:default}  (缺失时使用 default)
+
+app:
+  name: life-online
+  host: 0.0.0.0
+  port: 8000
+  workers: 1
+  debug: true
+  log_level: INFO
+  cors_origins:
+    - http://localhost:3000
+    - http://localhost:5173
+
+database:
+  host: ${env:DATABASE_HOST:127.0.0.1}
+  port: ${env:DATABASE_PORT:4400}
+  user: ${env:DATABASE_USER:dev}
+  password: ${env:DATABASE_PASSWORD:}
+  database: ${env:DATABASE_NAME:salers}
+  charset: ${env:DATABASE_CHARSET:utf8mb4}
+  pool:
+    pool_pre_ping: true
+    pool_recycle: 3600
+
+storage:
+  provider: ${env:STORAGE_PROVIDER:minio}
+  minio:
+    endpoint: ${env:MINIO_ENDPOINT:}
+    access_key: ${env:MINIO_ACCESS_KEY:}
+    secret_key: ${env:MINIO_SECRET_KEY:}
+    secure: ${env:MINIO_SECURE:false}
+    bucket: ${env:MINIO_BUCKET:life-online}
+  local:
+    root_path: ${env:LOCAL_STORAGE_ROOT:./uploads}
+    public_base_url: ${env:LOCAL_STORAGE_PUBLIC_BASE_URL:/api/v1/files}
+    bucket: ${env:LOCAL_STORAGE_BUCKET:local}
+
+llm:
+  base_url: ${env:LLM_BASE_URL}
+  api_key: ${env:LLM_API_KEY}
+  model: ${env:LLM_MODEL}
+
+jwt:
+  secret: ${env:JWT_SECRET}
+  algorithm: HS256
+  access_expires_minutes: 60
+  refresh_expires_days: 14
+
+wechat:
+  open_appid: ${env:WECHAT_OPEN_APPID:}
+  open_secret: ${env:WECHAT_OPEN_SECRET:}
+  open_redirect_uri: ${env:WECHAT_OPEN_REDIRECT_URI:}
+  mp_appid: ${env:WECHAT_MP_APPID:}
+  mp_secret: ${env:WECHAT_MP_SECRET:}
+
+# 预留,暂不接入
+redis:
+  enabled: false
+  url: redis://localhost:6379/0
