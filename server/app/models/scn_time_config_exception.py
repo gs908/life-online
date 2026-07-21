@@ -11,19 +11,19 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.common.db.base import Base, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
-    from app.models.time_config import TimeConfig
+    from app.models.scn_time_config import ScnTimeConfig
 
 
-class TimeConfigException(Base, UUIDPrimaryKeyMixin):
-    __tablename__ = "time_config_exceptions"
+class ScnTimeConfigException(Base, UUIDPrimaryKeyMixin):
+    __tablename__ = "scn_time_config_exception"
     __table_args__ = (
-        UniqueConstraint("time_config_id", "day_of_week", name="uq_tce_config_day"),
+        UniqueConstraint("time_config_id", "day_of_week", name="uq_scn_time_config_exception_day"),
     )
 
     time_config_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("time_configs.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36), ForeignKey("scn_time_config.id", ondelete="CASCADE"), nullable=False, index=True
     )
     day_of_week: Mapped[int] = mapped_column(Integer, nullable=False, comment="0=Sun, 6=Sat")
     coin_amount: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    time_config: Mapped["TimeConfig"] = relationship(back_populates="exceptions", lazy="noload")
+    time_config: Mapped["ScnTimeConfig"] = relationship(back_populates="exceptions", lazy="noload")

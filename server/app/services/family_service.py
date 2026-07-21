@@ -11,11 +11,13 @@ from sqlalchemy.orm import selectinload
 
 from app.common.exceptions import ConflictError, NotFoundError
 from app.models.enums import InviteRole, UserRole
-from app.models.family import Family
-from app.models.family_invite import FamilyInvite
-from app.models.user import User
-from app.models.wechat_account import WechatAccount
-from app.models.time_config import TimeConfig
+from app.models.scn_time_config import ScnTimeConfig
+from app.models.sys_account import SysAccount
+from app.models.sys_channel_wechat import SysChannelWechat
+from app.models.sys_child import SysChild
+from app.models.sys_family import SysFamily
+from app.models.sys_invite import SysInvite
+from app.models.sys_parent import SysParent
 
 
 def _gen_invite_code() -> str:
@@ -24,43 +26,46 @@ def _gen_invite_code() -> str:
     return "".join(secrets.choice(alphabet) for _ in range(8))
 
 
-async def create_family(db: AsyncSession, *, name: str, owner_name: str) -> Family:
+async def create_family(db: AsyncSession, *, name: str, owner_name: str) -> SysFamily:
     """创建家庭 + 第一个 GUILD_MASTER。"""
-    family = Family(name=name)
+    family = SysFamily(name=name)
     db.add(family)
     await db.flush()
 
-    owner = User(
+    owner = SysAccount(
         family_id=family.id,
         role=UserRole.GUILD_MASTER,
         name=owner_name,
         avatar="👑",
-        level=99,
-        time_coins=9999,
     )
     db.add(owner)
-    family.owner_id = None  # 先空,flush 后再设
     await db.flush()
+
+    db.add(SysParent(
+        account_id=owner.id,
+        family_id=family.id,
+        display_name=owner_name,
+    ))
     family.owner_id = owner.id
 
     # 默认时间币配置
-    db.add(TimeConfig(family_id=family.id, default_daily_allowance=100))
+    db.add(ScnTimeConfig(family_id=family.id, default_daily_allowance=100))
 
     await db.commit()
     await db.refresh(family)
     return family
 
 
-async def get_family(db: AsyncSession, family_id: str) -> Family:
-    f = await db.get(Family, family_id)
+async def get_family(db: AsyncSession, family_id: str) -> SysFamily:
+    f = await db.get(SysFamily, family_id)
     if not f:
         raise NotFoundError(f"家庭 {family_id} 不存在")
     return f
 
 
-async def list_family_members(db: AsyncSession, family_id: str) -> Sequence[User]:
+async def list_family_members(db: AsyncSession, family_id: str) -> Sequence[SysAccount]:
     result = await db.execute(
-        select(User).where(User.family_id == family_id).order_by(User.id)
+        select(SysAccount).where(SysAccount.family_id == family_id).order_by(SysAccount.id)
     )
     return result.scalars().all()
 
@@ -72,9 +77,9 @@ async def create_invite(
     role: InviteRole,
     created_by: str,
     expires_in_hours: int = 72,
-) -> FamilyInvite:
+) -> SysInvite:
     code = _gen_invite_code()
-    invite = FamilyInvite(
+    invite = SysInvite(
         family_id=family_id,
         code=code,
         role=role,
@@ -94,31 +99,42 @@ async def create_adventurer(
     name: str,
     avatar: str = "⚔️",
     role: UserRole = UserRole.ADVENTURER,
-) -> User:
+) -> SysAccount:
     """父母直接创建孩子/冒险者账户,不绑定微信账号。"""
-    user = User(
+    account = SysAccount(
         family_id=family_id,
         role=role.value if hasattr(role, "value") else str(role),
         name=name,
         avatar=avatar,
     )
-    db.add(user)
+    db.add(account)
+    await db.flush()
+    if (role.value if hasattr(role, "value") else str(role)) == UserRole.ADVENTURER.value:
+        db.add(SysChild(
+            account_id=account.id,
+            family_id=family_id,
+            display_name=name,
+            avatar=avatar,
+        ))
+    else:
+        db.add(SysParent(
+            account_id=account.id,
+            family_id=family_id,
+            display_name=name,
+        ))
     await db.commit()
-    await db.refresh(user)
-    return user
+    await db.refresh(account)
+    return account
 
 
 async def consume_invite(
     db: AsyncSession, *, code: str, nickname: str, avatar: str,
     openid: str, unionid: str | None,
-) -> tuple[FamilyInvite, User]:
-    """用邀请码加入,自动创建 User + WechatAccount。
-
-    返回 (invite, new_user)。若已使用/过期则抛 ConflictError。
-    """
+) -> tuple[SysInvite, SysAccount]:
+    """用邀请码加入,自动创建 SysAccount + SysChannelWechat。"""
     result = await db.execute(
-        select(FamilyInvite)
-        .where(FamilyInvite.code == code)
+        select(SysInvite)
+        .where(SysInvite.code == code)
         .with_for_update()
     )
     invite = result.scalar_one_or_none()
@@ -130,39 +146,53 @@ async def consume_invite(
         raise ConflictError("邀请码已过期")
 
     invite_role = invite.role.value if hasattr(invite.role, "value") else str(invite.role)
-    user = User(
+    account = SysAccount(
         family_id=invite.family_id,
         role=invite_role,
         name=nickname,
         avatar=avatar,
     )
-    db.add(user)
+    db.add(account)
     await db.flush()
 
-    account = WechatAccount(
-        user_id=user.id,
+    if invite_role == UserRole.ADVENTURER.value:
+        db.add(SysChild(
+            account_id=account.id,
+            family_id=invite.family_id,
+            display_name=nickname,
+            avatar=avatar,
+        ))
+    else:
+        db.add(SysParent(
+            account_id=account.id,
+            family_id=invite.family_id,
+            display_name=nickname,
+        ))
+
+    channel = SysChannelWechat(
+        account_id=account.id,
         openid=openid,
         unionid=unionid,
         provider="mp",
         nickname=nickname,
         avatar_url=avatar,
     )
-    db.add(account)
+    db.add(channel)
 
     invite.used_at = datetime.utcnow()
-    invite.used_by = user.id
+    invite.used_by = account.id
     await db.commit()
     await db.refresh(invite)
-    await db.refresh(user, attribute_names=["wechat_accounts"])
-    return invite, user
+    await db.refresh(account, attribute_names=["channel_wechats"])
+    return invite, account
 
 
-async def find_user_by_openid(db: AsyncSession, openid: str) -> User | None:
-    """已绑定 openid 的用户查询(用于微信登录时查找或创建用户)。"""
+async def find_user_by_openid(db: AsyncSession, openid: str) -> SysAccount | None:
+    """已绑定 openid 的账号查询(用于微信登录时查找或创建账号)。"""
     result = await db.execute(
-        select(User)
-        .join(WechatAccount, WechatAccount.user_id == User.id)
-        .where(WechatAccount.openid == openid)
-        .options(selectinload(User.wechat_accounts))
+        select(SysAccount)
+        .join(SysChannelWechat, SysChannelWechat.account_id == SysAccount.id)
+        .where(SysChannelWechat.openid == openid)
+        .options(selectinload(SysAccount.channel_wechats))
     )
     return result.scalar_one_or_none()

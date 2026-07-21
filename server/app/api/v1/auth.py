@@ -1,42 +1,46 @@
-"""认证路由。
-
-- POST /api/v1/auth/wechat/qrcode      H5/PC 扫码登录入口(占位,需 wechat 完整接入)
-- GET  /api/v1/auth/wechat/callback     微信开放平台回调(占位)
-- POST /api/v1/auth/wechat/jscode       小程序登录(code 换 token + User)
-- POST /api/v1/auth/refresh             refresh token 换 access
-- POST /api/v1/auth/logout              登出(客户端清内存中的 token)
-- GET  /api/v1/auth/me                  当前用户信息
-"""
+"""认证路由。"""
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import CurrentUser, DBSession
+from app.models.enums import UserRole
+from app.models.sys_account import SysAccount
+from app.models.sys_child import SysChild
 from app.schemas.common import ApiResponse, ok
 from app.schemas.token import RefreshRequest, TokenPair, WechatJscodeRequest
 from app.schemas.user import UserRead
 from app.services import auth_service, family_service
 from app.services import wechat as wechat_svc
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/sys/auth", tags=["sys-auth"])
 
 
-def _user_to_read(user) -> UserRead:
-    role_value = user.role.value if hasattr(user.role, "value") else str(user.role)
+def _role_value(user: SysAccount) -> str:
+    return user.role.value if hasattr(user.role, "value") else str(user.role)
+
+
+async def account_to_read(db: AsyncSession, user: SysAccount) -> UserRead:
+    child: SysChild | None = None
+    if _role_value(user) == UserRole.ADVENTURER.value:
+        child = (
+            await db.execute(select(SysChild).where(SysChild.account_id == user.id))
+        ).scalar_one_or_none()
     return UserRead(
         id=user.id,
         family_id=user.family_id,
-        role=role_value,
+        role=_role_value(user),
         name=user.name,
         avatar=user.avatar,
-        level=user.level,
-        xp=user.xp,
-        time_coins=user.time_coins,
-        daily_abandon_count=user.daily_abandon_count,
-        last_login_date=user.last_login_date,
-        privileges_unlocked=json.loads(user.privileges_unlocked) if user.privileges_unlocked else [],
+        child_id=child.id if child else None,
+        level=child.level if child else 1,
+        xp=child.xp if child else 0,
+        time_coins=child.time_coin_balance if child else 0,
+        daily_abandon_count=child.daily_abandon_count if child else 0,
+        last_login_date=child.last_login_date if child else None,
+        current_season_id=child.current_season_id if child else None,
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
@@ -44,7 +48,6 @@ def _user_to_read(user) -> UserRead:
 
 @router.post("/wechat/jscode", response_model=ApiResponse[TokenPair], summary="小程序登录(code → token)")
 async def login_with_jscode(body: WechatJscodeRequest, db: DBSession) -> ApiResponse[TokenPair]:
-    """小程序 wx.login() 拿到 code,后端用 code 换 openid/unionid。"""
     info = await wechat_svc.jscode2session(code=body.code)
     openid = info["openid"]
     unionid = info.get("unionid")
@@ -72,5 +75,5 @@ async def logout(_: CurrentUser) -> ApiResponse[dict]:
 
 
 @router.get("/me", response_model=ApiResponse[UserRead], summary="当前用户")
-async def me(user: CurrentUser) -> ApiResponse[UserRead]:
-    return ok(_user_to_read(user))
+async def me(db: DBSession, user: CurrentUser) -> ApiResponse[UserRead]:
+    return ok(await account_to_read(db, user))

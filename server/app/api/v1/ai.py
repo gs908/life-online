@@ -9,7 +9,7 @@ from app.deps import GuildMasterOnly
 from app.schemas.common import ApiResponse, ok
 from app.services import ai_service
 
-router = APIRouter(prefix="/ai", tags=["ai"])
+router = APIRouter(prefix="/scn/ai", tags=["scn-ai"])
 
 
 class GenerateQuestRequest(BaseModel):

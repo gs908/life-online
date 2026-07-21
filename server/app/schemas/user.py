@@ -1,4 +1,4 @@
-"""用户 DTO。"""
+"""用户/账号 DTO。"""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -14,11 +14,13 @@ class UserRead(BaseModel):
     role: UserRole
     name: str
     avatar: str
-    level: int
-    xp: int
-    time_coins: int
-    daily_abandon_count: int
+    child_id: str | None = None
+    level: int = 1
+    xp: int = 0
+    time_coins: int = 0
+    daily_abandon_count: int = 0
     last_login_date: date | None = None
+    current_season_id: str | None = None
     privileges_unlocked: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -42,4 +44,5 @@ class UserUpdate(BaseModel):
     time_coins: int | None = None
     level: int | None = None
     xp: int | None = None
+    current_season_id: str | None = None
     privileges_unlocked: list[str] | None = None

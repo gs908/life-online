@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.exceptions import NotFoundError, PermissionDeniedError
 from app.common.llm import LLMMessage, get_llm_client
-from app.models.theme_style import ThemeStyle
+from app.models.scn_theme_style import ScnThemeStyle
 
 
 DEFAULT_THEME_TOKENS: dict[str, Any] = {
@@ -56,17 +56,17 @@ THEME_JSON_SCHEMA = {
 }
 
 
-async def list_themes(db: AsyncSession, *, family_id: str) -> list[ThemeStyle]:
+async def list_themes(db: AsyncSession, *, family_id: str) -> list[ScnThemeStyle]:
     result = await db.execute(
-        select(ThemeStyle)
-        .where((ThemeStyle.family_id == family_id) | (ThemeStyle.is_system.is_(True)))
-        .order_by(ThemeStyle.is_system.desc(), ThemeStyle.created_at.desc())
+        select(ScnThemeStyle)
+        .where((ScnThemeStyle.family_id == family_id) | (ScnThemeStyle.is_system.is_(True)))
+        .order_by(ScnThemeStyle.is_system.desc(), ScnThemeStyle.created_at.desc())
     )
     return list(result.scalars().all())
 
 
-async def get_theme(db: AsyncSession, *, theme_id: str, family_id: str) -> ThemeStyle:
-    theme = await db.get(ThemeStyle, theme_id)
+async def get_theme(db: AsyncSession, *, theme_id: str, family_id: str) -> ScnThemeStyle:
+    theme = await db.get(ScnThemeStyle, theme_id)
     if not theme:
         raise NotFoundError(f"主题 {theme_id} 不存在")
     if not theme.is_system and theme.family_id != family_id:
@@ -84,10 +84,10 @@ async def create_theme(
     tokens: dict[str, Any] | None = None,
     css_vars: dict[str, str] | None = None,
     is_active: bool = False,
-) -> ThemeStyle:
+) -> ScnThemeStyle:
     if is_active:
         await _deactivate_family_themes(db, family_id)
-    theme = ThemeStyle(
+    theme = ScnThemeStyle(
         family_id=family_id,
         name=name,
         scene_prompt=scene_prompt,
@@ -109,7 +109,7 @@ async def update_theme(
     theme_id: str,
     family_id: str,
     **patch,
-) -> ThemeStyle:
+) -> ScnThemeStyle:
     theme = await get_theme(db, theme_id=theme_id, family_id=family_id)
     if theme.is_system:
         raise PermissionDeniedError("系统主题不可编辑")
@@ -131,7 +131,7 @@ async def delete_theme(db: AsyncSession, *, theme_id: str, family_id: str) -> No
     await db.commit()
 
 
-async def activate_theme(db: AsyncSession, *, theme_id: str, family_id: str) -> ThemeStyle:
+async def activate_theme(db: AsyncSession, *, theme_id: str, family_id: str) -> ScnThemeStyle:
     return await update_theme(db, theme_id=theme_id, family_id=family_id, is_active=True)
 
 
@@ -142,7 +142,7 @@ async def generate_theme(
     scene_prompt: str,
     name: str | None = None,
     activate: bool = False,
-) -> ThemeStyle:
+) -> ScnThemeStyle:
     client = get_llm_client()
     resp = await client.chat_json(
         messages=[
@@ -168,7 +168,7 @@ async def generate_theme(
 
 async def _deactivate_family_themes(db: AsyncSession, family_id: str) -> None:
     await db.execute(
-        update(ThemeStyle)
-        .where(ThemeStyle.family_id == family_id, ThemeStyle.is_active.is_(True))
+        update(ScnThemeStyle)
+        .where(ScnThemeStyle.family_id == family_id, ScnThemeStyle.is_active.is_(True))
         .values(is_active=False)
     )

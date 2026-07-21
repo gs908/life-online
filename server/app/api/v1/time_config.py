@@ -4,11 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.deps import CurrentUser, DBSession, GuildMasterOnly
+from app.models.scn_time_config_exception import ScnTimeConfigException
 from app.schemas.common import ApiResponse, ok
 from app.schemas.time_config import TimeConfigExceptionRead, TimeConfigRead, TimeConfigUpdate
 from app.services import coin_service
 
-router = APIRouter(prefix="/time-config", tags=["time-config"])
+router = APIRouter(prefix="/scn/time-configs", tags=["scn-time-configs"])
 
 
 def _to_read(tc) -> TimeConfigRead:
@@ -32,17 +33,15 @@ async def get_my_config(db: DBSession, user: CurrentUser) -> ApiResponse[TimeCon
 async def update_my_config(
     body: TimeConfigUpdate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TimeConfigRead]:
-    from app.models.time_config_exception import TimeConfigException
     tc = await coin_service.get_or_create_time_config(db, user.family_id)
     if body.default_daily_allowance is not None:
         tc.default_daily_allowance = body.default_daily_allowance
     if body.exceptions is not None:
-        # 简单做法:清空再重建
         for e in list(tc.exceptions):
             await db.delete(e)
         await db.flush()
         for ex in body.exceptions:
-            db.add(TimeConfigException(
+            db.add(ScnTimeConfigException(
                 time_config_id=tc.id,
                 day_of_week=ex.day_of_week,
                 coin_amount=ex.coin_amount,

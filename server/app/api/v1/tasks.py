@@ -1,10 +1,10 @@
-"""任务路由:CRUD + 状态机操作。"""
+"""任务路由:模板 + 实例 CRUD 与状态机操作。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
 from app.deps import CurrentUser, DBSession, GuildMasterOnly
-from app.models.enums import TaskStatus
+from app.models.enums import TaskStatus, TaskType
 from app.schemas.common import ApiResponse, PageQuery, PageResult, ok
 from app.schemas.task import (
     TaskApproveRequest,
@@ -15,7 +15,12 @@ from app.schemas.task import (
 from app.services import task_service
 from app.services.upload_service import build_access_url
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
+
+
+def _template_value(t, name: str, default=None):
+    template = getattr(t, "template", None)
+    return getattr(template, name, default) if template is not None else default
 
 
 def _to_read(t) -> TaskRead:
@@ -26,32 +31,51 @@ def _to_read(t) -> TaskRead:
         except Exception:
             proof_url = None
     return TaskRead(
-        id=t.id, family_id=t.family_id, season_id=t.season_id,
-        creator_id=t.creator_id, target_user_id=t.target_user_id, assignee_id=t.assignee_id,
-        title=t.title, description=t.description, lore_snippet=t.lore_snippet,
-        xp_reward=t.xp_reward, type=t.type, status=t.status,
-        deadline=t.deadline, required_start_time=t.required_start_time,
-        proof_url=proof_url, rating=t.rating,
-        started_at=t.started_at, submitted_at=t.submitted_at, completed_at=t.completed_at,
-        reminder_message=t.reminder_message, reminder_minutes_before=t.reminder_minutes_before,
+        id=t.id,
+        family_id=t.family_id,
+        season_id=t.season_id,
+        template_id=t.template_id,
+        creator_account_id=t.creator_account_id,
+        target_child_id=t.target_child_id,
+        assignee_child_id=t.assignee_child_id,
+        title=t.title,
+        description=t.description,
+        lore_snippet=t.lore_snippet,
+        xp_reward=t.xp_reward,
+        type=_template_value(t, "type", TaskType.DAILY),
+        status=t.status,
+        deadline=t.deadline,
+        required_start_time=_template_value(t, "required_start_time"),
+        proof_url=proof_url,
+        rating=t.rating,
+        started_at=t.started_at,
+        submitted_at=t.submitted_at,
+        completed_at=t.completed_at,
+        reminder_message=_template_value(t, "reminder_message"),
+        reminder_minutes_before=_template_value(t, "reminder_minutes_before", 15),
         time_deposit=t.time_deposit,
-        created_at=t.created_at, updated_at=t.updated_at,
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+        creator_id=t.creator_account_id,
+        target_user_id=t.target_child_id,
+        assignee_id=t.assignee_child_id,
     )
 
 
-@router.get("", response_model=ApiResponse[PageResult[TaskRead]], summary="任务列表")
+@router.get("", response_model=ApiResponse[PageResult[TaskRead]], summary="任务实例列表")
 async def list_tasks(
     db: DBSession, user: CurrentUser,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     season_id: str | None = Query(default=None),
     status: TaskStatus | None = Query(default=None),
+    assignee_child_id: str | None = Query(default=None),
     assignee_id: str | None = Query(default=None),
 ) -> ApiResponse[PageResult[TaskRead]]:
     query = PageQuery(page=page, page_size=page_size)
     items, total = await task_service.list_tasks(
         db, family_id=user.family_id,
-        season_id=season_id, status=status, assignee_id=assignee_id,
+        season_id=season_id, status=status, assignee_id=assignee_child_id or assignee_id,
         offset=query.offset, limit=query.page_size,
     )
     return ok(PageResult(
@@ -62,7 +86,7 @@ async def list_tasks(
     ))
 
 
-@router.get("/{task_id}", response_model=ApiResponse[TaskRead], summary="任务详情")
+@router.get("/{task_id}", response_model=ApiResponse[TaskRead], summary="任务实例详情")
 async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiResponse[TaskRead]:
     t = await task_service.get_task(db, task_id)
     if t.family_id != user.family_id:
@@ -71,7 +95,7 @@ async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiRespons
     return ok(_to_read(t))
 
 
-@router.post("", response_model=ApiResponse[TaskRead], summary="创建任务(父母)")
+@router.post("", response_model=ApiResponse[TaskRead], summary="创建任务模板并生成初始实例(父母)")
 async def create_task(
     body: TaskCreate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
@@ -82,7 +106,7 @@ async def create_task(
     return ok(_to_read(t))
 
 
-@router.delete("/{task_id}", response_model=ApiResponse[dict], summary="删除任务(父母)")
+@router.delete("/{task_id}", response_model=ApiResponse[dict], summary="删除任务实例(父母)")
 async def delete_task(task_id: str, db: DBSession, user: GuildMasterOnly) -> ApiResponse[dict]:
     await task_service.delete_task(db, task_id=task_id, family_id=user.family_id)
     return ok({"ok": True})

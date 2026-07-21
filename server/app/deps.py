@@ -3,7 +3,7 @@ FastAPI 依赖注入。
 
 - get_settings: 取配置(便于测试时 override)
 - get_db: 数据库会话
-- get_current_user: 解析 JWT,返回当前 User
+- get_current_user: 解析 JWT,返回当前 SysAccount
 - require_role: 角色守卫
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from app.common.exceptions import PermissionDeniedError, UnauthorizedError
 from app.common.security.jwt import decode_token
 from app.config import Settings, get_settings as _get_settings
 from app.models.enums import UserRole
-from app.models.user import User
+from app.models.sys_account import SysAccount
 from app.services.auth_service import load_user
 
 SettingsDep = Annotated[Settings, Depends(_get_settings)]
@@ -47,7 +47,7 @@ async def _extract_token(authorization: str | None) -> str:
 async def get_current_user(
     db: DBSession,
     authorization: Annotated[str | None, Header()] = None,
-) -> User:
+) -> SysAccount:
     token = await _extract_token(authorization)
     try:
         payload = decode_token(token)
@@ -59,16 +59,16 @@ async def get_current_user(
     if payload.get("type") != "access":
         raise UnauthorizedError("不是 access token")
 
-    user_id = payload["sub"]
-    return await load_user(db, user_id)
+    account_id = payload["sub"]
+    return await load_user(db, account_id)
 
 
-CurrentUser = Annotated[User, Depends(get_current_user)]
+CurrentUser = Annotated[SysAccount, Depends(get_current_user)]
 
 
-def require_role(*roles: UserRole) -> Callable[[User], User]:
+def require_role(*roles: UserRole) -> Callable[[SysAccount], SysAccount]:
     """依赖工厂:限定某些接口仅特定角色可访问。"""
-    async def _checker(user: CurrentUser) -> User:
+    async def _checker(user: CurrentUser) -> SysAccount:
         role_values = [r.value if isinstance(r, UserRole) else str(r) for r in roles]
         user_role = user.role.value if isinstance(user.role, UserRole) else str(user.role)
         if user_role not in role_values:
@@ -79,4 +79,4 @@ def require_role(*roles: UserRole) -> Callable[[User], User]:
     return _checker
 
 
-GuildMasterOnly = Annotated[User, Depends(require_role(UserRole.GUILD_MASTER))]
+GuildMasterOnly = Annotated[SysAccount, Depends(require_role(UserRole.GUILD_MASTER))]

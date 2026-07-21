@@ -12,41 +12,51 @@ from app.models.enums import (
     UploadPurpose,
     UserRole,
 )
-from app.models.coin_transaction import CoinTransaction
-from app.models.family import Family
-from app.models.family_invite import FamilyInvite
-from app.models.privilege import Privilege
-from app.models.redemption import RedemptionRecord
-from app.models.season import Season
-from app.models.task import Task
-from app.models.theme_style import ThemeStyle
-from app.models.time_config import TimeConfig
-from app.models.time_config_exception import TimeConfigException
-from app.models.upload import Upload
-from app.models.user import User
-from app.models.user_privilege import UserPrivilege
-from app.models.wechat_account import WechatAccount
+from app.models.scn_privilege_template import ScnPrivilegeTemplate
+from app.models.scn_privilege_unlock import ScnPrivilegeUnlock
+from app.models.scn_privilege_use import ScnPrivilegeUse
+from app.models.scn_season import ScnSeason
+from app.models.scn_task_instance import ScnTaskInstance
+from app.models.scn_task_template import ScnTaskTemplate
+from app.models.scn_theme_style import ScnThemeStyle
+from app.models.scn_time_coin import ScnTimeCoin
+from app.models.scn_time_coin_log import ScnTimeCoinLog
+from app.models.scn_time_config import ScnTimeConfig
+from app.models.scn_time_config_exception import ScnTimeConfigException
+from app.models.scn_trace import ScnTrace
+from app.models.sys_account import SysAccount
+from app.models.sys_channel_wechat import SysChannelWechat
+from app.models.sys_child import SysChild
+from app.models.sys_family import SysFamily
+from app.models.sys_invite import SysInvite
+from app.models.sys_parent import SysParent
+from app.models.sys_upload import SysUpload
 
 __all__ = [
-    "Family",
-    "CoinTransaction",
     "CoinTransactionType",
-    "FamilyInvite",
-    "Privilege",
-    "RedemptionRecord",
-    "Season",
-    "Task",
-    "ThemeStyle",
+    "InviteRole",
+    "ScnPrivilegeTemplate",
+    "ScnPrivilegeUnlock",
+    "ScnPrivilegeUse",
+    "ScnSeason",
+    "ScnTaskInstance",
+    "ScnTaskTemplate",
+    "ScnThemeStyle",
+    "ScnTimeCoin",
+    "ScnTimeCoinLog",
+    "ScnTimeConfig",
+    "ScnTimeConfigException",
+    "ScnTrace",
+    "SysAccount",
+    "SysChannelWechat",
+    "SysChild",
+    "SysFamily",
+    "SysInvite",
+    "SysParent",
+    "SysUpload",
     "TaskStatus",
     "TaskType",
     "ThemeId",
-    "TimeConfig",
-    "TimeConfigException",
-    "Upload",
     "UploadPurpose",
-    "User",
-    "UserPrivilege",
     "UserRole",
-    "WechatAccount",
-    "InviteRole",
 ]

@@ -1,4 +1,4 @@
-"""上传服务:把文件存到对象存储并写 Upload 元数据。"""
+"""上传服务:把文件存到对象存储并写 SysUpload 元数据。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,9 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.storage import ObjectInfo, get_storage
+from app.config import settings
 from app.models.enums import UploadPurpose
-from app.models.upload import Upload
-from app.models.user import User
+from app.models.sys_account import SysAccount
+from app.models.sys_upload import SysUpload
 
 
 def _build_object_key(purpose: UploadPurpose, family_id: str, filename: str) -> str:
@@ -22,23 +23,26 @@ def _build_object_key(purpose: UploadPurpose, family_id: str, filename: str) -> 
 async def save_upload(
     db: AsyncSession, *,
     family_id: str,
-    uploader: User,
+    uploader: SysAccount,
     content: bytes,
     content_type: str,
     purpose: UploadPurpose,
     filename: str,
-) -> Upload:
+) -> SysUpload:
     storage = get_storage()
     await storage.ensure_bucket()
 
     key = _build_object_key(purpose, family_id, filename)
     info: ObjectInfo = await storage.upload(key, content, content_type=content_type)
+    access_url = storage.presign_get(info.key)
 
-    record = Upload(
+    record = SysUpload(
         family_id=family_id,
-        uploader_id=uploader.id,
+        uploader_account_id=uploader.id,
+        storage_provider=settings.storage.provider,
         object_key=info.key,
         bucket=info.bucket,
+        public_url=access_url,
         content_type=content_type,
         size=info.size,
         purpose=purpose,
@@ -55,8 +59,8 @@ def build_access_url(object_key: str, *, expires_seconds: int = 3600) -> str:
     return storage.presign_get(object_key, expires_seconds=expires_seconds)
 
 
-async def get_upload(db: AsyncSession, upload_id: str) -> Upload:
-    u = await db.get(Upload, upload_id)
+async def get_upload(db: AsyncSession, upload_id: str) -> SysUpload:
+    u = await db.get(SysUpload, upload_id)
     if not u:
         from app.common.exceptions import NotFoundError
         raise NotFoundError(f"上传 {upload_id} 不存在")
@@ -65,9 +69,9 @@ async def get_upload(db: AsyncSession, upload_id: str) -> Upload:
 
 async def find_uploads(
     db: AsyncSession, *, family_id: str, purpose: UploadPurpose | None = None,
-) -> list[Upload]:
-    stmt = select(Upload).where(Upload.family_id == family_id)
+) -> list[SysUpload]:
+    stmt = select(SysUpload).where(SysUpload.family_id == family_id)
     if purpose is not None:
-        stmt = stmt.where(Upload.purpose == purpose)
-    stmt = stmt.order_by(Upload.id.desc())
+        stmt = stmt.where(SysUpload.purpose == purpose)
+    stmt = stmt.order_by(SysUpload.id.desc())
     return list((await db.execute(stmt)).scalars().all())

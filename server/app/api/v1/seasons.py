@@ -8,7 +8,7 @@ from app.schemas.common import ApiResponse, ok
 from app.schemas.season import SeasonCreate, SeasonHistoryItem, SeasonRead, SeasonUpdate
 from app.services import season_service
 
-router = APIRouter(prefix="/seasons", tags=["seasons"])
+router = APIRouter(prefix="/scn/seasons", tags=["scn-seasons"])
 
 
 def _to_read(s) -> SeasonRead:

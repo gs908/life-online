@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, time
 
-from app.models.user import User
+from app.models.sys_child import SysChild
 
 
 def xp_needed_for_level(level: int) -> int:
@@ -35,24 +35,24 @@ def calculate_xp(base_xp: int, *, rating: int | None = None,
                                minute=required_start_time.minute,
                                second=0, microsecond=0)
         if now > deadline:
-            mult *= 0.8  # 超过 required_start_time 仍提交
+            mult *= 0.8
     if started_at is not None:
         elapsed_min = (now - started_at).total_seconds() / 60
         if elapsed_min < 60:
-            mult *= 1.1  # 1h 内完成的奖励
+            mult *= 1.1
     return int(round(base_xp * mult))
 
 
-def apply_xp_and_level(user: User, xp_gained: int) -> dict:
-    """给用户加 XP,处理升级。返回 {"leveled_up": bool, "new_level": int, "final_xp": int}。"""
-    user.xp += xp_gained
+def apply_xp_and_level(child: SysChild, xp_gained: int) -> dict:
+    """给孩子加 XP,处理升级。返回升级信息。"""
+    child.xp += xp_gained
     leveled_up = False
-    while user.xp >= xp_needed_for_level(user.level):
-        user.xp -= xp_needed_for_level(user.level)
-        user.level += 1
+    while child.xp >= xp_needed_for_level(child.level):
+        child.xp -= xp_needed_for_level(child.level)
+        child.level += 1
         leveled_up = True
     return {
         "leveled_up": leveled_up,
-        "new_level": user.level,
-        "final_xp": user.xp,
+        "new_level": child.level,
+        "final_xp": child.xp,
     }

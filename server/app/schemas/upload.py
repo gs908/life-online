@@ -1,6 +1,8 @@
 """上传 DTO。"""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 from app.models.enums import UploadPurpose
@@ -8,12 +10,17 @@ from app.models.enums import UploadPurpose
 
 class UploadRead(BaseModel):
     id: str
+    family_id: str
+    uploader_account_id: str | None = None
+    storage_provider: str
     object_key: str
     bucket: str
+    public_url: str | None = None
     content_type: str
     size: int
     purpose: UploadPurpose
-    access_url: str  # 访问 URL 或预签名 GET URL
+    access_url: str
+    created_at: datetime
 
 
 class UploadUrlRequest(BaseModel):

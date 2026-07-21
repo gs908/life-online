@@ -8,7 +8,7 @@ from app.schemas.common import ApiResponse, ok
 from app.schemas.theme import ThemeGenerateRequest, ThemeStyleCreate, ThemeStyleRead, ThemeStyleUpdate
 from app.services import theme_service
 
-router = APIRouter(prefix="/themes", tags=["themes"])
+router = APIRouter(prefix="/scn/theme-styles", tags=["scn-theme-styles"])
 
 
 def _to_read(theme) -> ThemeStyleRead:

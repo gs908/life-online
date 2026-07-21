@@ -2,55 +2,52 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.common.exceptions import NotFoundError, ValidationError
-from app.models.coin_transaction import CoinTransaction
+from app.common.exceptions import NotFoundError, PermissionDeniedError, ValidationError
 from app.models.enums import CoinTransactionType
-from app.models.time_config import TimeConfig
-from app.models.user import User
-
-if TYPE_CHECKING:
-    from app.models.task import Task
+from app.models.scn_time_coin_log import ScnTimeCoinLog
+from app.models.scn_time_config import ScnTimeConfig
+from app.models.sys_child import SysChild
 
 
 async def record_transaction(
     db: AsyncSession,
     *,
-    user: User,
+    child: SysChild,
     type: CoinTransactionType,
     amount: int,
-    task_id: str | None = None,
+    task_instance_id: str | None = None,
     note: str | None = None,
-) -> CoinTransaction:
-    record = CoinTransaction(
-        family_id=user.family_id,
-        user_id=user.id,
-        task_id=task_id,
+) -> ScnTimeCoinLog:
+    record = ScnTimeCoinLog(
+        family_id=child.family_id,
+        child_id=child.id,
+        season_id=child.current_season_id,
+        task_instance_id=task_instance_id,
         type=type,
         amount=amount,
-        balance_after=user.time_coins,
+        balance_after=child.time_coin_balance,
         note=note,
     )
     db.add(record)
     return record
 
 
-async def get_or_create_time_config(db: AsyncSession, family_id: str) -> TimeConfig:
+async def get_or_create_time_config(db: AsyncSession, family_id: str) -> ScnTimeConfig:
     tc = (
         await db.execute(
-            select(TimeConfig)
-            .where(TimeConfig.family_id == family_id)
-            .options(selectinload(TimeConfig.exceptions))
+            select(ScnTimeConfig)
+            .where(ScnTimeConfig.family_id == family_id)
+            .options(selectinload(ScnTimeConfig.exceptions))
         )
     ).scalar_one_or_none()
     if tc:
         return tc
-    tc = TimeConfig(family_id=family_id, default_daily_allowance=100)
+    tc = ScnTimeConfig(family_id=family_id, default_daily_allowance=100)
     db.add(tc)
     await db.flush()
     return tc
@@ -59,7 +56,6 @@ async def get_or_create_time_config(db: AsyncSession, family_id: str) -> TimeCon
 async def compute_daily_allowance(db: AsyncSession, family_id: str, day: date) -> int:
     tc = await get_or_create_time_config(db, family_id)
     dow = day.weekday()  # Mon=0..Sun=6,与表里 0=Sun 不同
-    # 转换为表里 day_of_week 语义(0=Sun..6=Sat)
     table_dow = (dow + 1) % 7
     for ex in tc.exceptions:
         if ex.day_of_week == table_dow:
@@ -67,16 +63,16 @@ async def compute_daily_allowance(db: AsyncSession, family_id: str, day: date) -
     return tc.default_daily_allowance
 
 
-async def reset_daily_allowance(db: AsyncSession, user: User, today: date) -> int:
+async def reset_daily_allowance(db: AsyncSession, child: SysChild, today: date) -> int:
     """每日首次登录时重置。返回重置后的配额。"""
-    allowance = await compute_daily_allowance(db, user.family_id, today)
-    delta = allowance - user.time_coins
-    user.time_coins = allowance
-    user.daily_abandon_count = 0
-    user.last_login_date = today
+    allowance = await compute_daily_allowance(db, child.family_id, today)
+    delta = allowance - child.time_coin_balance
+    child.time_coin_balance = allowance
+    child.daily_abandon_count = 0
+    child.last_login_date = today
     await record_transaction(
         db,
-        user=user,
+        child=child,
         type=CoinTransactionType.DAILY_RESET,
         amount=delta,
         note="每日时间币重置",
@@ -85,11 +81,7 @@ async def reset_daily_allowance(db: AsyncSession, user: User, today: date) -> in
 
 
 def calculate_refund(deposit: int, abandon_count_today: int) -> int:
-    """放弃任务时的退款金额。
-
-    - abandon_count_today >= 3 时仅退 60%(40% 惩罚)
-    - 否则全退
-    """
+    """放弃任务时的退款金额。"""
     if abandon_count_today >= 3:
         return int(deposit * 0.6)
     return deposit
@@ -102,15 +94,20 @@ def calculate_deposit_fee(time_deposit: int) -> int:
     return time_deposit
 
 
-def has_sufficient_coins(user: User, required: int) -> bool:
-    return user.time_coins >= required
+def has_sufficient_coins(child: SysChild, required: int) -> bool:
+    return child.time_coin_balance >= required
 
 
-async def ensure_user(db: AsyncSession, user_id: str) -> User:
-    u = await db.get(User, user_id)
-    if not u:
-        raise NotFoundError(f"用户 {user_id} 不存在")
-    return u
+async def ensure_child(db: AsyncSession, child_id: str) -> SysChild:
+    child = await db.get(SysChild, child_id)
+    if child:
+        return child
+    child = (
+        await db.execute(select(SysChild).where(SysChild.account_id == child_id))
+    ).scalar_one_or_none()
+    if not child:
+        raise NotFoundError(f"孩子 {child_id} 不存在")
+    return child
 
 
 async def adjust_coins(
@@ -120,26 +117,25 @@ async def adjust_coins(
     family_id: str,
     amount: int,
     note: str | None = None,
-) -> tuple[User, CoinTransaction]:
-    user = await ensure_user(db, user_id)
-    if user.family_id != family_id:
-        from app.common.exceptions import PermissionDeniedError
+) -> tuple[SysChild, ScnTimeCoinLog]:
+    child = await ensure_child(db, user_id)
+    if child.family_id != family_id:
         raise PermissionDeniedError("只能调整自己家庭成员的时间币")
-    new_balance = user.time_coins + amount
+    new_balance = child.time_coin_balance + amount
     if new_balance < 0:
         raise ValidationError("时间币余额不能为负")
-    user.time_coins = new_balance
+    child.time_coin_balance = new_balance
     tx = await record_transaction(
         db,
-        user=user,
+        child=child,
         type=CoinTransactionType.MANUAL_ADJUST,
         amount=amount,
         note=note,
     )
     await db.commit()
-    await db.refresh(user)
+    await db.refresh(child)
     await db.refresh(tx)
-    return user, tx
+    return child, tx
 
 
 async def list_transactions(
@@ -149,14 +145,15 @@ async def list_transactions(
     user_id: str | None = None,
     offset: int = 0,
     limit: int = 20,
-) -> tuple[list[CoinTransaction], int]:
-    from sqlalchemy import func
-
-    stmt = select(CoinTransaction).where(CoinTransaction.family_id == family_id)
+) -> tuple[list[ScnTimeCoinLog], int]:
+    stmt = select(ScnTimeCoinLog).where(ScnTimeCoinLog.family_id == family_id)
     if user_id is not None:
-        stmt = stmt.where(CoinTransaction.user_id == user_id)
+        child = await ensure_child(db, user_id)
+        stmt = stmt.where(
+            or_(ScnTimeCoinLog.child_id == child.id, ScnTimeCoinLog.child_id == user_id)
+        )
     total = int((await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one())
     items = list((await db.execute(
-        stmt.order_by(CoinTransaction.created_at.desc()).offset(offset).limit(limit)
+        stmt.order_by(ScnTimeCoinLog.created_at.desc()).offset(offset).limit(limit)
     )).scalars().all())
     return items, total

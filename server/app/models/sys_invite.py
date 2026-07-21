@@ -13,34 +13,39 @@ from app.common.db.base import Base, UUIDPrimaryKeyMixin
 from app.models.enums import InviteRole
 
 if TYPE_CHECKING:
-    from app.models.family import Family
-    from app.models.user import User
+    from app.models.sys_account import SysAccount
+    from app.models.sys_family import SysFamily
 
 
-class FamilyInvite(Base, UUIDPrimaryKeyMixin):
-    __tablename__ = "family_invites"
+class SysInvite(Base, UUIDPrimaryKeyMixin):
+    __tablename__ = "sys_invite"
 
     family_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("families.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36),
+        ForeignKey("sys_family.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     code: Mapped[str] = mapped_column(String(16), nullable=False, unique=True, index=True)
-    role: Mapped[InviteRole] = mapped_column(String(32), nullable=False, default=InviteRole.ADVENTURER)
+    role: Mapped[InviteRole] = mapped_column(
+        String(32), nullable=False, default=InviteRole.ADVENTURER
+    )
     created_by: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     used_by: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(),
+        DateTime, nullable=False, server_default=func.now()
     )
 
-    family: Mapped["Family"] = relationship(back_populates="invites", lazy="noload")
-    creator: Mapped["User | None"] = relationship(
+    family: Mapped["SysFamily"] = relationship(back_populates="invites", lazy="noload")
+    creator: Mapped["SysAccount | None"] = relationship(
         foreign_keys=[created_by], lazy="noload"
     )
-    consumer: Mapped["User | None"] = relationship(
+    consumer: Mapped["SysAccount | None"] = relationship(
         foreign_keys=[used_by], lazy="noload"
     )

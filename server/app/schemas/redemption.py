@@ -7,7 +7,9 @@ from pydantic import BaseModel
 
 
 class RedemptionCreate(BaseModel):
-    user_id: str
+    child_id: str | None = None
+    user_id: str | None = None
+    privilege_template_id: str | None = None
     privilege_id: str | None = None
     privilege_title: str | None = None
     cost: str | None = None
@@ -16,8 +18,14 @@ class RedemptionCreate(BaseModel):
 class RedemptionRead(BaseModel):
     id: str
     family_id: str
-    user_id: str
-    privilege_id: str | None = None
+    child_id: str
+    season_id: str | None = None
+    privilege_template_id: str | None = None
     privilege_title: str
     cost: str | None
-    date: datetime
+    used_at: datetime
+
+    # 兼容旧前端字段名。
+    user_id: str | None = None
+    privilege_id: str | None = None
+    date: datetime | None = None
