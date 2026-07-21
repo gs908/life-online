@@ -1,0 +1,46 @@
+# Root docker-compose for local development.
+# Starts MySQL and MinIO with defaults that match server/.env.example.
+# Override any value by exporting the same env var name before `docker compose up`.
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: life-online-mysql
+    restart: unless-stopped
+    ports:
+      - "${DATABASE_PORT:-4400}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${DATABASE_NAME:-salers}
+      MYSQL_USER: ${DATABASE_USER:-dev}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-dev}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DATABASE_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    container_name: life-online-minio
+    restart: unless-stopped
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mysql_data:
+  minio_data:

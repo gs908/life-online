@@ -48,14 +48,23 @@ cp .env.example .env
 
 ## 3. 起 MySQL + MinIO(本地开发)
 
-项目根目录有 `docker-compose.yml`(后续添加),用 docker 起这两个服务:
+项目根目录有 `docker-compose.yml`,用 docker 起这两个服务:
 
 ```bash
 # 回到仓库根
 cd ..
-docker compose up -d mysql minio
-# MinIO 控制台:http://localhost:9001 (minioadmin / minioadmin)
+docker compose up -d
 ```
+
+默认账号/端口(与 `server/.env.example` 一致,改前保持两边同步):
+
+| 服务 | 地址 | 账号 |
+| --- | --- | --- |
+| MySQL | `127.0.0.1:4400`,db `salers` | `dev` / `dev`(root: `root` / `root`) |
+| MinIO API | `http://localhost:9000` | `minioadmin` / `minioadmin` |
+| MinIO 控制台 | `http://localhost:9001` | `minioadmin` / `minioadmin` |
+
+两个服务都带 `healthcheck`,可用 `docker compose ps` 确认状态是否为 `healthy`。MinIO 的 bucket(`life-online`)由应用在首次上传时自动创建,不需要手动建。
 
 ## 4. 数据库迁移
 
