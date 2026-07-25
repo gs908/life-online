@@ -5,19 +5,32 @@
 """
 from app.models.enums import (
     CoinTransactionType,
+    HiddenTriggerKind,
     InviteRole,
+    NotificationChannel,
+    NotificationStatus,
+    NotificationType,
+    ProofKind,
+    TaskCategory,
     TaskStatus,
     TaskType,
     ThemeId,
     UploadPurpose,
     UserRole,
 )
+from app.models.scn_hidden_quest import ScnHiddenQuest
+from app.models.scn_notification import ScnNotification
+from app.models.scn_onboarding_path import ScnOnboardingPath
+from app.models.scn_onboarding_step import ScnOnboardingStep
 from app.models.scn_privilege_template import ScnPrivilegeTemplate
 from app.models.scn_privilege_unlock import ScnPrivilegeUnlock
 from app.models.scn_privilege_use import ScnPrivilegeUse
 from app.models.scn_season import ScnSeason
+from app.models.scn_stats_daily import ScnStatsDaily
 from app.models.scn_task_instance import ScnTaskInstance
+from app.models.scn_task_proof import ScnTaskProof
 from app.models.scn_task_template import ScnTaskTemplate
+from app.models.scn_task_template_library import ScnTaskTemplateLibrary
 from app.models.scn_theme_style import ScnThemeStyle
 from app.models.scn_time_coin import ScnTimeCoin
 from app.models.scn_time_coin_log import ScnTimeCoinLog
@@ -34,13 +47,25 @@ from app.models.sys_upload import SysUpload
 
 __all__ = [
     "CoinTransactionType",
+    "HiddenTriggerKind",
     "InviteRole",
+    "NotificationChannel",
+    "NotificationStatus",
+    "NotificationType",
+    "ProofKind",
+    "ScnHiddenQuest",
+    "ScnNotification",
+    "ScnOnboardingPath",
+    "ScnOnboardingStep",
     "ScnPrivilegeTemplate",
     "ScnPrivilegeUnlock",
     "ScnPrivilegeUse",
     "ScnSeason",
+    "ScnStatsDaily",
     "ScnTaskInstance",
+    "ScnTaskProof",
     "ScnTaskTemplate",
+    "ScnTaskTemplateLibrary",
     "ScnThemeStyle",
     "ScnTimeCoin",
     "ScnTimeCoinLog",
@@ -54,6 +79,7 @@ __all__ = [
     "SysInvite",
     "SysParent",
     "SysUpload",
+    "TaskCategory",
     "TaskStatus",
     "TaskType",
     "ThemeId",

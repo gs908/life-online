@@ -45,6 +45,18 @@ class SysChild(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     daily_abandon_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_login_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     current_season_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    onboarding_path_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("scn_onboarding_path.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+        index=True,
+    )
+    onboarding_step_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("scn_onboarding_step.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+        index=True,
+    )
 
     account: Mapped["SysAccount"] = relationship(lazy="joined")
     family: Mapped["SysFamily"] = relationship(lazy="noload")

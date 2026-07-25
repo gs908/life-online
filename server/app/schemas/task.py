@@ -5,11 +5,13 @@ from datetime import datetime, time
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import TaskStatus, TaskType
+from app.models.enums import TaskCategory, TaskStatus, TaskType
 
 
 class TaskTemplateCreate(BaseModel):
     season_id: str
+    library_id: str | None = None
+    category: TaskCategory | None = None
     title: str
     description: str = ""
     lore_snippet: str | None = None
@@ -28,7 +30,9 @@ class TaskTemplateRead(BaseModel):
     family_id: str
     season_id: str
     creator_account_id: str | None = None
+    library_id: str | None = None
     target_child_id: str | None = None
+    category: TaskCategory | None = None
     title: str
     description: str
     lore_snippet: str | None = None
@@ -47,6 +51,7 @@ class TaskCreate(TaskTemplateCreate):
     """兼容旧创建接口:创建模板并生成一条初始实例。"""
     target_user_id: str | None = None
     deadline: datetime | None = None
+    expire_at: datetime | None = None
 
 
 class TaskRead(BaseModel):
@@ -57,6 +62,7 @@ class TaskRead(BaseModel):
     creator_account_id: str | None = None
     target_child_id: str | None = None
     assignee_child_id: str | None = None
+    category: TaskCategory | None = None
     title: str
     description: str
     lore_snippet: str | None
@@ -64,9 +70,14 @@ class TaskRead(BaseModel):
     type: TaskType
     status: TaskStatus
     deadline: datetime | None
+    expire_at: datetime | None = None
     required_start_time: time | None
     proof_url: str | None = None
     rating: int | None
+    review_comment: str | None = None
+    xp_awarded: int | None = None
+    coin_delta: int = 0
+    abandon_count_at_submit: int = 0
     started_at: datetime | None
     submitted_at: datetime | None
     completed_at: datetime | None

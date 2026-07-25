@@ -54,3 +54,49 @@ class CoinTransactionType(str, Enum):
     TASK_REFUND = "TASK_REFUND"
     ABANDON_PENALTY = "ABANDON_PENALTY"
     MANUAL_ADJUST = "MANUAL_ADJUST"
+
+
+class NotificationType(str, Enum):
+    TASK_SUBMITTED = "TASK_SUBMITTED"
+    TASK_APPROVED = "TASK_APPROVED"
+    TASK_REJECTED = "TASK_REJECTED"
+    TASK_REMINDER = "TASK_REMINDER"
+    PRIVILEGE_UNLOCKED = "PRIVILEGE_UNLOCKED"
+    LEVEL_UP = "LEVEL_UP"
+    TIME_COIN_RESET = "TIME_COIN_RESET"
+    SEASON_START = "SEASON_START"
+    ONBOARDING_STEP_COMPLETED = "ONBOARDING_STEP_COMPLETED"
+
+
+class NotificationChannel(str, Enum):
+    INAPP = "INAPP"
+    WECHAT_TMPL = "WECHAT_TMPL"
+    BOTH = "BOTH"
+
+
+class NotificationStatus(str, Enum):
+    PENDING = "PENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
+    READ = "READ"
+
+
+class TaskCategory(str, Enum):
+    STUDY = "STUDY"
+    CHORE = "CHORE"
+    SPORT = "SPORT"
+    ART = "ART"
+    LIFE = "LIFE"
+    OTHER = "OTHER"
+
+
+class HiddenTriggerKind(str, Enum):
+    AFTER_TASK_COMPLETED = "AFTER_TASK_COMPLETED"
+    MANUAL = "MANUAL"
+    RANDOM_IN_TIME_WINDOW = "RANDOM_IN_TIME_WINDOW"
+
+
+class ProofKind(str, Enum):
+    IMAGE = "IMAGE"
+    VIDEO = "VIDEO"
+    AUDIO = "AUDIO"

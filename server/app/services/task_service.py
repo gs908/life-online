@@ -67,7 +67,9 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         family_id=family_id,
         season_id=season_id,
         creator_account_id=creator_id,
+        library_id=kwargs.get("library_id"),
         target_child_id=target_child_id,
+        category=kwargs.get("category"),
         title=kwargs["title"],
         description=kwargs.get("description", ""),
         lore_snippet=kwargs.get("lore_snippet"),
@@ -94,6 +96,7 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         xp_reward=template.xp_reward,
         status=TaskStatus.AVAILABLE,
         deadline=kwargs.get("deadline"),
+        expire_at=kwargs.get("expire_at") or kwargs.get("deadline"),
         time_deposit=template.time_deposit,
     )
     db.add(task)
@@ -187,6 +190,7 @@ async def submit_task(
     task.status = TaskStatus.PENDING_REVIEW
     task.proof_object_key = proof_object_key
     task.submitted_at = datetime.utcnow()
+    task.abandon_count_at_submit = child.daily_abandon_count
     await db.commit()
     await db.refresh(task)
     return task
@@ -231,6 +235,9 @@ async def approve_task(
 
     task.status = TaskStatus.COMPLETED
     task.rating = rating
+    task.review_comment = comment
+    task.xp_awarded = final_xp
+    task.coin_delta = deposit
     task.completed_at = datetime.utcnow()
 
     await db.commit()
@@ -283,6 +290,7 @@ async def abandon_task(
     task.status = TaskStatus.AVAILABLE
     task.assignee_child_id = None
     task.started_at = None
+    task.coin_delta = refund - deposit
 
     await db.commit()
     await db.refresh(task)

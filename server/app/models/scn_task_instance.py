@@ -47,8 +47,13 @@ class ScnTaskInstance(Base, TimestampMixin, UUIDPrimaryKeyMixin):
         String(32), nullable=False, default=TaskStatus.AVAILABLE, index=True
     )
     deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expire_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     proof_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="1-5 星")
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    xp_awarded: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    coin_delta: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    abandon_count_at_submit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

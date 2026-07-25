@@ -12,7 +12,7 @@ from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import TaskType
+from app.models.enums import TaskCategory, TaskType
 
 if TYPE_CHECKING:
     from app.models.scn_season import ScnSeason
@@ -30,10 +30,14 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     creator_account_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True
     )
+    library_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("scn_task_template_library.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     target_child_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("sys_child.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
+    category: Mapped[TaskCategory | None] = mapped_column(String(32), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     lore_snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
