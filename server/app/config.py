@@ -141,6 +141,39 @@ class RedisSection(BaseModel):
     url: str = "redis://localhost:6379/0"
 
 
+class XpSection(BaseModel):
+    """
+    经验值 / 等级数值配置。
+
+    升级所需 XP 采用指数曲线:
+        xp_required_for_level(L) = base_xp * growth ** (L - 1)
+    前 Lv1~Lv5 一周内可达,Lv10+ 进入"长期目标"段。
+    所有倍率集中在配置中,便于不发布代码即可调参。
+    """
+    base_xp: int = 200
+    growth: float = 1.5
+
+    # 星级系数: 1-5 星 -> 倍率
+    rating_multiplier: dict[int, float] = Field(
+        default_factory=lambda: {1: 0.6, 2: 0.8, 3: 1.0, 4: 1.2, 5: 1.5}
+    )
+
+    # 任务类型加成
+    challenge_bonus: float = 1.25
+    hidden_bonus: float = 1.15
+
+    # 连环任务链末加成
+    chain_final_bonus: float = 1.5
+
+    # 时效系数(限时任务)
+    timing_bonus: float = 1.2
+    timing_penalty: float = 0.8
+
+    # 速度系数(60 分钟内完成)
+    speed_window_minutes: int = 60
+    speed_bonus: float = 1.1
+
+
 class Settings(BaseModel):
     app: AppSection
     database: DatabaseSection
@@ -149,6 +182,7 @@ class Settings(BaseModel):
     jwt: JWTSection
     wechat: WechatSection
     redis: RedisSection = Field(default_factory=RedisSection)
+    xp: XpSection = Field(default_factory=XpSection)
 
 
 @lru_cache

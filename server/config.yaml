@@ -60,3 +60,15 @@ wechat:
 redis:
   enabled: false
   url: redis://localhost:6379/0
+
+# 经验值/等级数值(可选,缺省走代码内默认)
+xp:
+  base_xp: ${env:XP_BASE_XP:200}
+  growth: ${env:XP_GROWTH:1.5}
+  challenge_bonus: ${env:XP_CHALLENGE_BONUS:1.25}
+  hidden_bonus: ${env:XP_HIDDEN_BONUS:1.15}
+  chain_final_bonus: ${env:XP_CHAIN_FINAL_BONUS:1.5}
+  timing_bonus: ${env:XP_TIMING_BONUS:1.2}
+  timing_penalty: ${env:XP_TIMING_PENALTY:0.8}
+  speed_window_minutes: ${env:XP_SPEED_WINDOW_MINUTES:60}
+  speed_bonus: ${env:XP_SPEED_BONUS:1.1}

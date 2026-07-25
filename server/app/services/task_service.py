@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.common.exceptions import ConflictError, NotFoundError, PermissionDeniedError, ValidationError
-from app.models.enums import CoinTransactionType, TaskStatus, UserRole
+from app.models.enums import CoinTransactionType, TaskStatus, TaskType, UserRole
 from app.models.scn_season import ScnSeason
 from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_template import ScnTaskTemplate
@@ -206,11 +206,14 @@ async def approve_task(
 
     assignee = await _ensure_child(db, family_id=family_id, child_id=task.assignee_child_id)
     required_start_time = task.template.required_start_time if task.template else None
+    is_challenge = bool(task.template and task.template.type == TaskType.CHALLENGE)
     final_xp = xp_service.calculate_xp(
         task.xp_reward,
         rating=rating,
         started_at=task.started_at,
+        submitted_at=task.submitted_at,
         required_start_time=required_start_time,
+        is_challenge=is_challenge,
     )
     level_info = xp_service.apply_xp_and_level(assignee, final_xp)
     unlocked_privileges = await privilege_service.unlock_for_user(db, assignee)
