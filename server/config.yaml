@@ -61,6 +61,10 @@ redis:
   enabled: false
   url: redis://localhost:6379/0
 
+# 开发期非微信登录开关。默认 false,生产环境必须保持关闭,只允许本地/测试环境显式打开。
+dev:
+  login_enabled: ${env:DEV_LOGIN_ENABLED:false}
+
 # 经验值/等级数值(可选,缺省走代码内默认)
 xp:
   base_xp: ${env:XP_BASE_XP:200}

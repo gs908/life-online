@@ -141,6 +141,11 @@ class RedisSection(BaseModel):
     url: str = "redis://localhost:6379/0"
 
 
+class DevSection(BaseModel):
+    """仅供开发环境使用的开关。默认关闭,生产环境必须保持 false。"""
+    login_enabled: bool = False
+
+
 class XpSection(BaseModel):
     """
     经验值 / 等级数值配置。
@@ -183,6 +188,7 @@ class Settings(BaseModel):
     wechat: WechatSection
     redis: RedisSection = Field(default_factory=RedisSection)
     xp: XpSection = Field(default_factory=XpSection)
+    dev: DevSection = Field(default_factory=DevSection)
 
 
 @lru_cache

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from app.models.enums import UserRole
+
 
 class TokenPair(BaseModel):
     access_token: str
@@ -21,3 +23,12 @@ class WechatJscodeRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class DevLoginRequest(BaseModel):
+    """开发期非微信登录:按角色获取(或首次创建)一个固定的开发测试账号。
+
+    不需要传 openid / 邀请码,仅在 `DEV_LOGIN_ENABLED=true` 时可用。
+    """
+    role: UserRole = UserRole.ADVENTURER
+    name: str | None = None

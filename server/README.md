@@ -113,7 +113,31 @@ LLM_MODEL=kimi-k2.6
 
 无需改代码,重启服务即可。
 
-## 7. 测试
+## 7. 开发期非微信登录
+
+微信登录依赖真实 `openid`,开发/测试环境不方便每次都走微信授权流程。为此提供了一个
+仅限开发环境使用的登录入口:
+
+```
+POST /api/v1/sys/auth/dev-login
+Content-Type: application/json
+
+{"role": "GUILD_MASTER"}   // 或 "ADVENTURER"
+```
+
+- **开关**:`server/.env` 里的 `DEV_LOGIN_ENABLED`(对应 `config.yaml` 的
+  `dev.login_enabled`)。**默认 `false`**,生产环境必须保持关闭 —— 关闭时该接口对任何请求
+  一律返回 `403`,不区分角色/参数。仅本地开发或测试环境显式设为 `true` 才能使用。
+- **行为**:按 `role` 返回(必要时创建)一个固定挂在“开发环境”家庭下的测试账号 ——
+  `GUILD_MASTER` 对应家长,`ADVENTURER` 对应孩子。同一角色重复调用返回同一个账号(幂等),
+  不会每次登录都在数据库里堆一条新家庭。
+- **返回**:与微信登录 (`/sys/auth/wechat/jscode`) 一样的 `TokenPair`(复用
+  `auth_service.issue_token_pair`),拿到 token 后即可正常调用 `/sys/auth/me` 等受保护接口。
+- 这条路径下创建的“开发环境”家庭数据是有意长期保留的(不像冒烟测试那样每次清理),因为它
+  本身就是给本地/测试环境反复复用的固定账号;`DEV_LOGIN_ENABLED=false` 时接口不可达,生产
+  数据库不会出现这条数据。
+
+## 8. 测试
 
 ```bash
 uv run pytest
@@ -140,6 +164,13 @@ uv run pytest
 - **认证基础路径**(`tests/test_auth_smoke.py`,需要数据库):家长 / 孩子身份分别调用
   `/api/v1/sys/auth/me` 能拿到对应角色和 `family_id` / `child_id`;`/api/v1/sys/auth/refresh`
   能用 refresh token 换发新 token;不带 `Authorization` 头访问受保护接口会被拒绝(401)。
+- **开发期非微信登录**(`tests/test_dev_login_smoke.py`):
+  - 关闭场景(不需要数据库,始终执行):默认配置、以及显式通过
+    `app.dependency_overrides` 把 `DEV_LOGIN_ENABLED` 覆盖为 `false` 两种情况下,
+    `/sys/auth/dev-login` 都返回 `403`。
+  - 开启场景(需要数据库,标了 `@pytest.mark.db` + `db_ready`):把 `DEV_LOGIN_ENABLED`
+    覆盖为 `true` 后,家长 / 孩子两种角色都能登录成功并调用 `/sys/auth/me`;重复调用同一
+    角色会拿到同一个账号(幂等)。
 - **种子数据创建链路**(`app/dev/seed.py` 的 `seed_basic_family`,被 `seeded_family` fixture
   复用):家庭 → 家长 → 孩子 → 赛季 → 任务模板 → 任务实例的基础创建链路,用例结束后通过
   `sys_family` 上的外键级联删除(`ondelete=CASCADE`)自动清理,不在远程数据库中留下脏数据。
@@ -153,12 +184,13 @@ uv run python scripts/seed_dev_data.py [suffix]
 
 复用与冒烟测试相同的 `app/dev/seed.seed_basic_family`,在配置好的数据库上创建一条最小可用
 的家庭数据链路,方便手动用 Postman / 前端 mock 阶段验证接口。这条数据目前还不能直接登录
-(微信登录需要真实 openid);登录能力见后续的开发期非微信登录方案,届时可直接复用这里创建
-的账号 ID 配合 `auth_service.issue_token_pair` 签发 token。
+(微信登录需要真实 openid);如果只是要一个能登录的账号,直接用上面的开发期非微信登录接口
+(`DEV_LOGIN_ENABLED=true` 时的 `POST /sys/auth/dev-login`)更省事。
 
-## 8. 代码检查
+## 9. 代码检查
 
 ```bash
 uv run ruff check .
 uv run mypy app
 ```
+
