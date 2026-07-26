@@ -163,6 +163,49 @@ Content-Type: application/json
   校验目标账号确实属于同一家庭且角色是 `ADVENTURER`,不满足则统一返回 `404`,不区分"不存在"
   和"属于别的家庭",避免枚举出别的家庭的账号 id。
 
+## 7.2 Web 管理后端:赛季管理
+
+以下接口均需 `Authorization: Bearer <access_token>`,返回统一走 `ApiResponse[T]` 包装。
+
+| 方法 & 路径 | 权限 | 说明 | 返回结构 |
+| --- | --- | --- | --- |
+| `GET /api/v1/scn/seasons` | 任意已登录角色 | 列出自己家庭的全部赛季(`include_inactive=false` 只看激活赛季) | `SeasonRead[]` |
+| `GET /api/v1/scn/seasons/active` | 任意已登录角色 | 当前激活赛季,没有则为 `null` | `SeasonRead \| null` |
+| `GET /api/v1/scn/seasons/history` | 任意已登录角色 | 历史赛季 + 每季任务统计,供管理台历史面板展示 | `SeasonHistoryItem[]` |
+| `GET /api/v1/scn/seasons/{id}` | 任意已登录角色 | 赛季详情,跨家庭访问统一 `404` | `SeasonRead` |
+| `POST /api/v1/scn/seasons` | 仅 `GUILD_MASTER` | 创建赛季,自动使同家庭下原激活赛季下线 | `SeasonRead` |
+| `PATCH /api/v1/scn/seasons/{id}` | 仅 `GUILD_MASTER` | 更新赛季(名称/主题/剧情/结束时间/激活状态) | `SeasonRead` |
+| `POST /api/v1/scn/seasons/{id}/activate` | 仅 `GUILD_MASTER` | 激活指定赛季,同家庭下其他赛季自动下线 | `SeasonRead` |
+| `DELETE /api/v1/scn/seasons/{id}` | 仅 `GUILD_MASTER` | 删除赛季(级联删除其下任务模板/任务实例) | `{"deleted": true}` |
+
+`SeasonRead` 关键字段:`id`、`family_id`、`name`、`theme_id`、`narrative_context`、`start_date`、
+`end_date`、`is_active`、`created_at`/`updated_at`。`SeasonHistoryItem` = `{season: SeasonRead,
+total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPLETED` 任务实例的
+`xp_awarded` 之和。
+
+**单一激活赛季约束**:
+
+- 服务层在 `create_season` / `update_season(is_active=True)` / `activate_season` 中,先把同
+  家庭下其他 `is_active=True` 的赛季下线,再插入/激活目标赛季。
+- 数据库层额外兜底:`scn_season` 新增生成列 `active_family_id`
+  (`IF(is_active, family_id, NULL)` STORED),并在其上建唯一索引
+  `ux_scn_season_active_per_family`。同一家庭最多一行 `is_active=True`(对应一个非 NULL 的
+  `active_family_id`),并发写入冲突时数据库唯一约束会兜底拒绝,服务层捕获后转换为
+  `409 Conflict`,不会出现两个 active 赛季。见迁移
+  `alembic/versions/f3a1c9d02b7e_scn_season_single_active_per_family.py`。
+
+**任务/主题关联规则**:
+
+- `scn_task_template.season_id` / `scn_task_instance.season_id` 均为必填外键
+  (`ondelete="CASCADE"`),一个任务模板/实例恒属于唯一一个赛季;删除赛季会级联删除挂在它下面
+  的任务模板和任务实例。
+- `theme_id` 挂在赛季上(`ThemeId` 枚举),任务模板/实例不单独持有主题,展示时通过所属赛季的
+  `theme_id` 取主题视觉样式(对应管理台 `SeasonHistory.tsx` / `SeasonConfigModal.tsx` 里按
+  `theme.id` 取 `THEMES` 映射的用法)。
+
+**跨家庭隔离**:详情/更新/激活/删除对别的家庭的赛季一律返回 `404`(与 `family_service` 的约定
+一致,不泄露赛季是否存在于别的家庭);`GUILD_MASTER`-only 接口对 `ADVENTURER` 角色一律 `403`。
+
 ## 8. 测试
 
 ```bash
@@ -206,6 +249,11 @@ uv run pytest
   `PATCH /sys/accounts/adventurers/{id}` 家长可更新自己家庭下孩子的昵称/头像,孩子角色调用
   返回 `403`,家长更新另一个家庭的孩子账号返回 `404`(跨家庭隔离);
   `GET`/`PATCH /sys/accounts/me` 对家长和孩子两种角色都能正常查看和更新。
+- **Web 管理后端:赛季管理**(`tests/test_season_management_smoke.py`,需要数据库):
+  创建 → 详情 → 更新 → 激活 → 删除的完整闭环;创建/激活新赛季会自动使原激活赛季下线,任意时刻
+  同家庭最多一个 `is_active=True`;详情/更新/激活/删除对别的家庭的赛季返回 `404`;孩子角色调用
+  写接口返回 `403`;历史统计接口返回的任务总数/完成数/已发放 XP 总和与种子数据一致;删除赛季会
+  级联删除其下的任务模板和任务实例。
 
 ### 本地手动造数据
 

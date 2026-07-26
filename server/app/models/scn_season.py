@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Computed, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 
 class ScnSeason(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     __tablename__ = "scn_season"
+    __table_args__ = (
+        Index("ux_scn_season_active_per_family", "active_family_id", unique=True),
+    )
 
     family_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sys_family.id", ondelete="CASCADE"), nullable=False, index=True
@@ -30,6 +33,14 @@ class ScnSeason(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     start_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    # 生成列:激活时取 family_id,未激活时为 NULL。MySQL 的唯一索引允许多行 NULL,
+    # 借此在数据库层面兜底"同一家庭同时只能有一个激活赛季",而不仅依赖服务层的
+    # 先下线旧赛季再插入/激活新赛季这一非原子的两步操作。
+    active_family_id: Mapped[str | None] = mapped_column(
+        String(36),
+        Computed("IF(is_active, family_id, NULL)", persisted=True),
+        nullable=True,
+    )
 
     family: Mapped["SysFamily"] = relationship(lazy="noload")
     task_templates: Mapped[list["ScnTaskTemplate"]] = relationship(
