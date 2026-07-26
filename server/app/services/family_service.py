@@ -127,6 +127,49 @@ async def create_adventurer(
     return account
 
 
+async def get_adventurer_in_family(
+    db: AsyncSession, *, family_id: str, account_id: str
+) -> tuple[SysAccount, SysChild]:
+    """按家庭 + 账号 id 取孩子账号;跨家庭一律视为不存在(404),不泄露账号是否存在于别的家庭。"""
+    account = await db.get(SysAccount, account_id)
+    if account is None or account.family_id != family_id:
+        raise NotFoundError(f"孩子账号 {account_id} 不存在")
+    account_role = account.role.value if hasattr(account.role, "value") else str(account.role)
+    if account_role != UserRole.ADVENTURER.value:
+        raise NotFoundError(f"孩子账号 {account_id} 不存在")
+
+    child = (
+        await db.execute(select(SysChild).where(SysChild.account_id == account_id))
+    ).scalar_one_or_none()
+    if child is None:
+        raise NotFoundError(f"孩子账号 {account_id} 不存在")
+    return account, child
+
+
+async def update_adventurer(
+    db: AsyncSession,
+    *,
+    family_id: str,
+    account_id: str,
+    name: str | None = None,
+    avatar: str | None = None,
+) -> tuple[SysAccount, SysChild]:
+    """父母更新自己家庭下孩子账号的基础信息(昵称 / 头像),不涉及游戏化数值。"""
+    account, child = await get_adventurer_in_family(db, family_id=family_id, account_id=account_id)
+
+    if name is not None:
+        account.name = name
+        child.display_name = name
+    if avatar is not None:
+        account.avatar = avatar
+        child.avatar = avatar
+
+    await db.commit()
+    await db.refresh(account)
+    await db.refresh(child)
+    return account, child
+
+
 async def consume_invite(
     db: AsyncSession, *, code: str, nickname: str, avatar: str,
     openid: str, unionid: str | None,

@@ -39,6 +39,12 @@ class AdventurerCreate(BaseModel):
     avatar: str = "⚔️"
 
 
+class AdventurerUpdate(BaseModel):
+    """家长更新孩子基础信息(昵称 / 头像),不含游戏化数值。"""
+    name: str | None = None
+    avatar: str | None = None
+
+
 class UserUpdate(BaseModel):
     name: str | None = None
     avatar: str | None = None

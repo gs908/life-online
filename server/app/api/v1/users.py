@@ -12,7 +12,7 @@ from app.models.enums import UserRole
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.schemas.common import ApiResponse, ok
-from app.schemas.user import AdventurerCreate, UserRead, UserUpdate
+from app.schemas.user import AdventurerCreate, AdventurerUpdate, UserRead, UserUpdate
 from app.services import coin_service, family_service
 
 router = APIRouter(prefix="/sys/accounts", tags=["sys-accounts"])
@@ -108,3 +108,21 @@ async def create_adventurer(
         role=UserRole.ADVENTURER,
     )
     return ok(await _to_read(db, new_user))
+
+
+@router.patch(
+    "/adventurers/{account_id}",
+    response_model=ApiResponse[UserRead],
+    summary="更新孩子基础信息(父母,仅限自己家庭)",
+)
+async def update_adventurer(
+    account_id: str, body: AdventurerUpdate, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[UserRead]:
+    account, _ = await family_service.update_adventurer(
+        db,
+        family_id=user.family_id,
+        account_id=account_id,
+        name=body.name,
+        avatar=body.avatar,
+    )
+    return ok(await _to_read(db, account))

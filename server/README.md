@@ -137,6 +137,32 @@ Content-Type: application/json
   本身就是给本地/测试环境反复复用的固定账号;`DEV_LOGIN_ENABLED=false` 时接口不可达,生产
   数据库不会出现这条数据。
 
+## 7.1 Web 管理后端:家庭 / 家长 / 孩子账号管理
+
+以下接口均需 `Authorization: Bearer <access_token>`(见上一节的开发期登录,或微信登录)。
+返回统一走 `ApiResponse[T]` 包装:`{"data": T, ...}`,`T` 为下方标注的结构。
+
+| 方法 & 路径 | 权限 | 说明 | 返回结构 |
+| --- | --- | --- | --- |
+| `GET /api/v1/sys/families/me` | 任意已登录角色 | 查看自己家庭的成员列表 | `FamilyMembersRead`:`{family: FamilyRead, guild_masters: UserRead[], adventurers: UserRead[]}`,只包含当前用户所属家庭 |
+| `GET /api/v1/sys/accounts/me` | 任意已登录角色 | 查看当前登录账号资料(孩子角色会顺带触发每日重置) | `UserRead` |
+| `PATCH /api/v1/sys/accounts/me` | 任意已登录角色 | 更新自己的昵称 / 头像 / locale(孩子角色额外支持等级等游戏化字段) | `UserRead` |
+| `POST /api/v1/sys/accounts/adventurers` | 仅 `GUILD_MASTER` | 在自己家庭下创建一个孩子(冒险者)账号 | `UserRead` |
+| `PATCH /api/v1/sys/accounts/adventurers/{account_id}` | 仅 `GUILD_MASTER` | 更新自己家庭下某个孩子的基础信息(昵称 / 头像),不涉及等级/时间币等游戏化数值 | `UserRead` |
+
+`UserRead` 关键字段:`id`、`family_id`、`role`(`GUILD_MASTER`/`ADVENTURER`)、`name`、`avatar`、
+`locale`、`child_id`(家长为 `null`)、`level`/`xp`/`time_coins`/`daily_abandon_count`(家长恒为
+默认值)、`created_at`/`updated_at`。
+
+**权限与隔离**:
+
+- `GUILD_MASTER`-only 接口对 `ADVENTURER` 角色一律返回 `403`(见 `app/deps.py` 的
+  `require_role`)。
+- 创建 / 更新孩子账号时,`family_id` 恒取自当前登录家长的 `user.family_id`,不接受请求体传入
+  ——家长不可能操作到别的家庭。更新接口额外在服务层(`family_service.get_adventurer_in_family`)
+  校验目标账号确实属于同一家庭且角色是 `ADVENTURER`,不满足则统一返回 `404`,不区分"不存在"
+  和"属于别的家庭",避免枚举出别的家庭的账号 id。
+
 ## 8. 测试
 
 ```bash
@@ -174,6 +200,12 @@ uv run pytest
 - **种子数据创建链路**(`app/dev/seed.py` 的 `seed_basic_family`,被 `seeded_family` fixture
   复用):家庭 → 家长 → 孩子 → 赛季 → 任务模板 → 任务实例的基础创建链路,用例结束后通过
   `sys_family` 上的外键级联删除(`ondelete=CASCADE`)自动清理,不在远程数据库中留下脏数据。
+- **Web 管理后端:家庭 / 孩子账号管理**(`tests/test_family_management_smoke.py`,需要数据库):
+  `GET /sys/families/me` 只返回当前用户所属家庭的成员,不泄露另一个家庭的数据;
+  `POST /sys/accounts/adventurers` 家长可创建孩子账号,孩子角色调用返回 `403`;
+  `PATCH /sys/accounts/adventurers/{id}` 家长可更新自己家庭下孩子的昵称/头像,孩子角色调用
+  返回 `403`,家长更新另一个家庭的孩子账号返回 `404`(跨家庭隔离);
+  `GET`/`PATCH /sys/accounts/me` 对家长和孩子两种角色都能正常查看和更新。
 
 ### 本地手动造数据
 
