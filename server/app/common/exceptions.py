@@ -48,6 +48,16 @@ class ConflictError(AppError):
 
 
 class ExternalServiceError(AppError):
-    """外部服务(LLM / 微信 / 存储)调用失败。"""
+    """外部服务(LLM / 微信 / 存储)调用失败(已配置,但请求本身失败)。"""
     code = "external_service_error"
     http_status = 502
+
+
+class ServiceUnavailableError(AppError):
+    """依赖的外部服务(LLM / MinIO 等)尚未配置,功能暂不可用。
+
+    与 ExternalServiceError 的区别:这里请求根本没有发出去,是部署/配置缺失,
+    前端应据此提示"该功能未开放"而不是"稍后重试"。
+    """
+    code = "service_unavailable"
+    http_status = 503

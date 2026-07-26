@@ -206,6 +206,52 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
 **跨家庭隔离**:详情/更新/激活/删除对别的家庭的赛季一律返回 `404`(与 `family_service` 的约定
 一致,不泄露赛季是否存在于别的家庭);`GUILD_MASTER`-only 接口对 `ADVENTURER` 角色一律 `403`。
 
+## 7.3 Web 管理后端:时间币 / 上传 / AI 闭环
+
+以下接口均需 `Authorization: Bearer <access_token>`,返回统一走 `ApiResponse[T]` 包装。
+
+| 方法 & 路径 | 权限 | 说明 | 返回结构 |
+| --- | --- | --- | --- |
+| `GET /api/v1/scn/time-configs/me` | 任意已登录角色 | 查看自己家庭的时间币规则(默认每日额度 + 按星期几的特例) | `TimeConfigRead` |
+| `PUT /api/v1/scn/time-configs/me` | 仅 `GUILD_MASTER` | 更新默认每日额度 / 星期特例(整体替换 `exceptions`) | `TimeConfigRead` |
+| `GET /api/v1/scn/time-coin-logs` | 任意已登录角色 | 分页查询自己家庭的时间币流水,可选 `child_id` 过滤 | `Page[CoinTransactionRead]` |
+| `POST /api/v1/scn/time-coin-logs/adjust` | 仅 `GUILD_MASTER` | 人工调整某个孩子的时间币余额,落一条 `MANUAL_ADJUST` 流水 | `CoinTransactionRead` |
+| `POST /api/v1/sys/uploads` | 任意已登录角色 | multipart 上传(`file` + `purpose`),`purpose=task_proof` 用于任务完成凭证图片 | `UploadRead` |
+| `POST /api/v1/scn/ai/generate-quest` | 仅 `GUILD_MASTER` | 按主题 / 孩子等级 / 剧情上下文生成任务草稿(结构化 JSON) | `GenerateQuestResponse` |
+| `POST /api/v1/scn/ai/evaluate-proof` | 仅 `GUILD_MASTER` | 对任务完成凭证做 AI 初评,返回建议与理由 | `EvaluateProofResponse` |
+
+**前端可用返回字段**:
+
+- `TimeConfigRead`:`family_id`、`default_daily_allowance`、`exceptions: {day_of_week, coin_amount}[]`(`day_of_week` 0=周一)。
+- `CoinTransactionRead`:`id`、`family_id`、`child_id`、`amount`(正负号即增减)、`type`(`DAILY_RESET`/`TASK_REWARD`/`MANUAL_ADJUST`/...)、`note`、`created_at`。
+- `UploadRead`:`id`、`family_id`、`purpose`、`object_key`、`access_url` —— **前端只用 `access_url` 展示图片**,不关心背后是 MinIO 预签名链接还是本地静态文件路径,两种存储模式返回的字段形状完全一致。
+- AI 接口的返回体只包含生成结果(题目/理由等文本字段),**不包含、也不会包含任何模型 Key** —— 前端永远不直连模型服务,所有 LLM 调用都经由后端 `app/common/llm` 转发。
+
+**每日重置 ↔ 时间币配置联动**:`app/workers/scheduler.py` 的 `daily_reset_job`(每天 00:05)对
+`last_login_date != 今天` 的孩子调用 `coin_service.reset_daily_allowance`,后者读取
+`get_or_create_time_config` 返回的规则(先查当天星期几是否有 `exceptions` 特例,没有则用
+`default_daily_allowance`)写回余额并落 `DAILY_RESET` 流水;孩子调用 `GET /sys/accounts/me` 时
+也会触发同一条重置逻辑,不需要等定时任务。
+
+**LLM / MinIO 未配置时的降级规则**(DEV-9 新增):
+
+- **LLM**(`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`,对应 `config.yaml` 的 `llm:` 段)三个字段
+  均允许留空 —— 留空时应用照常启动,不会因为缺少 AI 配置就整体起不来。只有真正调用
+  `/scn/ai/generate-quest` 或 `/scn/ai/evaluate-proof` 时,`app/common/llm/factory.get_llm_client()`
+  才会检查 `settings.llm.is_configured`,未配置时抛出 `ServiceUnavailableError`,统一映射为
+  `HTTP 503` + `{"data": {"error_code": "service_unavailable"}}`,而不是连接超时或 500。
+- **MinIO**(`STORAGE_PROVIDER=minio` 时需要 `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` /
+  `MINIO_SECRET_KEY`)同理:`app/common/storage/factory.get_storage()` 在
+  `settings.storage.minio.is_configured` 为假时直接抛 `ServiceUnavailableError`(503),不会把空
+  字符串传给 MinIO SDK 产生难以理解的底层报错。
+- **降级路径**:把 `STORAGE_PROVIDER` 切成 `local`(`config.yaml` 的 `storage.provider`),上传接口
+  即可在完全不配置 MinIO 的情况下工作,返回的 `UploadRead.access_url` 指向本地静态文件挂载路径,
+  字段形状与 MinIO 模式一致,前端无需区分。AI 功能目前没有"降级实现",未配置 LLM 时就是明确的
+  503,前端应据此提示"该功能未开放",而不是重试。
+- 二者共用同一套错误语义:`ServiceUnavailableError`(503,"根本没配置")与已有的
+  `ExternalServiceError`(502,"配置了但这次调用失败,比如 LLM 限流/微信接口报错")是两类不同的
+  错误,前端可以按 `error_code` 区分展示文案。
+
 ## 8. 测试
 
 ```bash
@@ -254,6 +300,14 @@ uv run pytest
   同家庭最多一个 `is_active=True`;详情/更新/激活/删除对别的家庭的赛季返回 `404`;孩子角色调用
   写接口返回 `403`;历史统计接口返回的任务总数/完成数/已发放 XP 总和与种子数据一致;删除赛季会
   级联删除其下的任务模板和任务实例。
+- **LLM / MinIO 未配置降级**(`tests/test_ai_storage_config.py`,无需数据库,始终执行):
+  `LLMSection`/`StorageMinioSection.is_configured` 的判定逻辑;`get_llm_client()`/`get_storage()`
+  在未配置时抛出 `ServiceUnavailableError`(503)且报错信息里点名缺失的环境变量;`local` 存储在
+  任何情况下都能正常初始化,不依赖 MinIO 配置。
+- **时间币 / 上传 / AI 闭环**(`tests/test_time_coin_upload_ai_smoke.py`,需要数据库):时间币配置
+  读取/更新(孩子无权更新);时间币流水查询与人工调整(孩子无权调整,跨家庭隔离);每日重置按
+  时间币配置的当日特例/默认额度写回余额;`local` 存储模式下任务凭证上传成功且 `access_url`
+  可直接展示;MinIO 未配置 / LLM 未配置时上传接口与 AI 接口分别返回 `503`。
 
 ### 本地手动造数据
 

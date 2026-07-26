@@ -101,6 +101,10 @@ class StorageMinioSection(BaseModel):
     secure: bool = False
     bucket: str = "life-online"
 
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.endpoint and self.access_key and self.secret_key)
+
 
 class StorageLocalSection(BaseModel):
     root_path: str = "./uploads"
@@ -115,9 +119,15 @@ class StorageSection(BaseModel):
 
 
 class LLMSection(BaseModel):
-    base_url: str
-    api_key: str
-    model: str
+    """LLM 配置。三个字段均可留空 —— 未配置时应用仍可正常启动,
+    只有实际调用 AI 接口时才会报出明确的"未配置"错误(见 app.common.llm.factory)。"""
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.base_url and self.api_key and self.model)
 
 
 class JWTSection(BaseModel):

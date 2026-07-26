@@ -38,10 +38,12 @@ storage:
     public_base_url: ${env:LOCAL_STORAGE_PUBLIC_BASE_URL:/api/v1/files}
     bucket: ${env:LOCAL_STORAGE_BUCKET:local}
 
+# LLM 三个字段均允许留空 —— 未配置时应用仍可正常启动,只有实际调用 AI 接口
+# (/scn/ai/generate-quest、/scn/ai/evaluate-proof)时才会返回明确的 503 错误。
 llm:
-  base_url: ${env:LLM_BASE_URL}
-  api_key: ${env:LLM_API_KEY}
-  model: ${env:LLM_MODEL}
+  base_url: ${env:LLM_BASE_URL:}
+  api_key: ${env:LLM_API_KEY:}
+  model: ${env:LLM_MODEL:}
 
 jwt:
   secret: ${env:JWT_SECRET}
