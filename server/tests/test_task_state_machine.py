@@ -25,10 +25,12 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dev.seed import SeededFamily, cleanup_family, seed_basic_family
 from app.models.enums import TaskStatus
+from app.models.scn_task_instance import ScnTaskInstance
 from app.services import auth_service, task_service
 
 pytestmark = pytest.mark.db
@@ -157,6 +159,72 @@ async def test_reject_sends_back_to_in_progress_without_touching_deposit(
         f"/api/v1/scn/task-instances/{task['id']}/approve",
         json={"rating": 4},
         headers=parent_headers,
+    )
+    assert approve_resp.status_code == 200
+    assert approve_resp.json()["data"]["status"] == TaskStatus.COMPLETED.value
+
+
+async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """孩子在截止前提交,但家长审核拖到截止后才驳回:驳回必须补一个重新提交窗口,
+    不能让下一轮 expire_overdue_tasks 直接把 IN_PROGRESS 任务判 EXPIRED。"""
+    await _top_up(db_session, seeded_family)
+    parent_headers = _auth_headers(seeded_family.parent)
+    child_headers = _auth_headers(seeded_family.child_account)
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    task = await _create_task(api_client, parent_headers, seeded_family, expire_at=future)
+
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
+    submit_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": "proofs/1.jpg"},
+        headers=child_headers,
+    )
+    assert submit_resp.status_code == 200  # 截止前提交成功
+
+    # 模拟家长审核拖到截止之后才处理:用一次不经过 ORM 身份映射的裸 UPDATE 把
+    # expire_at 拨到过去,而不是真的 sleep 等待,避免测试因时钟精度产生偶发失败;
+    # 也避免 db_session 里预先缓存一个旧状态的 ORM 对象,导致后面 get_task 读到
+    # 过期的内存态(expire_on_commit=False 下,已加载对象不会被后续查询覆盖)。
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    await db_session.execute(
+        update(ScnTaskInstance)
+        .where(ScnTaskInstance.id == task["id"])
+        .values(expire_at=now - timedelta(minutes=1))
+    )
+    await db_session.commit()
+
+    reject_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/reject",
+        json={"comment": "截止后才审到,但内容需要重做"},
+        headers=parent_headers,
+    )
+    assert reject_resp.status_code == 200
+    rejected = reject_resp.json()["data"]
+    assert rejected["status"] == TaskStatus.IN_PROGRESS.value
+
+    rejected_row = await task_service.get_task(db_session, task["id"])
+    assert rejected_row.expire_at is not None and rejected_row.expire_at > now  # 补了重新提交窗口
+
+    # 下一轮过期批处理不应该把这个任务判过期
+    processed = await task_service.expire_overdue_tasks(db_session, now=now)
+    assert processed == 0
+    still_in_progress = await task_service.get_task(db_session, task["id"])
+    assert still_in_progress.status == TaskStatus.IN_PROGRESS
+
+    # 孩子在新窗口内可以修改后重新提交,家长再审核通过
+    resubmit_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": "proofs/2.jpg"},
+        headers=child_headers,
+    )
+    assert resubmit_resp.status_code == 200
+    assert resubmit_resp.json()["data"]["status"] == TaskStatus.PENDING_REVIEW.value
+
+    approve_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/approve", json={"rating": 5}, headers=parent_headers
     )
     assert approve_resp.status_code == 200
     assert approve_resp.json()["data"]["status"] == TaskStatus.COMPLETED.value

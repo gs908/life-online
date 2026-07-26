@@ -1,7 +1,7 @@
 """任务服务:模板/实例 + 状态机 + 押金/退款 + 审批。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,11 @@ from app.models.scn_task_template import ScnTaskTemplate
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.services import coin_service, privilege_service, xp_service
+
+# 驳回时若原 expire_at 已过(孩子在截止前提交,但家长审核拖到截止后才驳回),
+# 补一个重新提交窗口,避免下一轮过期批处理(expire_overdue_tasks)把它当成
+# "未在截止前处理"直接判 EXPIRED,吞掉"驳回后孩子可修改重提交"的流程。
+REJECT_RESUBMIT_GRACE = timedelta(hours=24)
 
 
 def _enum_value(value) -> str:
@@ -264,6 +269,10 @@ async def reject_task(
     task.status = TaskStatus.IN_PROGRESS
     task.review_comment = comment
     task.submitted_at = None
+
+    now = datetime.utcnow()
+    if task.expire_at is not None and task.expire_at <= now:
+        task.expire_at = now + REJECT_RESUBMIT_GRACE
 
     await db.commit()
     await db.refresh(task)
