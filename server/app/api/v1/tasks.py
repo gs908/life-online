@@ -10,6 +10,7 @@ from app.schemas.task import (
     TaskApproveRequest,
     TaskCreate,
     TaskRead,
+    TaskRejectRequest,
     TaskSubmitRequest,
 )
 from app.services import task_service
@@ -136,12 +137,22 @@ async def submit_task(
     return ok(_to_read(t))
 
 
-@router.post("/{task_id}/approve", response_model=ApiResponse[TaskRead], summary="父母审核")
+@router.post("/{task_id}/approve", response_model=ApiResponse[TaskRead], summary="父母审核通过")
 async def approve_task(
     task_id: str, body: TaskApproveRequest, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
     t, _assignee, _info = await task_service.approve_task(
         db, task_id=task_id, family_id=user.family_id, rating=body.rating, comment=body.comment,
+    )
+    return ok(_to_read(t))
+
+
+@router.post("/{task_id}/reject", response_model=ApiResponse[TaskRead], summary="父母审核驳回(打回重做)")
+async def reject_task(
+    task_id: str, body: TaskRejectRequest, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[TaskRead]:
+    t = await task_service.reject_task(
+        db, task_id=task_id, family_id=user.family_id, comment=body.comment,
     )
     return ok(_to_read(t))
 

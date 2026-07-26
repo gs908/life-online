@@ -251,6 +251,25 @@ async def approve_task(
     }
 
 
+async def reject_task(
+    db: AsyncSession, *, task_id: str, family_id: str, comment: str | None = None,
+) -> ScnTaskInstance:
+    """父母审核驳回:状态切回 IN_PROGRESS,不动押金,孩子可修改后重新提交。"""
+    task = await get_task(db, task_id)
+    if task.family_id != family_id:
+        raise PermissionDeniedError("只能审核自己家庭的任务")
+    if task.status != TaskStatus.PENDING_REVIEW:
+        raise ConflictError(f"当前状态 {_enum_value(task.status)},无法驳回")
+
+    task.status = TaskStatus.IN_PROGRESS
+    task.review_comment = comment
+    task.submitted_at = None
+
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
 async def abandon_task(
     db: AsyncSession, *, task_id: str, user: SysAccount,
 ) -> tuple[ScnTaskInstance, SysChild, int]:
@@ -304,3 +323,52 @@ async def delete_task(db: AsyncSession, *, task_id: str, family_id: str | None =
         raise PermissionDeniedError("只能删除自己家庭的任务")
     await db.delete(t)
     await db.commit()
+
+
+async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None) -> int:
+    """过期任务处理:AVAILABLE/IN_PROGRESS 且 expire_at 已过的任务统一切 EXPIRED。
+
+    - AVAILABLE(未接取):直接过期,不涉及押金。
+    - IN_PROGRESS(已接取未提交):非孩子主动放弃,全额退还押金,不计入
+      连续放弃惩罚(`daily_abandon_count` 不变),避免"截止时间到了"和
+      "孩子自己放弃"共用同一条惩罚路径。
+    - PENDING_REVIEW/COMPLETED/EXPIRED 不受影响:已提交等待审核的任务由家长
+      决定审核或驳回,不应被系统静默判过期。
+
+    供定时任务(`app.workers.scheduler`)调用,亦可在测试/运维中手动触发。
+    返回本次处理的任务数量。
+    """
+    now = now or datetime.utcnow()
+    stmt = (
+        select(ScnTaskInstance)
+        .where(
+            ScnTaskInstance.expire_at.is_not(None),
+            ScnTaskInstance.expire_at < now,
+            ScnTaskInstance.status.in_([TaskStatus.AVAILABLE, TaskStatus.IN_PROGRESS]),
+        )
+        .options(selectinload(ScnTaskInstance.template))
+    )
+    tasks = list((await db.execute(stmt)).scalars().all())
+
+    processed = 0
+    for task in tasks:
+        if task.status == TaskStatus.IN_PROGRESS and task.assignee_child_id:
+            child = await db.get(SysChild, task.assignee_child_id)
+            if child is not None:
+                deposit = task.time_deposit or 10
+                child.time_coin_balance += deposit
+                await coin_service.record_transaction(
+                    db,
+                    child=child,
+                    type=CoinTransactionType.TASK_REFUND,
+                    amount=deposit,
+                    task_instance_id=task.id,
+                    note="任务过期退还押金",
+                )
+                task.coin_delta = 0
+        task.status = TaskStatus.EXPIRED
+        processed += 1
+
+    if processed:
+        await db.commit()
+    return processed
