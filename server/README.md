@@ -46,9 +46,14 @@ cp .env.example .env
 
 `config.yaml` 是结构化配置,所有 `${env:VAR}` 占位符会在启动时从 `.env`(或进程环境)解析。
 
-## 3. 起 MySQL + MinIO(本地开发)
+## 3. MySQL + MinIO
 
-项目根目录有 `docker-compose.yml`(后续添加),用 docker 起这两个服务:
+默认按远程数据库/对象存储连接:直接在 `server/.env` 里填部署环境提供的
+`DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_USER` / `DATABASE_PASSWORD` /
+`DATABASE_NAME` 以及 `MINIO_*` 参数,无需在本机起服务。
+
+如果本机没有可访问的远程实例,也可以用仓库根目录的 `docker-compose.yml`
+起一套本地开发用的 MySQL + MinIO(默认值已与 `.env.example` 对齐,开箱即用):
 
 ```bash
 # 回到仓库根
