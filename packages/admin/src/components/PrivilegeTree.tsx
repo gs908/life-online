@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Privilege } from '../types';
 import { Lock, Unlock, Star, ScrollText } from 'lucide-react';
 
@@ -8,24 +9,32 @@ interface PrivilegeTreeProps {
   onRecordUsage?: (privilegeTitle: string) => void;
 }
 
-const PRIVILEGES: Privilege[] = [
-  { levelRequired: 2, title: "Explorer's Permit", description: "Allowed to go to the park on weekends alone.", icon: "🌳" },
-  { levelRequired: 3, title: "Tavern Access", description: "Unlock 'Restaurant' choice once a month.", icon: "🍔" },
-  { levelRequired: 4, title: "Merchant's Guild", description: "Can visit the convenience store with pocket money.", icon: "🏪" },
-  { levelRequired: 5, title: "Time Mage", description: "Unlock +30 mins screen time on Fridays.", icon: "🎮" },
-  { levelRequired: 8, title: "Mount Master", description: "Can ride bike to friend's house.", icon: "🚲" },
-  { levelRequired: 10, title: "Guild Leader", description: "Can veto one household chore per week.", icon: "👑" },
+const PRIVILEGE_KEYS = [
+  { levelRequired: 2, titleKey: 'explorerTitle', descriptionKey: 'explorerDesc', icon: '🌳' },
+  { levelRequired: 3, titleKey: 'tavernTitle', descriptionKey: 'tavernDesc', icon: '🍔' },
+  { levelRequired: 4, titleKey: 'merchantTitle', descriptionKey: 'merchantDesc', icon: '🏪' },
+  { levelRequired: 5, titleKey: 'mageTitle', descriptionKey: 'mageDesc', icon: '🎮' },
+  { levelRequired: 8, titleKey: 'mountTitle', descriptionKey: 'mountDesc', icon: '🚲' },
+  { levelRequired: 10, titleKey: 'leaderTitle', descriptionKey: 'leaderDesc', icon: '👑' },
 ];
 
 const PrivilegeTree: React.FC<PrivilegeTreeProps> = ({ currentLevel, isAdmin, onRecordUsage }) => {
+  const { t } = useTranslation();
+  const privileges: Privilege[] = PRIVILEGE_KEYS.map(priv => ({
+    levelRequired: priv.levelRequired,
+    title: t(`privilege.${priv.titleKey}`),
+    description: t(`privilege.${priv.descriptionKey}`),
+    icon: priv.icon,
+  }));
+
   return (
     <div className="bg-white p-4 rounded-xl shadow-md border border-slate-200">
       <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
         <Star className="text-yellow-500" />
-        Privilege Log
+        {t('privilege.title')}
       </h3>
       <div className="space-y-3">
-        {PRIVILEGES.map((priv) => {
+        {privileges.map((priv) => {
           const isUnlocked = currentLevel >= priv.levelRequired;
           return (
             <div 
@@ -43,7 +52,7 @@ const PrivilegeTree: React.FC<PrivilegeTreeProps> = ({ currentLevel, isAdmin, on
                         <h4 className={`font-bold text-sm ${isUnlocked ? 'text-amber-900' : 'text-slate-500'}`}>
                             {priv.title}
                         </h4>
-                        {!isUnlocked && <span className="text-xs bg-slate-200 px-1 rounded text-slate-500">Lvl {priv.levelRequired}</span>}
+                        {!isUnlocked && <span className="text-xs bg-slate-200 px-1 rounded text-slate-500">{t('common.levelShort')} {priv.levelRequired}</span>}
                     </div>
                     <p className="text-xs text-slate-600">{priv.description}</p>
                 </div>
@@ -58,7 +67,7 @@ const PrivilegeTree: React.FC<PrivilegeTreeProps> = ({ currentLevel, isAdmin, on
                     onClick={() => onRecordUsage(priv.title)}
                     className="self-end text-xs bg-amber-200 hover:bg-amber-300 text-amber-900 px-3 py-1 rounded-full font-bold flex items-center gap-1 transition-colors"
                   >
-                      <ScrollText size={12}/> Record Usage
+                      <ScrollText size={12}/> {t('privilege.recordUsage')}
                   </button>
               )}
             </div>

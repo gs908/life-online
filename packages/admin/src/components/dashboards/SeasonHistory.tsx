@@ -1,5 +1,5 @@
-
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Season, Task, TaskStatus } from '../../types';
 import { THEMES } from '../../constants/themes';
 import { Calendar, Trophy, CheckCircle2, ScrollText } from 'lucide-react';
@@ -11,18 +11,20 @@ interface SeasonHistoryProps {
 }
 
 const SeasonHistory: React.FC<SeasonHistoryProps> = ({ historySeasons, allTasks, onBack }) => {
+  const { t } = useTranslation();
+
   return (
     <div className="space-y-6 animate-in slide-in-from-right duration-300">
       <div className="flex items-center gap-4 border-b border-slate-200 pb-4">
-        <button onClick={onBack} className="text-sm font-bold text-blue-600 hover:underline">← Back to Dashboard</button>
-        <h2 className="text-2xl font-bold text-slate-800">Season History Archives</h2>
+        <button onClick={onBack} className="text-sm font-bold text-blue-600 hover:underline">{t('seasonHistory.back')}</button>
+        <h2 className="text-2xl font-bold text-slate-800">{t('seasonHistory.title')}</h2>
       </div>
 
       {historySeasons.length === 0 ? (
         <div className="text-center py-20 bg-slate-50 rounded-xl border-2 border-dashed border-slate-300">
           <Calendar className="mx-auto text-slate-300 mb-4" size={48} />
-          <p className="text-slate-500 font-bold">No past seasons recorded yet.</p>
-          <p className="text-slate-400 text-sm">When you finish the current season, it will appear here.</p>
+          <p className="text-slate-500 font-bold">{t('seasonHistory.emptyTitle')}</p>
+          <p className="text-slate-400 text-sm">{t('seasonHistory.emptyHint')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6">
@@ -42,7 +44,7 @@ const SeasonHistory: React.FC<SeasonHistoryProps> = ({ historySeasons, allTasks,
                    <div className="relative z-10 text-center md:text-left">
                        <div className="text-4xl mb-2">{theme.icon}</div>
                        <h3 className="text-2xl font-bold leading-tight mb-1">{season.name}</h3>
-                       <span className="text-xs font-bold uppercase tracking-wider opacity-80">{theme.name} Theme</span>
+                       <span className="text-xs font-bold uppercase tracking-wider opacity-80">{theme.name} {t('seasonHistory.theme')}</span>
                    </div>
                 </div>
 
@@ -59,21 +61,21 @@ const SeasonHistory: React.FC<SeasonHistoryProps> = ({ historySeasons, allTasks,
                                 <div className="p-2 bg-yellow-100 text-yellow-600 rounded-full"><Trophy size={20} /></div>
                                 <div>
                                     <div className="text-2xl font-bold text-slate-800">{totalXp}</div>
-                                    <div className="text-xs text-slate-500 uppercase font-bold">Total XP Gained</div>
+                                    <div className="text-xs text-slate-500 uppercase font-bold">{t('seasonHistory.totalXp')}</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">
                                 <div className="p-2 bg-green-100 text-green-600 rounded-full"><CheckCircle2 size={20} /></div>
                                 <div>
                                     <div className="text-2xl font-bold text-slate-800">{completedCount} / {seasonTasks.length}</div>
-                                    <div className="text-xs text-slate-500 uppercase font-bold">Quests Completed</div>
+                                    <div className="text-xs text-slate-500 uppercase font-bold">{t('seasonHistory.questsCompleted')}</div>
                                 </div>
                             </div>
                         </div>
                     </div>
                     
                     <div className="text-right text-xs text-slate-400 font-mono mt-2">
-                        Ended on: {new Date().toLocaleDateString()} {/* Mock end date */}
+                        {t('seasonHistory.endedOn')}: {new Date().toLocaleDateString()} {/* Mock end date */}
                     </div>
                 </div>
               </div>

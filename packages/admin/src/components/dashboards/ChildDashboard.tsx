@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { User, Task, UserRole, SeasonTheme, TaskType } from '../../types';
 import XPBar from '../XPBar';
 import PrivilegeTree from '../PrivilegeTree';
@@ -30,6 +31,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
   onSubmit,
   onAbandonCurrent
 }) => {
+  const { t } = useTranslation();
   const [showLevelUp, setShowLevelUp] = useState(false);
   const prevLevelRef = useRef(childUser.level);
 
@@ -74,8 +76,8 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
   };
 
   const getCategoryLabel = (cat: string) => {
-      if (cat === 'ALL') return 'Guild Hall';
-      return cat.charAt(0) + cat.slice(1).toLowerCase() + ' Quests';
+      if (cat === 'ALL') return t('child.guildHall');
+      return t(`taskTypeQuest.${cat}`);
   };
 
   return (
@@ -96,7 +98,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
             <div className="relative flex flex-col items-center justify-center text-center p-8">
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-gradient-to-r from-yellow-500/0 via-yellow-500/20 to-yellow-500/0 rounded-full animate-spin-slow pointer-events-none blur-xl"></div>
               <h1 className="text-6xl md:text-8xl font-pixel text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.8)] animate-bounce mb-8">
-                LEVEL UP!
+                {t('child.levelUp')}
               </h1>
               <div className="relative group">
                 <Trophy size={160} className="text-yellow-200 drop-shadow-2xl animate-pulse" />
@@ -105,10 +107,10 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
                 </div>
               </div>
               <p className="mt-8 text-white text-xl font-bold animate-pulse">
-                You are now Level {childUser.level}!
+                {t('child.levelUpMessage', { level: childUser.level })}
               </p>
               <button className="mt-8 bg-yellow-500 hover:bg-yellow-400 text-yellow-900 font-bold py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105 active:scale-95">
-                CONTINUE ADVENTURE
+                {t('child.continueAdventure')}
               </button>
             </div>
           </div>
@@ -133,12 +135,12 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
                       <Coins size={20} />
                   </div>
                   <div className="text-left leading-none">
-                      <span className="block text-xs text-slate-400 font-bold uppercase tracking-wider">Time Coins</span>
+                      <span className="block text-xs text-slate-400 font-bold uppercase tracking-wider">{t('child.timeCoins')}</span>
                       <span className="text-lg font-pixel text-yellow-400">{childUser.timeCoins}</span>
                   </div>
               </div>
               <div className="text-right">
-                  <span className="block text-[10px] text-slate-500">Daily Deposit</span>
+                  <span className="block text-[10px] text-slate-500">{t('child.dailyDeposit')}</span>
               </div>
             </div>
           </div>
@@ -155,7 +157,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
           {activeQuest ? (
             <div className="mb-8 animate-in slide-in-from-bottom duration-500">
               <h2 className={`text-xl font-bold flex items-center gap-2 mb-4 ${currentTheme.textColor} drop-shadow-md`}>
-                <Sparkles /> Current Adventure
+                <Sparkles /> {t('child.currentAdventure')}
               </h2>
               <QuestCard
                 task={activeQuest}
@@ -171,10 +173,10 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
             <div className={`${currentTheme.primaryColor} bg-opacity-10 border border-white/20 backdrop-blur-md rounded-xl p-8 text-center mb-8 shadow-xl`}>
               <div className="text-white/80 mb-2 flex justify-center"><ScrollText size={48} /></div>
               <h2 className="text-2xl font-bold text-white mb-2 drop-shadow-md">
-                 Adventure Awaits!
+                 {t('child.adventureAwaits')}
               </h2>
               <p className="text-white/90 max-w-md mx-auto font-medium">
-                  The {currentTheme.name} theme is active. Check the Quest Book below to pick up a new contract and earn your glory!
+                  {t('child.adventureHint', { theme: currentTheme.name })}
               </p>
             </div>
           )}
@@ -183,7 +185,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
           <div>
               <div className="flex justify-between items-center mb-4">
                   <h2 className={`text-lg font-bold flex items-center gap-2 ${currentTheme.textColor} drop-shadow-sm`}>
-                    <BrainCircuit className="opacity-80" /> Quest Book
+                    <BrainCircuit className="opacity-80" /> {t('child.questBook')}
                   </h2>
               </div>
 
@@ -205,7 +207,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
                             }`}
                           >
                               {getCategoryIcon(cat)}
-                              <span className="whitespace-nowrap">{cat === 'ALL' ? 'Overview' : cat}</span>
+                              <span className="whitespace-nowrap">{cat === 'ALL' ? t('child.overview') : t(`taskType.${cat}`)}</span>
                           </button>
                       ))}
                   </div>
@@ -219,7 +221,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
                              {getCategoryLabel(activeCategory)}
                           </h3>
                           <span className="text-xs font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded-full">
-                              Page {activeCategoryIndex + 1} of {categories.length}
+                              {t('child.pageOf', { current: activeCategoryIndex + 1, total: categories.length })}
                           </span>
                       </div>
 
@@ -228,8 +230,8 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
                           {bookTasks.length === 0 ? (
                             <div className="col-span-2 py-12 text-center opacity-60">
                                 <ScrollText className="mx-auto text-slate-300 mb-2" size={48} />
-                                <p className="text-slate-500 font-bold italic">This page is empty...</p>
-                                <p className="text-slate-400 text-xs">No {activeCategory.toLowerCase()} quests available.</p>
+                                <p className="text-slate-500 font-bold italic">{t('child.emptyPage')}</p>
+                                <p className="text-slate-400 text-xs">{t('child.noQuestsAvailable', { category: activeCategory === 'ALL' ? t('child.guildHall') : t(`taskType.${activeCategory}`) })}</p>
                             </div>
                           ) : (
                             bookTasks.map(task => (
@@ -252,7 +254,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
                         onClick={handlePrevPage}
                         className="flex items-center gap-1 text-sm font-bold hover:text-slate-800 transition-colors"
                       >
-                          <ChevronLeft size={18} /> Prev Page
+                          <ChevronLeft size={18} /> {t('child.prevPage')}
                       </button>
                       
                       <div className="flex gap-1">
@@ -265,7 +267,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
                         onClick={handleNextPage}
                         className="flex items-center gap-1 text-sm font-bold hover:text-slate-800 transition-colors"
                       >
-                          Next Page <ChevronRight size={18} />
+                          {t('child.nextPage')} <ChevronRight size={18} />
                       </button>
                   </div>
               </div>
@@ -275,7 +277,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
           {(completedTasks.length > 0 || pendingTasks.length > 0) && (
             <div className="pt-8 border-t border-white/20">
               <h3 className="text-lg font-bold text-white/60 mb-4 flex items-center gap-2">
-                  <HistoryIcon /> Quest Log (History)
+                  <HistoryIcon /> {t('child.questLog')}
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 opacity-75 hover:opacity-100 transition-all duration-300">
                 {pendingTasks.map(task => (

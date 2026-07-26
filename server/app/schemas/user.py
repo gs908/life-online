@@ -14,6 +14,7 @@ class UserRead(BaseModel):
     role: UserRole
     name: str
     avatar: str
+    locale: str = "zh-CN"
     child_id: str | None = None
     level: int = 1
     xp: int = 0
@@ -41,6 +42,7 @@ class AdventurerCreate(BaseModel):
 class UserUpdate(BaseModel):
     name: str | None = None
     avatar: str | None = None
+    locale: str | None = None
     time_coins: int | None = None
     level: int | None = None
     xp: int | None = None

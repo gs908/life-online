@@ -34,6 +34,7 @@ class SysAccount(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     avatar: Mapped[str] = mapped_column(String(16), nullable=False, default="⚔️")
+    locale: Mapped[str] = mapped_column(String(16), nullable=False, default="zh-CN")
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="active", comment="active | disabled"
     )

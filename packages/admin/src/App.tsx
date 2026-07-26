@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { User, Task, Season, UserRole, TaskType, TaskStatus, RedemptionRecord, TimeConfig } from './types';
 import { THEMES } from './constants/themes';
 import { Bell } from 'lucide-react';
@@ -98,6 +99,7 @@ const INITIAL_TASKS: Task[] = [
 ];
 
 const App: React.FC = () => {
+  const { t } = useTranslation();
   // --- STATE ---
   const [currentUser, setCurrentUser] = useState<User>(MOCK_USERS[0]);
   const [childUser, setChildUser] = useState<User>(MOCK_USERS[1]);
@@ -138,10 +140,10 @@ const App: React.FC = () => {
             lastLoginDate: todayStr
         }));
 
-        setToastMessage({ title: "New Day!", msg: `Daily Time Coins reset to ${dailyAllowance}.` });
+        setToastMessage({ title: t('toast.newDayTitle'), msg: t('toast.dailyReset', { amount: dailyAllowance }) });
         setTimeout(() => setToastMessage(null), 5000);
     }
-  }, [timeConfig, childUser.lastLoginDate]);
+  }, [timeConfig, childUser.lastLoginDate, t]);
 
   // --- EFFECT: TIMED TASK ALERTS ---
   useEffect(() => {
@@ -159,8 +161,8 @@ const App: React.FC = () => {
 
           if (diffMins === remindMins) {
             setToastMessage({
-              title: "Quest Opportunity Closing!",
-              msg: task.reminderMessage || `You have ${remindMins} minutes to start ${task.title}!`
+              title: t('toast.questClosingTitle'),
+              msg: task.reminderMessage || t('toast.questClosingMsg', { minutes: remindMins, title: task.title })
             });
             setTimeout(() => setToastMessage(null), 8000);
           }
@@ -168,7 +170,7 @@ const App: React.FC = () => {
       });
     }, 60000);
     return () => clearInterval(checkTimers);
-  }, [tasks]);
+  }, [tasks, t]);
 
   // --- HANDLERS ---
 
@@ -189,7 +191,7 @@ const App: React.FC = () => {
     // DEPOSIT CHECK
     const deposit = task.timeDeposit || 10;
     if (childUser.timeCoins < deposit) {
-        setToastMessage({ title: "Insufficient Coins", msg: `You need ${deposit} Time Coins to accept this quest.` });
+        setToastMessage({ title: t('toast.insufficientCoinsTitle'), msg: t('toast.insufficientCoinsMsg', { deposit }) });
         setTimeout(() => setToastMessage(null), 4000);
         return;
     }
@@ -228,10 +230,10 @@ const App: React.FC = () => {
         // Penalty if abandoned > 3 times
         if (childUser.dailyAbandonCount >= 3) {
             refund = Math.floor(deposit * 0.6); // 40% penalty, so 60% refund
-            setToastMessage({ title: "Penalty Applied", msg: `Frequent abandonment! Lost ${deposit - refund} coins.` });
+            setToastMessage({ title: t('toast.penaltyTitle'), msg: t('toast.penaltyMsg', { amount: deposit - refund }) });
             setTimeout(() => setToastMessage(null), 4000);
         } else {
-            setToastMessage({ title: "Deposit Returned", msg: `${deposit} coins refunded.` });
+            setToastMessage({ title: t('toast.depositReturnedTitle'), msg: t('toast.depositReturnedMsg', { deposit }) });
             setTimeout(() => setToastMessage(null), 3000);
         }
 
@@ -309,7 +311,7 @@ const App: React.FC = () => {
         if (remainingXP >= xpNeeded) {
           newLevel += 1;
           remainingXP = remainingXP - xpNeeded;
-          setToastMessage({ title: "LEVEL UP!", msg: `${prev.name} is now Level ${newLevel}!` });
+          setToastMessage({ title: t('toast.levelUpTitle'), msg: t('toast.levelUpMsg', { name: prev.name, level: newLevel }) });
           setTimeout(() => setToastMessage(null), 5000);
         }
         return { ...prev, xp: remainingXP, level: newLevel };
@@ -326,7 +328,7 @@ const App: React.FC = () => {
       user: childUser.name
     };
     setRedemptionHistory(prev => [record, ...prev]);
-    setToastMessage({ title: "Usage Recorded", msg: `${privilegeTitle} consumed.` });
+    setToastMessage({ title: t('toast.usageRecordedTitle'), msg: t('toast.usageRecordedMsg', { title: privilegeTitle }) });
     setTimeout(() => setToastMessage(null), 3000);
   };
 
@@ -336,13 +338,13 @@ const App: React.FC = () => {
 
   const handleTimeConfigSave = (newConfig: TimeConfig) => {
       setTimeConfig(newConfig);
-      setToastMessage({ title: "Config Saved", msg: "Time coin settings updated." });
+      setToastMessage({ title: t('toast.configSavedTitle'), msg: t('toast.configSavedMsg') });
       setTimeout(() => setToastMessage(null), 3000);
   };
 
   const handleSeasonSave = (newSeason: Season) => {
     setActiveSeason(newSeason);
-    setToastMessage({ title: "Season Updated", msg: `Theme changed to ${THEMES[newSeason.themeId].name}` });
+    setToastMessage({ title: t('toast.seasonUpdatedTitle'), msg: t('toast.seasonUpdatedMsg', { theme: THEMES[newSeason.themeId].name }) });
     setTimeout(() => setToastMessage(null), 3000);
   };
 

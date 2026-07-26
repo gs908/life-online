@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface XPBarProps {
   currentXP: number;
@@ -6,6 +7,8 @@ interface XPBarProps {
 }
 
 const XPBar: React.FC<XPBarProps> = ({ currentXP, level }) => {
+  const { t } = useTranslation();
+
   // Simple exponential leveling curve: Level * 1000 XP needed for next level
   const xpForNextLevel = level * 1000;
   const progressPercentage = Math.min((currentXP / xpForNextLevel) * 100, 100);
@@ -17,9 +20,9 @@ const XPBar: React.FC<XPBarProps> = ({ currentXP, level }) => {
             <span className="bg-yellow-500 text-white font-bold rounded-full w-8 h-8 flex items-center justify-center border-2 border-yellow-600 shadow-md">
                 {level}
             </span>
-            <span className="text-sm font-bold text-slate-700">Lvl {level}</span>
+            <span className="text-sm font-bold text-slate-700">{t('common.levelShort')} {level}</span>
         </div>
-        <span className="text-xs font-medium text-slate-500">{currentXP} / {xpForNextLevel} XP</span>
+        <span className="text-xs font-medium text-slate-500">{currentXP} / {xpForNextLevel} {t('common.xp')}</span>
       </div>
       <div className="h-4 w-full bg-slate-200 rounded-full overflow-hidden border border-slate-300 shadow-inner relative">
         <div 

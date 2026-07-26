@@ -1,5 +1,5 @@
-
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Season, ThemeId } from '../../types';
 import { THEMES } from '../../constants/themes';
 import { Palette, ScrollText, Check, X } from 'lucide-react';
@@ -12,6 +12,7 @@ interface SeasonConfigModalProps {
 }
 
 const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({ isOpen, onClose, currentSeason, onSave }) => {
+  const { t } = useTranslation();
   const [name, setName] = useState(currentSeason.name);
   const [narrativeContext, setNarrativeContext] = useState(currentSeason.narrativeContext);
   const [selectedTheme, setSelectedTheme] = useState<ThemeId>(currentSeason.themeId);
@@ -41,7 +42,7 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({ isOpen, onClose, 
       <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh]">
         <div className="bg-slate-900 text-white p-4 flex justify-between items-center shrink-0">
           <h3 className="font-bold text-lg flex items-center gap-2">
-            <Palette size={20} /> Season Configuration
+            <Palette size={20} /> {t('seasonConfig.title')}
           </h3>
           <button onClick={onClose}><X /></button>
         </div>
@@ -51,33 +52,33 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({ isOpen, onClose, 
           {/* Section 1: Basic Info */}
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-bold text-slate-700 mb-1">Season Name</label>
+              <label className="block text-sm font-bold text-slate-700 mb-1">{t('seasonConfig.seasonName')}</label>
               <input 
                 type="text" 
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full border border-slate-300 rounded-lg p-2 font-bold focus:ring-2 focus:ring-blue-500 outline-none"
-                placeholder="e.g. Winter Semester 2024"
+                placeholder={t('seasonConfig.seasonNamePlaceholder')}
               />
             </div>
             
             <div>
               <label className="block text-sm font-bold text-slate-700 mb-1 flex items-center gap-2">
-                 <ScrollText size={16}/> Narrative Context (Lore)
+                 <ScrollText size={16}/> {t('seasonConfig.narrativeContext')}
               </label>
               <textarea 
                 value={narrativeContext}
                 onChange={(e) => setNarrativeContext(e.target.value)}
                 className="w-full h-24 border border-slate-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                placeholder="Describe the setting. E.g., 'The kingdom is under attack by frost giants. We must gather supplies and train to defend the walls.'"
+                placeholder={t('seasonConfig.narrativePlaceholder')}
               />
-              <p className="text-xs text-slate-500 mt-1">This context is used by the AI to generate themed task descriptions.</p>
+              <p className="text-xs text-slate-500 mt-1">{t('seasonConfig.aiHint')}</p>
             </div>
           </div>
 
           {/* Section 2: Theme Selection */}
           <div>
-            <h4 className="text-sm font-bold text-slate-700 mb-3">Visual Theme</h4>
+            <h4 className="text-sm font-bold text-slate-700 mb-3">{t('seasonConfig.visualTheme')}</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {(Object.values(THEMES) as any[]).map((theme) => (
                 <div 
@@ -94,7 +95,7 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({ isOpen, onClose, 
                     </div>
                     <div>
                       <h5 className="font-bold text-slate-800 text-sm">{theme.name}</h5>
-                      <p className="text-xs text-slate-500">Preview Style</p>
+                      <p className="text-xs text-slate-500">{t('seasonConfig.previewStyle')}</p>
                     </div>
                     {selectedTheme === theme.id && <div className="absolute right-0 top-0 p-1 bg-blue-500 text-white rounded-bl-lg"><Check size={12}/></div>}
                   </div>
@@ -105,9 +106,9 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({ isOpen, onClose, 
         </div>
 
         <div className="p-4 bg-slate-50 border-t flex justify-end gap-2 shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded-lg">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded-lg">{t('common.cancel')}</button>
           <button onClick={handleSave} className="px-6 py-2 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 shadow-md">
-            Save & Activate
+            {t('seasonConfig.save')}
           </button>
         </div>
       </div>

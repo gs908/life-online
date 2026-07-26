@@ -34,6 +34,7 @@ async def account_to_read(db: AsyncSession, user: SysAccount) -> UserRead:
         role=_role_value(user),
         name=user.name,
         avatar=user.avatar,
+        locale=user.locale,
         child_id=child.id if child else None,
         level=child.level if child else 1,
         xp=child.xp if child else 0,

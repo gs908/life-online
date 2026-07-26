@@ -1,12 +1,15 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Task, TaskStatus, TaskType } from '../types';
-import { PieChart, BarChart, Star, Activity, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { PieChart, Star, Activity, CheckCircle2, Clock } from 'lucide-react';
 
 interface StatsBoardProps {
   tasks: Task[];
 }
 
 const StatsBoard: React.FC<StatsBoardProps> = ({ tasks }) => {
+  const { t } = useTranslation();
+
   // --- CALCULATIONS ---
   const totalTasks = tasks.length;
   const completedTasks = tasks.filter(t => t.status === TaskStatus.COMPLETED);
@@ -34,7 +37,7 @@ const StatsBoard: React.FC<StatsBoardProps> = ({ tasks }) => {
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
       <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
         <Activity className="text-blue-600" />
-        <h3 className="text-lg font-bold text-slate-800">Guild Statistics Center</h3>
+        <h3 className="text-lg font-bold text-slate-800">{t('stats.title')}</h3>
       </div>
 
       {/* Top Row: Key Metrics */}
@@ -42,24 +45,24 @@ const StatsBoard: React.FC<StatsBoardProps> = ({ tasks }) => {
         <div className="bg-green-50 p-3 rounded-xl border border-green-100 text-center">
             <div className="text-green-600 mb-1 flex justify-center"><CheckCircle2 size={20}/></div>
             <div className="text-2xl font-bold text-green-800">{completedCount}</div>
-            <div className="text-xs text-green-600 font-bold uppercase">Completed</div>
+            <div className="text-xs text-green-600 font-bold uppercase">{t('stats.completed')}</div>
         </div>
         <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 text-center">
             <div className="text-blue-600 mb-1 flex justify-center"><PieChart size={20}/></div>
             <div className="text-2xl font-bold text-blue-800">{completionRate}%</div>
-            <div className="text-xs text-blue-600 font-bold uppercase">Success Rate</div>
+            <div className="text-xs text-blue-600 font-bold uppercase">{t('stats.successRate')}</div>
         </div>
         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center">
              <div className="text-slate-500 mb-1 flex justify-center"><Clock size={20}/></div>
             <div className="text-2xl font-bold text-slate-700">{totalTasks}</div>
-            <div className="text-xs text-slate-500 font-bold uppercase">Total Quests</div>
+            <div className="text-xs text-slate-500 font-bold uppercase">{t('stats.totalQuests')}</div>
         </div>
       </div>
 
       {/* Middle Row: Star Distribution */}
       <div>
         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center gap-1">
-            <Star size={12} /> Quality Ratings
+            <Star size={12} /> {t('stats.qualityRatings')}
         </h4>
         <div className="flex items-end justify-between h-24 gap-2 px-2">
             {starCounts.map((count, index) => {
@@ -80,15 +83,15 @@ const StatsBoard: React.FC<StatsBoardProps> = ({ tasks }) => {
 
       {/* Bottom Row: Type Distribution */}
       <div>
-         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Quest Types</h4>
+         <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">{t('stats.questTypes')}</h4>
          <div className="space-y-2">
             {Object.entries(typeCounts).map(([type, count]) => (
                 <div key={type} className="flex items-center text-xs">
-                    <span className="w-24 font-bold text-slate-600">{type}</span>
+                    <span className="w-24 font-bold text-slate-600">{t(`taskType.${type}`)}</span>
                     <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
                         <div 
                             className="h-full bg-slate-400 rounded-full"
-                            style={{ width: `${(count / totalTasks) * 100}%` }}
+                            style={{ width: totalTasks > 0 ? `${(count / totalTasks) * 100}%` : '0%' }}
                         ></div>
                     </div>
                     <span className="w-8 text-right text-slate-400">{count}</span>

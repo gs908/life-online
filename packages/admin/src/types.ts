@@ -70,6 +70,7 @@ export interface User {
   level: number;
   xp: number;
   avatar: string;
+  locale?: string;
   privilegesUnlocked: number[]; // Array of levels
   
   // New Time Coin Logic

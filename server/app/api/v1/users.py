@@ -36,6 +36,7 @@ async def _to_read(db: AsyncSession, user: SysAccount) -> UserRead:
         role=_role_value(user),
         name=user.name,
         avatar=user.avatar,
+        locale=user.locale,
         child_id=child.id if child else None,
         level=child.level if child else 1,
         xp=child.xp if child else 0,
@@ -70,6 +71,8 @@ async def patch_me(body: UserUpdate, db: DBSession, user: CurrentUser) -> ApiRes
         user.name = patch.pop("name")
     if "avatar" in patch and patch["avatar"] is not None:
         user.avatar = patch.pop("avatar")
+    if "locale" in patch and patch["locale"] is not None:
+        user.locale = patch.pop("locale")
 
     child = await _child_for_account(db, user.id) if _role_value(user) == UserRole.ADVENTURER.value else None
     if child:

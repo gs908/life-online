@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Task, TaskType, TaskStatus, UserRole } from '../types';
-import { Clock, CheckCircle, ShieldAlert, Users, Camera, Star, XCircle, Play, AlertTriangle, Coins } from 'lucide-react';
+import { Clock, CheckCircle, ShieldAlert, Users, Camera, Star, Play, AlertTriangle, Coins } from 'lucide-react';
 
 interface QuestCardProps {
   task: Task;
@@ -14,6 +15,7 @@ interface QuestCardProps {
 }
 
 const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, onSubmit, onApprove, onDelete, onAbandon }) => {
+  const { t } = useTranslation();
   const [dynamicXP, setDynamicXP] = useState(task.xpReward);
   const [latePenalty, setLatePenalty] = useState(false);
   const [earlyBonus, setEarlyBonus] = useState(false);
@@ -67,11 +69,11 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
 
   const getStatusBadge = () => {
     switch (task.status) {
-      case TaskStatus.AVAILABLE: return <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-bold">Available</span>;
-      case TaskStatus.IN_PROGRESS: return <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold animate-pulse">Active Quest</span>;
-      case TaskStatus.PENDING_REVIEW: return <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded text-xs font-bold">Reviewing</span>;
-      case TaskStatus.COMPLETED: return <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs font-bold">Complete</span>;
-      case TaskStatus.EXPIRED: return <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-xs font-bold">Expired</span>;
+      case TaskStatus.AVAILABLE: return <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.AVAILABLE')}</span>;
+      case TaskStatus.IN_PROGRESS: return <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold animate-pulse">{t('taskStatus.IN_PROGRESS')}</span>;
+      case TaskStatus.PENDING_REVIEW: return <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.PENDING_REVIEW')}</span>;
+      case TaskStatus.COMPLETED: return <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.COMPLETED')}</span>;
+      case TaskStatus.EXPIRED: return <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.EXPIRED')}</span>;
     }
   };
 
@@ -93,7 +95,7 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
       
       {isActive && (
           <div className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-yellow-500 text-white text-xs font-bold px-3 py-1 rounded-full shadow flex items-center gap-1">
-              <Play size={10} fill="currentColor" /> CURRENT QUEST
+              <Play size={10} fill="currentColor" /> {t('questCard.currentQuest')}
           </div>
       )}
 
@@ -102,15 +104,15 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
             {task.type === TaskType.CHALLENGE && <ShieldAlert size={16} className="text-red-500" />}
             {task.type === TaskType.COOP && <Users size={16} className="text-purple-500" />}
             {task.type === TaskType.TIMED && <Clock size={16} className="text-orange-500" />}
-            <span className="text-xs uppercase font-bold text-slate-500 tracking-wider">{task.type}</span>
+            <span className="text-xs uppercase font-bold text-slate-500 tracking-wider">{t(`taskType.${task.type}`)}</span>
         </div>
         <div className="flex items-center gap-2">
             <div className={`text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors
                 ${latePenalty ? 'bg-red-100 text-red-700' : earlyBonus ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-600'}
             `}>
-                 +{dynamicXP} XP
-                 {latePenalty && <span className="text-[10px] opacity-75">(Late)</span>}
-                 {earlyBonus && <span className="text-[10px] opacity-75">(Bonus)</span>}
+                 +{dynamicXP} {t('common.xp')}
+                 {latePenalty && <span className="text-[10px] opacity-75">({t('questCard.late')})</span>}
+                 {earlyBonus && <span className="text-[10px] opacity-75">({t('questCard.bonus')})</span>}
             </div>
             {!isActive && getStatusBadge()}
         </div>
@@ -125,14 +127,14 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
         <div className="flex flex-wrap gap-2 mt-2">
             {task.timeDeposit && task.status === TaskStatus.AVAILABLE && (
                  <p className="text-xs font-bold text-slate-600 flex items-center gap-1 bg-slate-100 px-2 py-1 rounded">
-                    <Coins size={12} className="text-yellow-500"/> Deposit: {task.timeDeposit}
+                    <Coins size={12} className="text-yellow-500"/> {t('questCard.deposit')}: {task.timeDeposit}
                  </p>
             )}
 
-            {task.deadline && <p className="text-xs text-red-500 flex items-center gap-1"><Clock size={12}/> Due: {new Date(task.deadline).toLocaleDateString()}</p>}
+            {task.deadline && <p className="text-xs text-red-500 flex items-center gap-1"><Clock size={12}/> {t('questCard.due')}: {new Date(task.deadline).toLocaleDateString()}</p>}
             {task.requiredStartTime && (
                 <p className={`text-xs font-bold flex items-center gap-1 ${latePenalty ? 'text-red-600' : 'text-orange-600'}`}>
-                    <AlertTriangle size={12}/> Start by: {task.requiredStartTime}
+                    <AlertTriangle size={12}/> {t('questCard.startBy')}: {task.requiredStartTime}
                 </p>
             )}
         </div>
@@ -144,17 +146,17 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
         {/* Child Actions */}
         {role === UserRole.CHILD && task.status === TaskStatus.AVAILABLE && !disabled && (
            <button onClick={() => onAccept(task.id)} className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg font-bold hover:bg-blue-700 active:scale-95 transition-all shadow-md">
-             Accept Quest
+             {t('questCard.accept')}
            </button>
         )}
         
         {role === UserRole.CHILD && task.status === TaskStatus.IN_PROGRESS && (
            <>
                <button onClick={() => onAbandon && onAbandon(task.id)} className="text-red-400 hover:text-red-600 text-xs font-bold px-2">
-                    Abandon
+                    {t('questCard.abandon')}
                </button>
                <button onClick={() => onSubmit(task.id)} className="bg-green-600 text-white text-sm px-4 py-2 rounded-lg font-bold hover:bg-green-700 flex items-center gap-2 active:scale-95 transition-all shadow-md">
-                    <Camera size={16} /> Submit Proof
+                    <Camera size={16} /> {t('questCard.submitProof')}
                </button>
            </>
         )}
@@ -162,13 +164,13 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
         {/* Parent Actions */}
         {role === UserRole.PARENT && task.status === TaskStatus.PENDING_REVIEW && (
            <button onClick={() => onApprove(task.id)} className="bg-yellow-500 text-white text-sm px-4 py-2 rounded-lg font-bold hover:bg-yellow-600 flex items-center gap-2 active:scale-95 transition-all shadow-md">
-             <CheckCircle size={16} /> Review
+             <CheckCircle size={16} /> {t('questCard.review')}
            </button>
         )}
 
         {role === UserRole.PARENT && onDelete && (
             <button onClick={() => onDelete(task.id)} className="text-red-400 hover:text-red-600 text-xs underline">
-                Delete
+                {t('common.delete')}
             </button>
         )}
       </div>
@@ -179,7 +181,7 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
             {[...Array(5)].map((_, i) => (
                 <Star key={i} size={16} fill={i < (task.rating || 0) ? "currentColor" : "none"} />
             ))}
-            <span className="text-xs text-slate-400 ml-2">Verified</span>
+            <span className="text-xs text-slate-400 ml-2">{t('questCard.verified')}</span>
           </div>
       )}
     </div>

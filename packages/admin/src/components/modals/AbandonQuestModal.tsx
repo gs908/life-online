@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { Task } from '../../types';
+import { Trans, useTranslation } from 'react-i18next';
 import { AlertTriangle } from 'lucide-react';
 
 interface AbandonQuestModalProps {
@@ -11,6 +10,8 @@ interface AbandonQuestModalProps {
 }
 
 const AbandonQuestModal: React.FC<AbandonQuestModalProps> = ({ isOpen, onClose, onConfirm, taskTitle }) => {
+  const { t } = useTranslation();
+
   if (!isOpen) return null;
 
   return (
@@ -19,14 +20,17 @@ const AbandonQuestModal: React.FC<AbandonQuestModalProps> = ({ isOpen, onClose, 
         <div className="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
           <AlertTriangle className="text-red-600" size={32} />
         </div>
-        <h3 className="text-xl font-bold text-slate-900 mb-2">Abandon Current Quest?</h3>
+        <h3 className="text-xl font-bold text-slate-900 mb-2">{t('abandonQuest.title')}</h3>
         <p className="text-slate-600 mb-6 text-sm">
-          You are currently on <strong>"{taskTitle}"</strong>.<br />
-          You can only do one quest at a time. Switching will reset your progress on the current quest.
+          <Trans
+            i18nKey="abandonQuest.body"
+            values={{ title: taskTitle }}
+            components={{ strong: <strong />, br: <br /> }}
+          />
         </p>
         <div className="flex gap-2 justify-center">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-slate-600 font-bold hover:bg-slate-100">Cancel</button>
-          <button onClick={onConfirm} className="px-4 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg">Abandon & Switch</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-slate-600 font-bold hover:bg-slate-100">{t('common.cancel')}</button>
+          <button onClick={onConfirm} className="px-4 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg">{t('abandonQuest.confirm')}</button>
         </div>
       </div>
     </div>
