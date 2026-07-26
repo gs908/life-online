@@ -32,6 +32,7 @@ from app.dev.seed import SeededFamily, cleanup_family, seed_basic_family
 from app.models.enums import TaskStatus
 from app.models.scn_task_instance import ScnTaskInstance
 from app.services import auth_service, task_service
+from app.services.task_service import REJECT_RESUBMIT_GRACE
 
 pytestmark = pytest.mark.db
 
@@ -206,7 +207,11 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     assert rejected["status"] == TaskStatus.IN_PROGRESS.value
 
     rejected_row = await task_service.get_task(db_session, task["id"])
-    assert rejected_row.expire_at is not None and rejected_row.expire_at > now  # 补了重新提交窗口
+    assert rejected_row.expire_at is not None
+    # 补的窗口必须是 now + REJECT_RESUBMIT_GRACE(24h),而不是随便一个未来时间点;
+    # 允许几秒钟的执行耗时误差,否则宽限期意外缩短成很小的正数也会被上面的 `> now` 放过。
+    expected_expire_at = now + REJECT_RESUBMIT_GRACE
+    assert abs((rejected_row.expire_at - expected_expire_at).total_seconds()) < 5
 
     # 下一轮过期批处理不应该把这个任务判过期
     processed = await task_service.expire_overdue_tasks(db_session, now=now)
@@ -228,6 +233,58 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     )
     assert approve_resp.status_code == 200
     assert approve_resp.json()["data"]["status"] == TaskStatus.COMPLETED.value
+
+
+async def test_reject_resubmit_grace_window_boundary(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """`REJECT_RESUBMIT_GRACE` 是 24h 而不是任意正数:在 grace 窗口内(now+23h)跑批处理
+    不应过期,超出窗口(now+25h)之后必须过期。直接断言批处理行为,而不是只看 `expire_at`
+    的字段值,避免过期判定逻辑和字段设置的窗口悄悄不一致。"""
+    await _top_up(db_session, seeded_family)
+    parent_headers = _auth_headers(seeded_family.parent)
+    child_headers = _auth_headers(seeded_family.child_account)
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    task = await _create_task(api_client, parent_headers, seeded_family, expire_at=future)
+
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
+    await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": "proofs/1.jpg"},
+        headers=child_headers,
+    )
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    await db_session.execute(
+        update(ScnTaskInstance)
+        .where(ScnTaskInstance.id == task["id"])
+        .values(expire_at=now - timedelta(minutes=1))
+    )
+    await db_session.commit()
+
+    reject_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/reject",
+        json={"comment": "截止后才审到,补一个新窗口"},
+        headers=parent_headers,
+    )
+    assert reject_resp.status_code == 200
+
+    # 窗口内(23h < 24h grace):批处理不应把它判过期
+    processed_within_grace = await task_service.expire_overdue_tasks(
+        db_session, now=now + timedelta(hours=23)
+    )
+    assert processed_within_grace == 0
+    still_in_progress = await task_service.get_task(db_session, task["id"])
+    assert still_in_progress.status == TaskStatus.IN_PROGRESS
+
+    # 窗口外(25h > 24h grace):批处理必须把它判过期
+    processed_past_grace = await task_service.expire_overdue_tasks(
+        db_session, now=now + timedelta(hours=25)
+    )
+    assert processed_past_grace == 1
+    expired_row = await task_service.get_task(db_session, task["id"])
+    assert expired_row.status == TaskStatus.EXPIRED
 
 
 async def test_abandon_refunds_and_penalizes_after_repeated_abandons(
