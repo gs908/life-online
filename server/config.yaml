@@ -19,7 +19,7 @@ database:
   port: ${env:DATABASE_PORT:4400}
   user: ${env:DATABASE_USER:dev}
   password: ${env:DATABASE_PASSWORD:}
-  database: ${env:DATABASE_NAME:salers}
+  database: ${env:DATABASE_NAME:life_online}
   charset: ${env:DATABASE_CHARSET:utf8mb4}
   pool:
     pool_pre_ping: true

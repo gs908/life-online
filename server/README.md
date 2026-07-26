@@ -119,6 +119,43 @@ LLM_MODEL=kimi-k2.6
 uv run pytest
 ```
 
+测试策略是"远程数据库优先,不做 Docker 实机验证":
+
+- `tests/conftest.py` 在 import 任何 `app.*` 模块之前,为 `JWT_SECRET` / `LLM_BASE_URL` /
+  `LLM_API_KEY` / `LLM_MODEL` 这几个没有默认值的必填配置注入开发期占位默认值(仅
+  `setdefault`,已配置真实 `.env` 的开发者不受影响),这样 `uv run pytest` 在一个干净环境
+  (没有 `.env`)里也能跑起来。
+- `db_ready` fixture 会先对配置的数据库探测一次 `SELECT 1`。数据库不可达时,依赖它的用例会
+  被自动 `pytest.skip`,而不是失败,也不会在本机拉起 Docker MySQL 做实机验证。
+- 标了 `@pytest.mark.db` 的测试模块(例如 `tests/test_auth_smoke.py`)依赖真实数据库连接;
+  不可达时会被整体跳过。不带这个标记的用例(例如 `tests/test_health_smoke.py`)不依赖数据库,
+  始终会执行。
+- `api_client` fixture 用 httpx `AsyncClient` + `ASGITransport` 直接对内存中的 FastAPI app
+  发请求,不需要起一个真实的 uvicorn 进程。
+
+当前覆盖的测试链路:
+
+- **健康检查**(`tests/test_health_smoke.py`,无需数据库):`/api/v1/health`、
+  `/api/v1/health/ready`、`/docs` 能正常返回。
+- **认证基础路径**(`tests/test_auth_smoke.py`,需要数据库):家长 / 孩子身份分别调用
+  `/api/v1/sys/auth/me` 能拿到对应角色和 `family_id` / `child_id`;`/api/v1/sys/auth/refresh`
+  能用 refresh token 换发新 token;不带 `Authorization` 头访问受保护接口会被拒绝(401)。
+- **种子数据创建链路**(`app/dev/seed.py` 的 `seed_basic_family`,被 `seeded_family` fixture
+  复用):家庭 → 家长 → 孩子 → 赛季 → 任务模板 → 任务实例的基础创建链路,用例结束后通过
+  `sys_family` 上的外键级联删除(`ondelete=CASCADE`)自动清理,不在远程数据库中留下脏数据。
+
+### 本地手动造数据
+
+```bash
+cd server
+uv run python scripts/seed_dev_data.py [suffix]
+```
+
+复用与冒烟测试相同的 `app/dev/seed.seed_basic_family`,在配置好的数据库上创建一条最小可用
+的家庭数据链路,方便手动用 Postman / 前端 mock 阶段验证接口。这条数据目前还不能直接登录
+(微信登录需要真实 openid);登录能力见后续的开发期非微信登录方案,届时可直接复用这里创建
+的账号 ID 配合 `auth_service.issue_token_pair` 签发 token。
+
 ## 8. 代码检查
 
 ```bash
