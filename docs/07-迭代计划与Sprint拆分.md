@@ -99,7 +99,7 @@
 - Story A10.1(2): 账号注销/退出家庭接口。
 - Story A10.2(1): `time_coin_balance` 强制重置(不依赖登录)。
 - Story A10.3(1): 错误码扩展(写入 `app/common/exceptions.py` + 测试)。
-- Story A10.4(2): 仓库根 `docker-compose.yml`(mysql + minio)。
+- Story A10.4(2): 仓库根 `docker-compose.yml`(postgres + minio)。
 - Story A10.5(2): 移除 `packages/client` 空目录,文档化 `parent/child` 工程占位。
 
 ### 1.11 Sprint A 总和

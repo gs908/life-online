@@ -7,8 +7,8 @@
     ${env:VAR:default}    缺失时使用 default
 - 解析后用 Pydantic 模型校验,提供类型安全访问
 - DB 字段独立配置,运行期自动拼装为:
-    async URL: mysql+asyncmy://user:pwd@host:port/db?charset=utf8mb4
-    sync  URL: mysql+pymysql://user:pwd@host:port/db?charset=utf8mb4
+    async URL: postgresql+asyncpg://user:pwd@host:port/db?ssl=require
+    sync  URL: postgresql+psycopg://user:pwd@host:port/db?sslmode=require
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import yaml
 from dotenv import load_dotenv
@@ -69,29 +69,64 @@ class DatabasePoolSection(BaseModel):
 
 
 class DatabaseSection(BaseModel):
+    dialect: str = "postgresql"
+    async_driver: str = "asyncpg"
+    sync_driver: str = "psycopg"
     host: str
     port: int
     user: str
     password: str
     database: str
-    charset: str = "utf8mb4"
+    sslmode: str = "require"
+    query: dict[str, str] = Field(default_factory=dict)
     pool: DatabasePoolSection = Field(default_factory=DatabasePoolSection)
+
+    def _build_url(self, driver: str, *, async_url: bool) -> str:
+        """根据分段配置安全拼接 SQLAlchemy 数据库 URL。"""
+        query = {}
+        if not (async_url and driver == "asyncpg"):
+            query.update(
+                {
+                    key: value
+                    for key, value in self.query.items()
+                    if value not in (None, "")
+                }
+            )
+        if self.sslmode:
+            query["ssl" if async_url and driver == "asyncpg" else "sslmode"] = self.sslmode
+        query_string = urlencode(query)
+
+        url = (
+            f"{self.dialect}+{driver}://"
+            f"{quote_plus(self.user)}:{quote_plus(self.password)}"
+            f"@{self.host}:{self.port}/{quote_plus(self.database)}"
+        )
+        if query_string:
+            return f"{url}?{query_string}"
+        return url
+
+    @property
+    def async_connect_args(self) -> dict[str, Any]:
+        """运行时异步驱动连接参数。"""
+        if self.async_driver == "asyncpg" and self.query:
+            return {
+                "server_settings": {
+                    key: value
+                    for key, value in self.query.items()
+                    if value not in (None, "")
+                }
+            }
+        return {}
 
     @property
     def url_async(self) -> str:
-        """运行时用,asyncmy 驱动。"""
-        return (
-            f"mysql+asyncmy://{quote_plus(self.user)}:{quote_plus(self.password)}"
-            f"@{self.host}:{self.port}/{self.database}?charset={self.charset}"
-        )
+        """运行时用异步数据库 URL。"""
+        return self._build_url(self.async_driver, async_url=True)
 
     @property
     def url_sync(self) -> str:
-        """Alembic 迁移用,pymysql 驱动。"""
-        return (
-            f"mysql+pymysql://{quote_plus(self.user)}:{quote_plus(self.password)}"
-            f"@{self.host}:{self.port}/{self.database}?charset={self.charset}"
-        )
+        """Alembic 迁移用同步数据库 URL。"""
+        return self._build_url(self.sync_driver, async_url=False)
 
 
 class StorageMinioSection(BaseModel):

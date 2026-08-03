@@ -290,7 +290,7 @@ class TestApplyXpAndLevel:
     def test_xp_remainder_after_levelup(self):
         child = make_child(level=1, xp=0)
         needed = xp_service.xp_required_for_level(1)  # 200
-        info = xp_service.apply_xp_and_level(child, needed + 50)
+        xp_service.apply_xp_and_level(child, needed + 50)
         assert child.level == 2
         assert child.xp == 50
 

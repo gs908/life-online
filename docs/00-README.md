@@ -46,7 +46,7 @@
 
 | 端 | 技术栈 | 形态 | 主要用户 |
 |---|---|---|---|
-| 后端 API | Python 3.12 + FastAPI + SQLAlchemy 2 async + Alembic + MySQL 8 | 单一服务,前缀 `/api/v1` | — |
+| 后端 API | Python 3.12 + FastAPI + SQLAlchemy 2 async + Alembic + PostgreSQL/Supabase | 单一服务,前缀 `/api/v1` | — |
 | Web 管理后台 | React 19 + Vite + Tailwind + lucide-react + `@google/genai`(可换 LLM) | 浏览器 SPA,内部运营/PM 使用 | 内部 |
 | 家长端 | **Taro 4 (React) + 一码多端**(微信小程序 + H5) | 移动端 | 家长 |
 | 孩子端 | **Taro 4 (React) + 一码多端**(微信小程序 + H5) | 移动端 | 孩子(3-12 岁) |

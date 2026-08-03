@@ -4,8 +4,6 @@
 """
 from __future__ import annotations
 
-import json
-
 from app.common.llm import LLMMessage, get_llm_client
 
 

@@ -15,12 +15,17 @@ app:
     - http://localhost:5173
 
 database:
+  dialect: ${env:DATABASE_DIALECT:postgresql}
+  async_driver: ${env:DATABASE_ASYNC_DRIVER:asyncpg}
+  sync_driver: ${env:DATABASE_SYNC_DRIVER:psycopg}
   host: ${env:DATABASE_HOST:127.0.0.1}
-  port: ${env:DATABASE_PORT:4400}
-  user: ${env:DATABASE_USER:dev}
+  port: ${env:DATABASE_PORT:5432}
+  user: ${env:DATABASE_USER:postgres}
   password: ${env:DATABASE_PASSWORD:}
-  database: ${env:DATABASE_NAME:salers}
-  charset: ${env:DATABASE_CHARSET:utf8mb4}
+  database: ${env:DATABASE_NAME:postgres}
+  sslmode: ${env:DATABASE_SSLMODE:require}
+  query:
+    application_name: ${env:DATABASE_APPLICATION_NAME:life-online}
   pool:
     pool_pre_ping: true
     pool_recycle: 3600

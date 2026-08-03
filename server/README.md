@@ -1,6 +1,6 @@
 # Life Online Server
 
-家庭任务游戏化后端(FastAPI + MySQL + MinIO + LLM)。
+家庭任务游戏化后端(FastAPI + PostgreSQL/Supabase + MinIO + LLM)。
 
 ## 0. 目录
 
@@ -9,7 +9,7 @@ server/
 ├── start.py                 # 启动入口
 ├── pyproject.toml           # uv 项目
 ├── config.yaml              # 结构化配置(默认值)
-├── .env / .env.example      # 环境变量(密钥、URL)
+├── .env / .env.example      # 环境变量(.env 为本地密钥,不提交)
 ├── alembic/                 # DB 迁移
 └── app/
     ├── main.py              # FastAPI 实例
@@ -46,24 +46,37 @@ cp .env.example .env
 
 `config.yaml` 是结构化配置,所有 `${env:VAR}` 占位符会在启动时从 `.env`(或进程环境)解析。
 
-## 3. 起 MySQL + MinIO(本地开发)
+## 3. 起 PostgreSQL/Supabase + MinIO(本地开发)
 
-项目根目录有 `docker-compose.yml`(后续添加),用 docker 起这两个服务:
+数据库配置采用 `config.yaml + .env` 分段方式。使用 Supabase 时,在 `.env` 中填写:
 
-```bash
-# 回到仓库根
-cd ..
-docker compose up -d mysql minio
-# MinIO 控制台:http://localhost:9001 (minioadmin / minioadmin)
+```ini
+DATABASE_HOST=aws-1-ap-southeast-1.pooler.supabase.com
+DATABASE_PORT=6543
+DATABASE_USER=postgres.mjonchwjzealatkbtbgd
+DATABASE_PASSWORD=你的数据库密码
+DATABASE_NAME=postgres
+DATABASE_SSLMODE=require
 ```
 
-## 4. 数据库迁移
+MinIO 可按本地环境单独启动。若后续补齐仓库根 `docker-compose.yml`,本地 PostgreSQL + MinIO 可统一启动。
+
+## 4. 数据库初始化 / 迁移
+
+当前历史 Alembic 初始迁移使用 `Base.metadata.create_all()`,不适合在新的 PostgreSQL/Supabase 空库直接重放完整迁移链。空库初始化请优先使用安全同步脚本:
 
 ```bash
 cd server
-# 生成首个迁移(基于 Base.metadata)
-uv run alembic revision --autogenerate -m "init schema"
-# 执行
+# 只读检查目标库是否已有项目表
+uv run python scripts/sync_postgres_schema.py --check
+# 确认为空后创建当前表结构并标记 Alembic head
+uv run python scripts/sync_postgres_schema.py --apply
+```
+
+后续模型变更仍通过 Alembic 管理:
+
+```bash
+uv run alembic revision --autogenerate -m "your change"
 uv run alembic upgrade head
 ```
 

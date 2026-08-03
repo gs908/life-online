@@ -1,8 +1,8 @@
 """
 异步 SQLAlchemy engine / session factory。
 
-- 应用使用 asyncmy (异步驱动)
-- 迁移工具使用 pymysql (同步驱动,见 settings.database.url_sync)
+- 应用使用 asyncpg (异步驱动)
+- 迁移工具使用 psycopg (同步驱动,见 settings.database.url_sync)
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ engine: AsyncEngine = create_async_engine(
     echo=settings.app.debug,
     pool_pre_ping=settings.database.pool.pool_pre_ping,
     pool_recycle=settings.database.pool.pool_recycle,
+    connect_args=settings.database.async_connect_args,
 )
 
 AsyncSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(
