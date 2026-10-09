@@ -5,8 +5,11 @@
 - `--check`: 只读检查目标库是否已有项目表。
 - `--apply`: 仅当目标库没有项目表时,创建当前表结构并写入 Alembic head。
 
-注意:该脚本用于新的 PostgreSQL/Supabase 空库初始化,避免旧 Alembic 初始迁移
-`Base.metadata.create_all()` 与后续迁移重复执行的问题。不会删除或覆盖已有表。
+注意:该脚本用于新的 PostgreSQL/Supabase 空库快速初始化(等价于
+`Base.metadata.create_all()` + `alembic stamp head`)。标准初始化路径是
+`alembic upgrade head`(初始迁移已固化为静态 DDL,空库可一次跑通),
+两条路径建出的 schema 一致;本脚本胜在一步完成、不依赖迁移链重放。
+不会删除或覆盖已有表。
 """
 from __future__ import annotations
 
@@ -15,6 +18,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine
 
@@ -27,8 +32,15 @@ import app.models  # noqa: F401,E402
 from app.common.db.base import Base  # noqa: E402
 from app.config import settings  # noqa: E402
 
-ALEMBIC_HEAD = "8aa7c7e1f4d1"
 PROJECT_TABLE_PREFIXES = ("sys_", "scn_")
+
+
+def _alembic_head() -> str:
+    """从 alembic script 目录动态读取当前 head,避免手抄 revision id 过期。"""
+    alembic_ini = ROOT / "alembic.ini"
+    cfg = Config(str(alembic_ini))
+    cfg.set_main_option("script_location", str(ROOT / "alembic"))
+    return ScriptDirectory.from_config(cfg).get_current_head()
 
 
 def _build_engine() -> Engine:
@@ -80,6 +92,7 @@ def check(engine: Engine) -> list[str]:
 
 
 def apply(engine: Engine) -> None:
+    alembic_head = _alembic_head()
     with engine.begin() as conn:
         _print_target_info(conn)
         inspector = inspect(conn)
@@ -93,7 +106,7 @@ def apply(engine: Engine) -> None:
         print("开始创建当前 SQLAlchemy metadata 表结构...")
         Base.metadata.create_all(bind=conn, checkfirst=False)
 
-        print(f"写入 Alembic 版本: {ALEMBIC_HEAD}")
+        print(f"写入 Alembic 版本: {alembic_head}")
         conn.execute(
             text(
                 "create table if not exists alembic_version "
@@ -103,7 +116,7 @@ def apply(engine: Engine) -> None:
         conn.execute(text("delete from alembic_version"))
         conn.execute(
             text("insert into alembic_version (version_num) values (:version_num)"),
-            {"version_num": ALEMBIC_HEAD},
+            {"version_num": alembic_head},
         )
 
     print("PostgreSQL/Supabase 表结构同步完成。")

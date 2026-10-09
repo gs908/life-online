@@ -63,7 +63,23 @@ MinIO 可按本地环境单独启动。若后续补齐仓库根 `docker-compose.
 
 ## 4. 数据库初始化 / 迁移
 
-当前历史 Alembic 初始迁移使用 `Base.metadata.create_all()`,不适合在新的 PostgreSQL/Supabase 空库直接重放完整迁移链。空库初始化请优先使用安全同步脚本:
+空库初始化有两条路径,**建出的 schema 完全一致**(可用 `scripts/diff_pg_schema.py`
+比对目标库与 `Base.metadata` 校验)。共同前提:目标 PostgreSQL/Supabase 库为空
+(没有任何 `sys_*` / `scn_*` / `alembic_version` 表)。
+
+### 路径 A:标准迁移链(推荐)
+
+```bash
+cd server
+uv run alembic upgrade head
+```
+
+- 初始迁移 `4bb73fc2e250` 已固化为**静态 PostgreSQL DDL 基线**(DEV-13 之前它是动态的
+  `Base.metadata.create_all()`,空库重放整条链会在后续迁移重复建表报错),空库可一次跑通。
+- 适用:新环境初始化、CI、以及希望严格走版本化迁移历史的场景。
+- 后续模型变更继续走 `alembic revision --autogenerate` + `alembic upgrade head`。
+
+### 路径 B:快速同步脚本
 
 ```bash
 cd server
@@ -73,12 +89,31 @@ uv run python scripts/sync_postgres_schema.py --check
 uv run python scripts/sync_postgres_schema.py --apply
 ```
 
-后续模型变更仍通过 Alembic 管理:
+- 等价于 `Base.metadata.create_all()` + `alembic stamp head`(head 从迁移目录动态读取),
+  一步到位,不重放迁移历史。
+- 已存在项目表时直接中止,不会覆盖或删除任何数据。
+- 适用:快速拉起一个与当前代码零差异的库(例如临时 Supabase 项目 / 本地调试库)。
+
+### 已有实库注意
+
+- 现有 Supabase 实库无需任何操作:静态化初始迁移只影响**空库重放**,实库的
+  `alembic_version` 保持在 head,后续增量迁移照常执行。
+- 若某个库的 `alembic_version` 还停留在 `8aa7c7e1f4d1`(旧版同步脚本写入的过期值):
+  先用 `uv run python scripts/diff_pg_schema.py` 确认该库与模型零差异(索引
+  `ux_scn_season_active_per_family` 已由建库时创建),再执行
+  `uv run alembic stamp head` 把版本号修正到当前 head 即可,**不要**直接
+  `upgrade head`(会尝试重复建该索引)。
+
+### Schema 一致性校验
 
 ```bash
-uv run alembic revision --autogenerate -m "your change"
-uv run alembic upgrade head
+cd server
+# 只读对比目标库实际 schema 与 Base.metadata(表/列/索引/外键/唯一约束)
+uv run python scripts/diff_pg_schema.py
 ```
+
+空库初始化后、或怀疑实库与代码漂移时使用;有差异时逐项列出并以退出码 1 结束,
+方便接 CI。
 
 ## 5. 启动
 
@@ -200,12 +235,12 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
 
 - 服务层在 `create_season` / `update_season(is_active=True)` / `activate_season` 中,先把同
   家庭下其他 `is_active=True` 的赛季下线,再插入/激活目标赛季。
-- 数据库层额外兜底:`scn_season` 新增生成列 `active_family_id`
-  (`IF(is_active, family_id, NULL)` STORED),并在其上建唯一索引
-  `ux_scn_season_active_per_family`。同一家庭最多一行 `is_active=True`(对应一个非 NULL 的
-  `active_family_id`),并发写入冲突时数据库唯一约束会兜底拒绝,服务层捕获后转换为
-  `409 Conflict`,不会出现两个 active 赛季。见迁移
-  `alembic/versions/f3a1c9d02b7e_scn_season_single_active_per_family.py`。
+- 数据库层额外兜底:`scn_season` 上建部分唯一索引
+  `ux_scn_season_active_per_family`(`UNIQUE (family_id) WHERE is_active`)。
+  同一家庭最多一行 `is_active=True`,并发写入冲突时数据库唯一约束会兜底拒绝,
+  服务层捕获后转换为 `409 Conflict`,不会出现两个 active 赛季。见迁移
+  `alembic/versions/f3a1c9d02b7e_scn_season_single_active_per_family.py`
+  (PostgreSQL 版;早期 MySQL 版使用生成列方案,切换 PG 后已改写为部分唯一索引)。
 
 **任务/主题关联规则**:
 
