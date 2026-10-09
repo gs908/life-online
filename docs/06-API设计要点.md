@@ -2,6 +2,8 @@
 
 > 本章定位:把 v2.0 涉及的**新增 / 修改** API 列表化,作为前后端联调契约。
 > 已有 API 不在此重复(见 `server/app/api/v1/` 与 OpenAPI `http://host:8000/docs`)。
+>
+> ⚠️ **2026-10-09 勘误**:本章为规划稿。其中 §0 的响应包裹(`{ok, error}`)与实际代码(`{code, data, msg}`,见 `server/app/schemas/common.py`)**不符**;本章列出的 `/scn/levels/curve`、`preview-xp`、`/scn/template-library` 等接口**后端尚未实现**。联调请以 [08-后端API契约](./08-后端API契约.md)(基于真实代码生成)为唯一事实来源;本章接口实现时须先落地后端代码并同步更新 08。
 
 ---
 
