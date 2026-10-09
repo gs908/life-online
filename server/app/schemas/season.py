@@ -41,3 +41,4 @@ class SeasonHistoryItem(BaseModel):
     season: SeasonRead
     total_tasks: int
     completed_tasks: int
+    total_xp: int

@@ -47,3 +47,7 @@ minversion = "8.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "db: 需要可连接的数据库(远程优先),不可达时自动跳过",
+]

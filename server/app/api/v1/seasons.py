@@ -44,6 +44,7 @@ async def get_history(db: DBSession, user: CurrentUser) -> ApiResponse[list[Seas
             season=_to_read(row["season"]),
             total_tasks=row["total_tasks"],
             completed_tasks=row["completed_tasks"],
+            total_xp=row["total_xp"],
         )
         for row in rows
     ])
@@ -51,10 +52,7 @@ async def get_history(db: DBSession, user: CurrentUser) -> ApiResponse[list[Seas
 
 @router.get("/{season_id}", response_model=ApiResponse[SeasonRead], summary="赛季详情")
 async def get_season(season_id: str, db: DBSession, user: CurrentUser) -> ApiResponse[SeasonRead]:
-    s = await season_service.get_season(db, season_id)
-    if s.family_id != user.family_id:
-        from app.common.exceptions import PermissionDeniedError
-        raise PermissionDeniedError("只能查看自己家庭的赛季")
+    s = await season_service.get_season(db, season_id, family_id=user.family_id)
     return ok(_to_read(s))
 
 

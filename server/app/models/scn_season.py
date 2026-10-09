@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -20,6 +20,11 @@ if TYPE_CHECKING:
 
 class ScnSeason(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     __tablename__ = "scn_season"
+    __table_args__ = (
+        # 部分唯一索引:同一家庭同时只能有一个激活赛季,在数据库层面兜底,
+        # 而不仅依赖服务层"先下线旧赛季再插入/激活新赛季"这一非原子的两步操作。
+        Index("ux_scn_season_active_per_family", "family_id", unique=True, postgresql_where=text("is_active")),
+    )
 
     family_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sys_family.id", ondelete="CASCADE"), nullable=False, index=True

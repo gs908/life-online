@@ -107,6 +107,10 @@ class TaskApproveRequest(BaseModel):
     comment: str | None = None
 
 
+class TaskRejectRequest(BaseModel):
+    comment: str | None = None
+
+
 class TaskAbandonRequest(BaseModel):
     child_id: str | None = None
     user_id: str | None = None

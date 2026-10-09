@@ -47,5 +47,8 @@ async def update_my_config(
                 coin_amount=ex.coin_amount,
             ))
     await db.commit()
-    await db.refresh(tc)
+    # db.refresh() 不会重新应用 get_or_create_time_config 里用的 selectinload(exceptions),
+    # commit 后 tc.exceptions 处于 expired 状态,直接访问会在 AsyncSession 下触发隐式懒加载
+    # 而报错;重新走一次 get_or_create_time_config 拿到带 exceptions 预加载的实例。
+    tc = await coin_service.get_or_create_time_config(db, user.family_id)
     return ok(_to_read(tc))

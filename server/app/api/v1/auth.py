@@ -5,12 +5,14 @@ from fastapi import APIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.deps import CurrentUser, DBSession
+from app.common.exceptions import PermissionDeniedError
+from app.deps import CurrentUser, DBSession, SettingsDep
+from app.dev.login import get_or_create_dev_user
 from app.models.enums import UserRole
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.schemas.common import ApiResponse, ok
-from app.schemas.token import RefreshRequest, TokenPair, WechatJscodeRequest
+from app.schemas.token import DevLoginRequest, RefreshRequest, TokenPair, WechatJscodeRequest
 from app.schemas.user import UserRead
 from app.services import auth_service, family_service
 from app.services import wechat as wechat_svc
@@ -68,6 +70,20 @@ async def login_with_jscode(body: WechatJscodeRequest, db: DBSession) -> ApiResp
 @router.post("/refresh", response_model=ApiResponse[TokenPair], summary="refresh token 换 access")
 async def refresh(body: RefreshRequest) -> ApiResponse[TokenPair]:
     return ok(auth_service.refresh_access_token(body.refresh_token))
+
+
+@router.post(
+    "/dev-login",
+    response_model=ApiResponse[TokenPair],
+    summary="开发环境非微信登录(仅 DEV_LOGIN_ENABLED=true 时可用)",
+)
+async def dev_login(
+    body: DevLoginRequest, db: DBSession, settings: SettingsDep
+) -> ApiResponse[TokenPair]:
+    if not settings.dev.login_enabled:
+        raise PermissionDeniedError("开发登录未启用(DEV_LOGIN_ENABLED=false),生产环境禁止使用")
+    user = await get_or_create_dev_user(db, role=body.role, name=body.name)
+    return ok(auth_service.issue_token_pair(user))
 
 
 @router.post("/logout", response_model=ApiResponse[dict], summary="登出(客户端清 token 即可,后端仅做日志)")
