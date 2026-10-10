@@ -6,10 +6,12 @@ interface AbandonQuestModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  /** 后端 abandon 请求进行中（防重复提交） */
+  confirming?: boolean;
   taskTitle?: string;
 }
 
-const AbandonQuestModal: React.FC<AbandonQuestModalProps> = ({ isOpen, onClose, onConfirm, taskTitle }) => {
+const AbandonQuestModal: React.FC<AbandonQuestModalProps> = ({ isOpen, onClose, onConfirm, confirming, taskTitle }) => {
   const { t } = useTranslation();
 
   if (!isOpen) return null;
@@ -29,8 +31,10 @@ const AbandonQuestModal: React.FC<AbandonQuestModalProps> = ({ isOpen, onClose, 
           />
         </p>
         <div className="flex gap-2 justify-center">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-slate-600 font-bold hover:bg-slate-100">{t('common.cancel')}</button>
-          <button onClick={onConfirm} className="px-4 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg">{t('abandonQuest.confirm')}</button>
+          <button onClick={onClose} disabled={confirming} className="px-4 py-2 rounded-lg text-slate-600 font-bold hover:bg-slate-100 disabled:opacity-50">{t('common.cancel')}</button>
+          <button onClick={onConfirm} disabled={confirming} className="px-4 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg disabled:opacity-50">
+            {confirming ? t('common.loading') : t('abandonQuest.confirm')}
+          </button>
         </div>
       </div>
     </div>

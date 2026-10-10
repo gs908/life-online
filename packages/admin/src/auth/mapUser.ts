@@ -10,6 +10,7 @@ import { User, UserRole } from '../types';
 export function mapUserRead(u: UserRead): User {
   return {
     id: u.id,
+    childId: u.child_id, // 冒险者档案 ID：任务指派/接取人比对用这个，不是账号 id（docs/09 A4）
     name: u.name,
     role: u.role === 'GUILD_MASTER' ? UserRole.PARENT : UserRole.CHILD,
     level: u.level,
