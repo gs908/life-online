@@ -16,8 +16,6 @@ export function mapUserRead(u: UserRead): User {
     xp: u.xp,
     avatar: u.avatar || '⚔️',
     locale: u.locale,
-    // 特权模板 ID（string[]）与本地旧数字等级不同维度；特权接入属阶段④，暂不透传
-    privilegesUnlocked: [],
     timeCoins: u.time_coins,
     dailyAbandonCount: u.daily_abandon_count,
   };

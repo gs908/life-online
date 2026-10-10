@@ -204,8 +204,6 @@ const enUS = {
     save: 'Save & Activate',
   },
   toast: {
-    newDayTitle: 'New Day!',
-    dailyReset: 'Daily Time Coins reset to {{amount}}.',
     questClosingTitle: 'Quest Opportunity Closing!',
     questClosingMsg: 'You have {{minutes}} minutes to start {{title}}!',
     insufficientCoinsTitle: 'Insufficient Coins',

@@ -204,8 +204,6 @@ const zhCN = {
     save: '保存并激活',
   },
   toast: {
-    newDayTitle: '新的一天！',
-    dailyReset: '每日时间币已重置为 {{amount}}。',
     questClosingTitle: '任务机会即将关闭！',
     questClosingMsg: '你还有 {{minutes}} 分钟开始“{{title}}”！',
     insufficientCoinsTitle: '时间币不足',

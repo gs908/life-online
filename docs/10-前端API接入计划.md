@@ -109,7 +109,8 @@ docs/09 §2 已给出逐条映射，本表补 **UI 载体**（哪些文件动手
 - 改造：App.tsx 删 `MOCK_USERS/switchUser`，增加 AuthProvider（登录页 + 角色路由：GUILD_MASTER→ParentDashboard，ADVENTURER→ChildDashboard）；Header 读真实用户。
 - 删除：Mock 用户、本地每日重置 effect 的本地比对部分（`lastLoginDate` 逻辑交后端，P5）。
 - 验收：无 Mock 用户；刷新页面保持登录；401 走刷新→重登。
-- ⚠️ 前置缺口：H5 网页端登录通道契约未覆盖（见 §6-1），拆 issue 前需先落该后端 issue。
+- ~~⚠️ 前置缺口：H5 网页端登录通道契约未覆盖（见 §6-1），拆 issue 前需先落该后端 issue。~~
+  ✅ 已解决（DEV-23 落地时核实）：开发期通道由 `POST /sys/auth/dev-login` 承担（DEV-5 已上线，契约 §2 已补条目）；生产期 H5 微信网页授权仍待后端 issue（见 §6-1）。
 
 ### 阶段② 赛季
 - 接口：`GET /scn/seasons/active`（无激活赛季时 `data:null` → 引导创建）、列表、`POST/PATCH/activate/DELETE`、`GET /scn/seasons/history`。
@@ -153,7 +154,7 @@ docs/09 §2 已给出逐条映射，本表补 **UI 载体**（哪些文件动手
 
 | # | 缺口 | 影响 | 建议 |
 |---|---|---|---|
-| 1 | **H5/网页端登录通道缺失**：契约仅有微信小程序 `jscode` 换 token，`packages/admin` 是浏览器 H5，无法走 jscode | 阶段① 直接被卡 | 提后端 issue：微信网页授权（OAuth2 code）或开发期账号登录接口 |
+| 1 | ~~**H5/网页端登录通道缺失**~~ **已部分解决（DEV-23 核实）**：开发期通道 `POST /sys/auth/dev-login` 已上线（DEV-5）并被前端接入（契约 §2 已补条目）；**生产期 H5 微信网页授权（OAuth2 code）仍缺失** | 生产上线前需补生产通道 | 保留后端 issue：微信网页授权（OAuth2 code） |
 | 2 | 通知/提醒列表 API 未暴露（TaskRead 有 `reminder_*` 字段，但无拉取已产生提醒的接口） | TIMED 任务到点提醒只能纯前端本地算 | 提后端 issue（docs/09 已标注 🔴） |
 | 3 | `evaluate-proof` 未把图片送入模型（纯文本评分） | 家长端 AI 评分参考价值有限 | 后端待办；前端文案先规避"看图"表述 |
 | 4 | **审核 XP 计算规则未在契约中成文**：Mock 有 4/5 星加成、超时惩罚、快速完成加成等倍率；契约仅写 approve"发 XP" | 前后端数值行为可能不一致，影响产品数值 | 请后端在契约/数值文档（04）补 approve 的 XP 公式；差异处由业主裁决 |
