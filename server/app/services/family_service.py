@@ -171,11 +171,8 @@ async def update_adventurer(
     return account, child
 
 
-async def consume_invite(
-    db: AsyncSession, *, code: str, nickname: str, avatar: str,
-    openid: str, unionid: str | None,
-) -> tuple[SysInvite, SysAccount]:
-    """用邀请码加入,自动创建 SysAccount + SysChannelWechat。"""
+async def _lock_invite_or_raise(db: AsyncSession, code: str) -> SysInvite:
+    """锁定并校验邀请码(不存在/已用/过期均抛错)。调用方负责消费与提交。"""
     result = await db.execute(
         select(SysInvite)
         .where(SysInvite.code == code)
@@ -188,30 +185,60 @@ async def consume_invite(
         raise ConflictError("邀请码已被使用")
     if invite.expires_at < utcnow():
         raise ConflictError("邀请码已过期")
+    return invite
 
-    invite_role = invite.role.value if hasattr(invite.role, "value") else str(invite.role)
+
+async def _create_member_account(
+    db: AsyncSession, *, family_id: str, role: str, nickname: str, avatar: str
+) -> SysAccount:
+    """按角色创建成员账号本体(SysAccount + SysChild/SysParent),不绑任何登录渠道。"""
     account = SysAccount(
-        family_id=invite.family_id,
-        role=invite_role,
+        family_id=family_id,
+        role=role,
         name=nickname,
         avatar=avatar,
     )
     db.add(account)
     await db.flush()
 
-    if invite_role == UserRole.ADVENTURER.value:
+    if role == UserRole.ADVENTURER.value:
         db.add(SysChild(
             account_id=account.id,
-            family_id=invite.family_id,
+            family_id=family_id,
             display_name=nickname,
             avatar=avatar,
         ))
     else:
         db.add(SysParent(
             account_id=account.id,
-            family_id=invite.family_id,
+            family_id=family_id,
             display_name=nickname,
         ))
+    return account
+
+
+async def consume_invite_to_account(
+    db: AsyncSession, *, code: str, nickname: str, avatar: str
+) -> tuple[SysInvite, SysAccount]:
+    """校验邀请码并创建成员账号本体、标记邀请码已用(不提交,由调用方补渠道绑定后统一 commit)。"""
+    invite = await _lock_invite_or_raise(db, code)
+    invite_role = invite.role.value if hasattr(invite.role, "value") else str(invite.role)
+    account = await _create_member_account(
+        db, family_id=invite.family_id, role=invite_role, nickname=nickname, avatar=avatar
+    )
+    invite.used_at = utcnow()
+    invite.used_by = account.id
+    return invite, account
+
+
+async def consume_invite(
+    db: AsyncSession, *, code: str, nickname: str, avatar: str,
+    openid: str, unionid: str | None,
+) -> tuple[SysInvite, SysAccount]:
+    """用邀请码加入,自动创建 SysAccount + SysChannelWechat(微信小程序渠道)。"""
+    invite, account = await consume_invite_to_account(
+        db, code=code, nickname=nickname, avatar=avatar
+    )
 
     channel = SysChannelWechat(
         account_id=account.id,
@@ -223,8 +250,6 @@ async def consume_invite(
     )
     db.add(channel)
 
-    invite.used_at = utcnow()
-    invite.used_by = account.id
     await db.commit()
     await db.refresh(invite)
     await db.refresh(account, attribute_names=["channel_wechats"])

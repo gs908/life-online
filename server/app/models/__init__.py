@@ -38,6 +38,7 @@ from app.models.scn_time_config import ScnTimeConfig
 from app.models.scn_time_config_exception import ScnTimeConfigException
 from app.models.scn_trace import ScnTrace
 from app.models.sys_account import SysAccount
+from app.models.sys_channel_password import SysChannelPassword
 from app.models.sys_channel_wechat import SysChannelWechat
 from app.models.sys_child import SysChild
 from app.models.sys_family import SysFamily
@@ -73,6 +74,7 @@ __all__ = [
     "ScnTimeConfigException",
     "ScnTrace",
     "SysAccount",
+    "SysChannelPassword",
     "SysChannelWechat",
     "SysChild",
     "SysFamily",

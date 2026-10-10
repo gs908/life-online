@@ -361,6 +361,30 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
   `ExternalServiceError`(502,"配置了但这次调用失败,比如 LLM 限流/微信接口报错")是两类不同的
   错误,前端可以按 `error_code` 区分展示文案。
 
+## 7.4 网页端账号密码登录(H5/浏览器生产通道,DEV-22)
+
+微信网页 OAuth(公众号网页授权)需要**已认证的服务号**与已备案的授权域名,开放平台扫码登录
+需要**开放平台认证资质**;当前项目两者均未取得(相关 `WECHAT_OPEN_*` 配置为空),故网页端
+生产登录采用**账号密码**通道(评估结论详见 DEV-22 issue)。微信资质到位后可作为第二个渠道
+平滑接入(`sys_channel_*` 渠道表模式,与密码渠道并存)。
+
+```
+POST /api/v1/sys/auth/password/login      {"username": "...", "password": "..."}
+POST /api/v1/sys/auth/password/register   {"code": "<邀请码>", "username": "...", "password": "..."}
+PUT  /api/v1/sys/auth/password/me         {"new_password": "...", "old_password": "..."}   # 登录态
+```
+
+- **凭据存储**:`sys_channel_password` 渠道表(与 `sys_channel_wechat` 并列),一账号至多一条;
+  密码 scrypt 哈希(N=2^15, r=8, p=1,标准库实现)。username 全表唯一、统一小写(登录大小写不敏感)。
+- **注册**:与小程序 `/sys/families/join` 同语义,消费一张邀请码创建账号并直接返回 `TokenPair`。
+- **防爆破**:登录失败统一 401(不区分用户名是否存在);同一用户名 15 分钟内失败 5 次
+  (`AUTH_LOGIN_MAX_ATTEMPTS`/`AUTH_LOGIN_WINDOW_MINUTES` 可调)后返回 429 `rate_limited`。
+  限流为进程内计数(重启清零,多 worker 各自计数)。
+- **改密/补设**:`PUT /sys/auth/password/me` 已有密码时必须校验 `old_password`;微信注册的账号
+  可首次设置(必须带 `username`)。
+- **开关**:`AUTH_PASSWORD_LOGIN_ENABLED`(默认 `true`,生产可用;关闭时 503)。与
+  `DEV_LOGIN_ENABLED`(仅开发环境)互不相关。
+
 ## 8. 测试
 
 ```bash

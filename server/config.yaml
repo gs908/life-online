@@ -94,6 +94,16 @@ wechat:
   mp_appid: ${env:WECHAT_MP_APPID:}
   mp_secret: ${env:WECHAT_MP_SECRET:}
 
+# 网页端账号密码登录通道(生产可用;失败限流为进程内计数,重启清零)
+auth:
+  password_login_enabled: ${env:AUTH_PASSWORD_LOGIN_ENABLED:true}
+  login_max_attempts: ${env:AUTH_LOGIN_MAX_ATTEMPTS:5}
+  login_window_minutes: ${env:AUTH_LOGIN_WINDOW_MINUTES:15}
+
+# 仅供开发/测试环境的开关,生产必须保持 false
+dev:
+  login_enabled: ${env:DEV_LOGIN_ENABLED:false}
+
 # 预留,暂不接入
 redis:
   enabled: ${env:REDIS_ENABLED:false}

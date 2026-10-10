@@ -29,7 +29,7 @@
 ### 0.3 鉴权
 
 - `Authorization: Bearer <access_token>`（JWT，`type=access`）。
-- 获取：`POST /sys/auth/wechat/jscode`（微信登录）或 `POST /sys/auth/refresh`（刷新）。
+- 获取：`POST /sys/auth/wechat/jscode`（微信小程序）、`POST /sys/auth/password/login`（网页端账号密码，H5/浏览器）、`POST /sys/auth/password/register`（网页端邀请码注册并登录）或 `POST /sys/auth/refresh`（刷新）。
 - 角色守卫：`GUILD_MASTER`（父母）专属接口下表标注「父母」；其余为登录用户（CurrentUser）可访问。
 
 ### 0.4 分页约定
@@ -47,6 +47,7 @@
 | 404 | `not_found` | 资源不存在 | 提示并刷新列表 |
 | 409 | `conflict` | 状态冲突（如重复接取） | 提示冲突信息 |
 | 422 | `validation_error` | 请求参数校验失败（`data` 为 pydantic errors 数组） | 表单纠错 |
+| 429 | `rate_limited` | 触发限流（当前仅密码登录/改密：同一用户名窗口期内失败次数超限） | 提示等待后重试 |
 | 502 | `external_service_error` | LLM / 微信 / 存储外部失败 | 提示稍后重试 |
 | 500 | `app_error` / 其他 | 内部错误 | 提示联系支持 |
 
@@ -70,16 +71,30 @@
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
 | POST | `/sys/auth/wechat/jscode` | 小程序 code 换 token | 无 |
+| POST | `/sys/auth/password/login` | 网页端账号密码登录（H5/浏览器） | 无 |
+| POST | `/sys/auth/password/register` | 网页端用邀请码注册并登录 | 无 |
+| PUT | `/sys/auth/password/me` | 修改/设置自己的登录密码 | 登录 |
 | POST | `/sys/auth/refresh` | refresh_token 换新 token 对 | 无 |
 | POST | `/sys/auth/dev-login` | 开发环境非微信登录（仅 `DEV_LOGIN_ENABLED=true`） | 无 |
 | POST | `/sys/auth/logout` | 登出（仅日志，客户端清 token） | 登录 |
 | GET | `/sys/auth/me` | 当前用户 `UserRead` | 登录 |
 
 **WechatJscodeRequest** `{ code: str, nickname?: str, avatar_url?: str }`
+**PasswordLoginRequest** `{ username: str (3-32, `[A-Za-z0-9_]`, 大小写不敏感), password: str (8-128) }`
+**PasswordRegisterRequest** `{ code: str, username: str, password: str, nickname?: str, avatar?: str = "⚔️" }`
+**PasswordChangeRequest** `{ new_password: str, old_password?: str, username?: str }`（已有密码渠道必须带 `old_password`；首次设置必须带 `username`）
 **RefreshRequest** `{ refresh_token: str }`
 **DevLoginRequest** `{ role?: "GUILD_MASTER" \| "ADVENTURER" = "ADVENTURER", name?: str }`
 **TokenPair** `{ access_token, refresh_token, token_type: "Bearer", access_expires_in: int, refresh_expires_in: int }`
 > 微信登录若 openid 无账号，返回业务错误要求邀请码流程（`NeedInviteCodeError` → 走 `/sys/families/join`）。
+
+**password 通道语义**（DEV-22，实现唯一事实来源：`server/app/api/v1/auth.py`、`server/app/services/password_service.py`、`server/app/common/security/password.py`、模型 `sys_channel_password`）：
+
+- 凭据存 `sys_channel_password` 渠道表（与 `sys_channel_wechat` 并列），一账号至多一条；密码 scrypt 哈希（N=2^15, r=8, p=1，标准库实现，无明文）。微信注册的已有账号可经 `PUT /sys/auth/password/me` 补设密码（首次设置需带 `username`），多渠道并存互不影响。
+- `username` 全表唯一、统一小写存储（登录大小写不敏感）；`POST /password/register` 与小程序侧 `/sys/families/join` 同语义：消费一张邀请码创建账号并直接返回 `TokenPair`（邀请码无效/已用/过期 → 404/409，与 join 一致）。
+- 登录失败统一 401 `unauthorized`「用户名或密码错误」，不区分用户不存在与密码错误（防用户名枚举）；同一用户名在窗口期内（默认 15 分钟）失败超过 `AUTH_LOGIN_MAX_ATTEMPTS`（默认 5）次后返回 429 `rate_limited`。限流为进程内计数（重启清零、多 worker 各自计数），Redis 接入后可升级为全局精确计数。
+- 通道开关：`AUTH_PASSWORD_LOGIN_ENABLED`（默认 `true`，生产可用）；关闭时 login/register 返回 503 `service_unavailable`。与 `DEV_LOGIN_ENABLED`（默认 `false`，仅开发环境）互不相关。
+- 返回标准 `TokenPair`（复用 `auth_service.issue_token_pair`），refresh / 鉴权链路与微信登录完全一致。
 
 **dev-login 语义**（实现唯一事实来源：`server/app/api/v1/auth.py`、`server/app/dev/login.py`、`server/app/schemas/token.py::DevLoginRequest`）：
 
