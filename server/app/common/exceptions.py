@@ -42,6 +42,12 @@ class ValidationError(AppError):
     http_status = 422
 
 
+class RateLimitError(AppError):
+    """触发限流(如登录失败次数过多)。"""
+    code = "rate_limited"
+    http_status = 429
+
+
 class ConflictError(AppError):
     code = "conflict"
     http_status = 409

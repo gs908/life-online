@@ -227,6 +227,14 @@ class WechatSection(BaseModel):
     mp_secret: str = ""
 
 
+class AuthSection(BaseModel):
+    """网页端账号密码登录通道(生产可用,与 dev-login 不同,不受 DEV_LOGIN_ENABLED 门禁)。"""
+    password_login_enabled: bool = True
+    # 同一用户名在窗口期内的最大登录失败次数,超出后返回 429(仅进程内计数,重启清零)
+    login_max_attempts: int = 5
+    login_window_minutes: int = 15
+
+
 class RedisSection(BaseModel):
     """预留,暂不接入。"""
     enabled: bool = False
@@ -278,6 +286,7 @@ class Settings(BaseModel):
     ai: AISection = Field(default_factory=AISection)
     jwt: JWTSection
     wechat: WechatSection
+    auth: AuthSection = Field(default_factory=AuthSection)
     redis: RedisSection = Field(default_factory=RedisSection)
     xp: XpSection = Field(default_factory=XpSection)
     dev: DevSection = Field(default_factory=DevSection)

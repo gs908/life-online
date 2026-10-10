@@ -16,6 +16,7 @@ from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.models.enums import UserRole
 
 if TYPE_CHECKING:
+    from app.models.sys_channel_password import SysChannelPassword
     from app.models.sys_family import SysFamily
     from app.models.sys_channel_wechat import SysChannelWechat
 
@@ -42,4 +43,8 @@ class SysAccount(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     family: Mapped["SysFamily"] = relationship(back_populates="accounts", lazy="raise")
     channel_wechats: Mapped[list["SysChannelWechat"]] = relationship(
         back_populates="account", cascade="all, delete-orphan", passive_deletes=True
+    )
+    channel_password: Mapped["SysChannelPassword"] = relationship(
+        back_populates="account", cascade="all, delete-orphan", passive_deletes=True,
+        uselist=False,
     )

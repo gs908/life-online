@@ -5,16 +5,24 @@ from fastapi import APIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.exceptions import PermissionDeniedError
+from app.common.exceptions import PermissionDeniedError, ServiceUnavailableError
 from app.deps import CurrentUser, DBSession, SettingsDep
 from app.dev.login import get_or_create_dev_user
 from app.models.enums import UserRole
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.schemas.common import ApiResponse, ok
-from app.schemas.token import DevLoginRequest, RefreshRequest, TokenPair, WechatJscodeRequest
+from app.schemas.token import (
+    DevLoginRequest,
+    PasswordChangeRequest,
+    PasswordLoginRequest,
+    PasswordRegisterRequest,
+    RefreshRequest,
+    TokenPair,
+    WechatJscodeRequest,
+)
 from app.schemas.user import UserRead
-from app.services import auth_service, family_service
+from app.services import auth_service, family_service, password_service
 from app.services import wechat as wechat_svc
 
 router = APIRouter(prefix="/sys/auth", tags=["sys-auth"])
@@ -65,6 +73,67 @@ async def login_with_jscode(body: WechatJscodeRequest, db: DBSession) -> ApiResp
         )
 
     return ok(auth_service.issue_token_pair(user))
+
+
+@router.post(
+    "/password/login",
+    response_model=ApiResponse[TokenPair],
+    summary="网页端账号密码登录(H5/浏览器)",
+)
+async def password_login(
+    body: PasswordLoginRequest, db: DBSession, settings: SettingsDep
+) -> ApiResponse[TokenPair]:
+    if not settings.auth.password_login_enabled:
+        raise ServiceUnavailableError("账号密码登录未启用(AUTH_PASSWORD_LOGIN_ENABLED=false)")
+    user = await password_service.login(
+        db,
+        username=body.username,
+        password=body.password,
+        max_attempts=settings.auth.login_max_attempts,
+        window_minutes=settings.auth.login_window_minutes,
+    )
+    return ok(auth_service.issue_token_pair(user))
+
+
+@router.post(
+    "/password/register",
+    response_model=ApiResponse[TokenPair],
+    summary="网页端用邀请码注册并登录(消费邀请码,创建账号+密码渠道)",
+)
+async def password_register(
+    body: PasswordRegisterRequest, db: DBSession, settings: SettingsDep
+) -> ApiResponse[TokenPair]:
+    if not settings.auth.password_login_enabled:
+        raise ServiceUnavailableError("账号密码登录未启用(AUTH_PASSWORD_LOGIN_ENABLED=false)")
+    user = await password_service.register_with_invite(
+        db,
+        code=body.code,
+        username=body.username,
+        password=body.password,
+        nickname=body.nickname,
+        avatar=body.avatar,
+    )
+    return ok(auth_service.issue_token_pair(user))
+
+
+@router.put(
+    "/password/me",
+    response_model=ApiResponse[dict],
+    summary="修改/设置自己的登录密码(首次设置需带 username)",
+)
+async def change_password(
+    body: PasswordChangeRequest, db: DBSession, user: CurrentUser, settings: SettingsDep
+) -> ApiResponse[dict]:
+    await password_service.change_password(
+        db,
+        account=user,
+        username=body.username,
+        old_password=body.old_password,
+        new_password=body.new_password,
+        max_attempts=settings.auth.login_max_attempts,
+        window_minutes=settings.auth.login_window_minutes,
+    )
+    return ok({"ok": True})
 
 
 @router.post("/refresh", response_model=ApiResponse[TokenPair], summary="refresh token 换 access")
