@@ -1,9 +1,14 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, Task, Season, UserRole, TaskType, TaskStatus, RedemptionRecord, TimeConfig } from './types';
 import { THEMES } from './constants/themes';
 import { Bell } from 'lucide-react';
+
+// Auth（阶段①：登录态与家庭上下文）
+import { useAuth } from './auth/AuthContext';
+import { mapUserRead } from './auth/mapUser';
+import LoginPage from './components/LoginPage';
 
 // Components
 import Header from './components/Header';
@@ -33,32 +38,6 @@ const DEFAULT_SEASON: Season = {
   startDate: new Date().toISOString(),
   isActive: true
 };
-
-const MOCK_USERS: User[] = [
-  { 
-      id: 'u1', 
-      name: 'Parent (Guild Master)', 
-      role: UserRole.PARENT, 
-      level: 99, 
-      xp: 0, 
-      avatar: '👑', 
-      privilegesUnlocked: [], 
-      timeCoins: 9999, 
-      dailyAbandonCount: 0 
-  },
-  { 
-      id: 'u2', 
-      name: 'Leo (Adventurer)', 
-      role: UserRole.CHILD, 
-      level: 2, 
-      xp: 1250, 
-      avatar: '⚔️', 
-      privilegesUnlocked: [1, 2],
-      timeCoins: 100, // Initial balance
-      dailyAbandonCount: 0,
-      lastLoginDate: new Date().toDateString()
-  },
-];
 
 const INITIAL_TASKS: Task[] = [
   {
@@ -100,10 +79,28 @@ const INITIAL_TASKS: Task[] = [
 
 const App: React.FC = () => {
   const { t } = useTranslation();
+  // --- AUTH（阶段①：真实登录态，Mock 用户已删除） ---
+  const { status, user, family, logout } = useAuth();
+
+  const currentUser = useMemo(() => (user ? mapUserRead(user) : null), [user]);
+
+  // 冒险者视角用户：ADVENTURER 即本人；GUILD_MASTER 取家庭中的第一个冒险者
+  // （家庭暂无冒险者时回退为本人，待任务接入阶段补"邀请孩子"引导）
+  const childUserFromAuth = useMemo(() => {
+    if (!currentUser) return null;
+    if (currentUser.role === UserRole.CHILD) return currentUser;
+    const firstAdventurer = family?.adventurers?.[0];
+    return firstAdventurer ? mapUserRead(firstAdventurer) : currentUser;
+  }, [currentUser, family]);
+
   // --- STATE ---
-  const [currentUser, setCurrentUser] = useState<User>(MOCK_USERS[0]);
-  const [childUser, setChildUser] = useState<User>(MOCK_USERS[1]);
-  
+  // 本地镜像：任务全链路（阶段③）接入后端后，以下本地增减逻辑整体退役
+  const [childUser, setChildUser] = useState<User | null>(childUserFromAuth);
+
+  useEffect(() => {
+    setChildUser(childUserFromAuth);
+  }, [childUserFromAuth]);
+
   // Season State
   const [activeSeason, setActiveSeason] = useState<Season>(DEFAULT_SEASON);
   const [seasonHistory, setSeasonHistory] = useState<Season[]>([]);
@@ -124,26 +121,6 @@ const App: React.FC = () => {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [pendingQuestId, setPendingQuestId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ title: string, msg: string } | null>(null);
-
-  // --- EFFECT: DAILY RESET ---
-  useEffect(() => {
-    const todayStr = new Date().toDateString();
-    if (childUser.lastLoginDate !== todayStr) {
-        // Perform Daily Reset
-        const dayIndex = new Date().getDay();
-        const dailyAllowance = timeConfig.exceptions[dayIndex] ?? timeConfig.defaultDailyAllowance;
-
-        setChildUser(prev => ({
-            ...prev,
-            timeCoins: dailyAllowance,
-            dailyAbandonCount: 0,
-            lastLoginDate: todayStr
-        }));
-
-        setToastMessage({ title: t('toast.newDayTitle'), msg: t('toast.dailyReset', { amount: dailyAllowance }) });
-        setTimeout(() => setToastMessage(null), 5000);
-    }
-  }, [timeConfig, childUser.lastLoginDate, t]);
 
   // --- EFFECT: TIMED TASK ALERTS ---
   useEffect(() => {
@@ -173,11 +150,6 @@ const App: React.FC = () => {
   }, [tasks, t]);
 
   // --- HANDLERS ---
-
-  const switchUser = (role: UserRole) => {
-    if (role === UserRole.PARENT) setCurrentUser(MOCK_USERS[0]);
-    else setCurrentUser(childUser);
-  };
 
   const handleAddTask = (newTask: Task) => {
     setTasks([...tasks, newTask]);
@@ -350,10 +322,22 @@ const App: React.FC = () => {
 
   // --- HELPER DATA FOR RENDER ---
   const filteredTasks = tasks.filter(t => t.seasonId === activeSeason.id);
-  const activeQuest = filteredTasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assigneeId === childUser.id);
+  const activeQuest = filteredTasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assigneeId === childUser?.id);
   const availableTasks = filteredTasks.filter(t => t.status === TaskStatus.AVAILABLE);
   const completedTasks = filteredTasks.filter(t => t.status === TaskStatus.COMPLETED);
   const pendingTasks = filteredTasks.filter(t => t.status === TaskStatus.PENDING_REVIEW);
+
+  // 登录门卫：loading → 启动屏；anonymous → 登录页（401 刷新失败也会广播回这里）
+  if (status === 'loading') {
+    return (
+      <div className="h-full flex items-center justify-center bg-slate-900" role="status" aria-live="polite">
+        <div className="text-slate-400 text-sm animate-pulse">{t('common.loading')}</div>
+      </div>
+    );
+  }
+  if (status === 'anonymous' || !currentUser || !childUser) {
+    return <LoginPage />;
+  }
 
   return (
     <div className="flex flex-col h-full font-sans relative">
@@ -373,11 +357,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* HEADER (Note: Header takes simple SeasonType logic in original, we can update or just pass a derived value/string) */}
+      {/* HEADER（真实用户；角色切换已删除，换角色 = 登出后以另一角色重新登录） */}
       <Header
         currentSeason={activeSeason.name as any} // Cast for visual compatibility or update Header later
         currentUser={currentUser}
-        onSwitchUser={switchUser}
+        onLogout={logout}
       />
 
       <main className="flex-1 overflow-y-auto w-full">

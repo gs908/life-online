@@ -4,6 +4,7 @@
 import { request } from '../http';
 import type {
   AdventurerCreate,
+  DevLoginRequest,
   FamilyJoinRequest,
   FamilyMembersRead,
   FamilyRead,
@@ -19,6 +20,10 @@ import type {
 /** 小程序 code 换 token。openid 无账号时抛 NeedInviteCodeError → 引导邀请码加入 */
 export const wechatLogin = (data: WechatJscodeRequest) =>
   request<TokenPair>('/sys/auth/wechat/jscode', { method: 'POST', body: data });
+
+/** 开发环境账号登录（H5 开发期用）。DEV_LOGIN_ENABLED=false 时后端抛 permission_denied */
+export const devLogin = (data: DevLoginRequest) =>
+  request<TokenPair>('/sys/auth/dev-login', { method: 'POST', body: data });
 
 export const refreshTokenPair = (data: RefreshRequest) =>
   request<TokenPair>('/sys/auth/refresh', { method: 'POST', body: data });

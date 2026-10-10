@@ -13,6 +13,22 @@ const zhCN = {
     language: '语言',
     chinese: '中文',
     english: 'English',
+    loading: '加载中...',
+  },
+  login: {
+    title: '登录 QuestGuild',
+    subtitle: '选择角色进入你的公会',
+    chooseRole: '选择角色',
+    roleChildDesc: '接任务、赚时间币',
+    roleParentDesc: '发布任务、审核成长',
+    nicknameLabel: '昵称（可选）',
+    nicknamePlaceholder: '例如：小勇者',
+    nicknameHint: '仅首次创建冒险者账号时生效；家长角色由系统固定命名',
+    submit: '进入公会',
+    loggingIn: '登录中...',
+    devDisabled: '开发登录未启用（DEV_LOGIN_ENABLED=false），请联系管理员',
+    loginFailed: '登录失败，请稍后重试',
+    devOnlyHint: '开发环境登录通道（生产环境禁用）',
   },
   roles: {
     GUILD_MASTER: '公会管理员',
@@ -50,6 +66,7 @@ const zhCN = {
   },
   header: {
     season: '赛季',
+    logout: '退出登录',
   },
   questCard: {
     currentQuest: '当前任务',

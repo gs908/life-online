@@ -73,6 +73,12 @@ export interface RefreshRequest {
   refresh_token: string;
 }
 
+/** 开发期非微信登录（docs/08 §2）：仅后端 DEV_LOGIN_ENABLED=true 时可用，生产禁用 */
+export interface DevLoginRequest {
+  role?: UserRole; // 默认 ADVENTURER
+  name?: string; // 仅首次创建冒险者账号时生效
+}
+
 // ---- 用户 UserRead（契约 §3，后端用户唯一形状）----
 
 export interface UserRead {

@@ -76,7 +76,6 @@ export interface User {
   // New Time Coin Logic
   timeCoins: number;
   dailyAbandonCount: number;
-  lastLoginDate?: string; // To track daily resets
 }
 
 export interface Task {
