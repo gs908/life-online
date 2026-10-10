@@ -13,6 +13,22 @@ const enUS = {
     language: 'Language',
     chinese: '中文',
     english: 'English',
+    loading: 'Loading...',
+  },
+  login: {
+    title: 'Sign in to QuestGuild',
+    subtitle: 'Choose your role to enter the guild',
+    chooseRole: 'Choose role',
+    roleChildDesc: 'Take quests, earn time coins',
+    roleParentDesc: 'Create quests, review progress',
+    nicknameLabel: 'Nickname (optional)',
+    nicknamePlaceholder: 'e.g. Brave Knight',
+    nicknameHint: 'Only used when first creating the adventurer account; the parent name is fixed',
+    submit: 'Enter Guild',
+    loggingIn: 'Signing in...',
+    devDisabled: 'Dev login is disabled (DEV_LOGIN_ENABLED=false). Contact your administrator.',
+    loginFailed: 'Sign-in failed. Please try again later.',
+    devOnlyHint: 'Development login channel (disabled in production)',
   },
   roles: {
     GUILD_MASTER: 'Guild Master',
@@ -50,6 +66,7 @@ const enUS = {
   },
   header: {
     season: 'Season',
+    logout: 'Sign out',
   },
   questCard: {
     currentQuest: 'Current Quest',
@@ -187,8 +204,6 @@ const enUS = {
     save: 'Save & Activate',
   },
   toast: {
-    newDayTitle: 'New Day!',
-    dailyReset: 'Daily Time Coins reset to {{amount}}.',
     questClosingTitle: 'Quest Opportunity Closing!',
     questClosingMsg: 'You have {{minutes}} minutes to start {{title}}!',
     insufficientCoinsTitle: 'Insufficient Coins',

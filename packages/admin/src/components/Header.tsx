@@ -1,17 +1,19 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, UserRole } from '../types';
-import { Languages, LayoutDashboard, UserCircle } from 'lucide-react';
+import { User } from '../types';
+import { Languages, LayoutDashboard, LogOut, Crown, Swords } from 'lucide-react';
 
 interface HeaderProps {
   currentSeason: string;
+  /** 真实登录用户（UserRead 映射，Mock 用户已删除） */
   currentUser: User;
-  onSwitchUser: (role: UserRole) => void;
+  onLogout: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ currentSeason, currentUser, onSwitchUser }) => {
+const Header: React.FC<HeaderProps> = ({ currentSeason, currentUser, onLogout }) => {
   const { i18n, t } = useTranslation();
   const currentLocale = i18n.resolvedLanguage === 'en-US' ? 'en-US' : 'zh-CN';
+  const isParent = currentUser.role === ('GUILD_MASTER' as User['role']);
 
   const handleLocaleChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     i18n.changeLanguage(event.target.value);
@@ -44,24 +46,25 @@ const Header: React.FC<HeaderProps> = ({ currentSeason, currentUser, onSwitchUse
           </select>
         </label>
 
-        <div className="flex gap-2 bg-slate-800 p-1 rounded-full">
-          <button
-            onClick={() => onSwitchUser(UserRole.CHILD)}
-            className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold transition-all ${
-              currentUser.role === UserRole.CHILD ? 'bg-blue-500 text-white' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <UserCircle size={14} /> {t('roles.ADVENTURER')}
-          </button>
-          <button
-            onClick={() => onSwitchUser(UserRole.PARENT)}
-            className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold transition-all ${
-              currentUser.role === UserRole.PARENT ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {t('roles.GUILD_MASTER')} <UserCircle size={14} />
-          </button>
+        <div
+          className={`flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-bold ${
+            isParent ? 'text-purple-300' : 'text-blue-300'
+          }`}
+          title={t(isParent ? 'roles.GUILD_MASTER' : 'roles.ADVENTURER')}
+        >
+          {isParent ? <Crown size={14} /> : <Swords size={14} />}
+          <span className="max-w-[120px] truncate">{currentUser.name}</span>
         </div>
+
+        <button
+          onClick={onLogout}
+          title={t('header.logout')}
+          aria-label={t('header.logout')}
+          className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white px-3 py-1.5 rounded-full text-xs font-bold transition-colors"
+        >
+          <LogOut size={14} />
+          <span className="hidden sm:inline">{t('header.logout')}</span>
+        </button>
       </div>
     </header>
   );

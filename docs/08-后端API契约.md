@@ -71,13 +71,21 @@
 |------|------|------|------|
 | POST | `/sys/auth/wechat/jscode` | 小程序 code 换 token | 无 |
 | POST | `/sys/auth/refresh` | refresh_token 换新 token 对 | 无 |
+| POST | `/sys/auth/dev-login` | 开发环境非微信登录（仅 `DEV_LOGIN_ENABLED=true`） | 无 |
 | POST | `/sys/auth/logout` | 登出（仅日志，客户端清 token） | 登录 |
 | GET | `/sys/auth/me` | 当前用户 `UserRead` | 登录 |
 
 **WechatJscodeRequest** `{ code: str, nickname?: str, avatar_url?: str }`
 **RefreshRequest** `{ refresh_token: str }`
+**DevLoginRequest** `{ role?: "GUILD_MASTER" \| "ADVENTURER" = "ADVENTURER", name?: str }`
 **TokenPair** `{ access_token, refresh_token, token_type: "Bearer", access_expires_in: int, refresh_expires_in: int }`
 > 微信登录若 openid 无账号，返回业务错误要求邀请码流程（`NeedInviteCodeError` → 走 `/sys/families/join`）。
+
+**dev-login 语义**（实现唯一事实来源：`server/app/api/v1/auth.py`、`server/app/dev/login.py`、`server/app/schemas/token.py::DevLoginRequest`）：
+
+- 仅供开发/测试环境使用：仅当服务端 `DEV_LOGIN_ENABLED=true` 时可用；为 `false`（生产默认）时返回 `permission_denied`（403），msg 提示"开发登录未启用(DEV_LOGIN_ENABLED=false),生产环境禁止使用"。**生产环境禁止开启。**
+- 按角色获取（首次调用则创建）固定的开发测试账号，幂等：同一角色重复登录返回同一账号，不堆叠新家庭/账号。所有 dev 账号挂在名为"开发环境"的家庭下；`GUILD_MASTER` 返回该家庭 owner（`name` 参数被忽略，固定"开发家长"）；`ADVENTURER` 返回家庭内第一个冒险者（不存在则用 `name` 创建，默认"开发孩子"）。
+- 返回标准 `TokenPair`，后续走与微信登录完全相同的刷新/鉴权链路。
 
 ## 3. 账号 `/sys/accounts`
 

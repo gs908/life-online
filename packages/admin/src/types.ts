@@ -71,12 +71,12 @@ export interface User {
   xp: number;
   avatar: string;
   locale?: string;
-  privilegesUnlocked: number[]; // Array of levels
-  
+  // privilegesUnlocked 已删除（docs/09 P2 类型冲突：本地等级数组 vs 后端模板 ID 数组），
+  // 特权接入属阶段④，届时按 /scn/privileges/unlocks 渲染
+
   // New Time Coin Logic
   timeCoins: number;
   dailyAbandonCount: number;
-  lastLoginDate?: string; // To track daily resets
 }
 
 export interface Task {

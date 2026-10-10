@@ -5,11 +5,11 @@
 
 app:
   name: life-online
-  host: 0.0.0.0
-  port: 8000
+  host: ${env:APP_HOST:0.0.0.0}
+  port: ${env:APP_PORT:8000}
   workers: 1
-  debug: true
-  log_level: INFO
+  debug: ${env:APP_DEBUG:true}
+  log_level: ${env:APP_LOG_LEVEL:INFO}
   cors_origins:
     - http://localhost:3000
     - http://localhost:5173
@@ -83,9 +83,9 @@ ai:
 
 jwt:
   secret: ${env:JWT_SECRET}
-  algorithm: HS256
-  access_expires_minutes: 60
-  refresh_expires_days: 14
+  algorithm: ${env:JWT_ALGORITHM:HS256}
+  access_expires_minutes: ${env:JWT_ACCESS_EXPIRES_MINUTES:60}
+  refresh_expires_days: ${env:JWT_REFRESH_EXPIRES_DAYS:14}
 
 wechat:
   open_appid: ${env:WECHAT_OPEN_APPID:}
@@ -96,8 +96,8 @@ wechat:
 
 # 预留,暂不接入
 redis:
-  enabled: false
-  url: redis://localhost:6379/0
+  enabled: ${env:REDIS_ENABLED:false}
+  url: ${env:REDIS_URL:redis://localhost:6379/0}
 
 # 经验值/等级数值(可选,缺省走代码内默认)
 xp:
