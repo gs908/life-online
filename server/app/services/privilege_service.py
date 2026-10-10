@@ -1,7 +1,6 @@
 """特权解锁与使用服务。"""
 from __future__ import annotations
 
-from datetime import datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +13,7 @@ from app.models.scn_privilege_unlock import ScnPrivilegeUnlock
 from app.models.scn_privilege_use import ScnPrivilegeUse
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
+from app.common.timeutil import utcnow
 
 
 def enum_value(value) -> str:
@@ -119,7 +119,7 @@ async def use_privilege(
 
     privilege = user_privilege.privilege_template
     user_privilege.used_count += 1
-    user_privilege.last_used_at = datetime.utcnow()
+    user_privilege.last_used_at = utcnow()
 
     rec = ScnPrivilegeUse(
         family_id=family_id,
@@ -128,7 +128,7 @@ async def use_privilege(
         privilege_template_id=privilege.id,
         privilege_title=privilege.title,
         cost=cost,
-        used_at=datetime.utcnow(),
+        used_at=utcnow(),
     )
     db.add(rec)
     await db.commit()

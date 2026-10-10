@@ -30,5 +30,5 @@ class ScnTimeCoinLog(Base, UUIDPrimaryKeyMixin):
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), index=True
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )

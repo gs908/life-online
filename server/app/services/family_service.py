@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Sequence
 
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from app.models.sys_child import SysChild
 from app.models.sys_family import SysFamily
 from app.models.sys_invite import SysInvite
 from app.models.sys_parent import SysParent
+from app.common.timeutil import utcnow
 
 
 def _gen_invite_code() -> str:
@@ -84,7 +85,7 @@ async def create_invite(
         code=code,
         role=role,
         created_by=created_by,
-        expires_at=datetime.utcnow() + timedelta(hours=expires_in_hours),
+        expires_at=utcnow() + timedelta(hours=expires_in_hours),
     )
     db.add(invite)
     await db.commit()
@@ -185,7 +186,7 @@ async def consume_invite(
         raise NotFoundError(f"邀请码 {code} 不存在")
     if invite.used_at is not None:
         raise ConflictError("邀请码已被使用")
-    if invite.expires_at < datetime.utcnow():
+    if invite.expires_at < utcnow():
         raise ConflictError("邀请码已过期")
 
     invite_role = invite.role.value if hasattr(invite.role, "value") else str(invite.role)
@@ -222,7 +223,7 @@ async def consume_invite(
     )
     db.add(channel)
 
-    invite.used_at = datetime.utcnow()
+    invite.used_at = utcnow()
     invite.used_by = account.id
     await db.commit()
     await db.refresh(invite)

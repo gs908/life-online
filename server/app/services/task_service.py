@@ -15,6 +15,7 @@ from app.models.scn_task_template import ScnTaskTemplate
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.services import coin_service, privilege_service, xp_service
+from app.common.timeutil import utcnow
 
 # 驳回时若原 expire_at 已过(孩子在截止前提交,但家长审核拖到截止后才驳回),
 # 补一个重新提交窗口,避免下一轮过期批处理(expire_overdue_tasks)把它当成
@@ -174,7 +175,7 @@ async def start_task(
     )
     task.status = TaskStatus.IN_PROGRESS
     task.assignee_child_id = child.id
-    task.started_at = datetime.utcnow()
+    task.started_at = utcnow()
     await db.commit()
     await db.refresh(task)
     return task
@@ -194,7 +195,7 @@ async def submit_task(
         raise ConflictError(f"当前状态 {_enum_value(task.status)},无法提交")
     task.status = TaskStatus.PENDING_REVIEW
     task.proof_object_key = proof_object_key
-    task.submitted_at = datetime.utcnow()
+    task.submitted_at = utcnow()
     task.abandon_count_at_submit = child.daily_abandon_count
     await db.commit()
     await db.refresh(task)
@@ -243,7 +244,7 @@ async def approve_task(
     task.review_comment = comment
     task.xp_awarded = final_xp
     task.coin_delta = deposit
-    task.completed_at = datetime.utcnow()
+    task.completed_at = utcnow()
 
     await db.commit()
     await db.refresh(task)
@@ -270,7 +271,7 @@ async def reject_task(
     task.review_comment = comment
     task.submitted_at = None
 
-    now = datetime.utcnow()
+    now = utcnow()
     if task.expire_at is not None and task.expire_at <= now:
         task.expire_at = now + REJECT_RESUBMIT_GRACE
 
@@ -347,7 +348,7 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
     供定时任务(`app.workers.scheduler`)调用,亦可在测试/运维中手动触发。
     返回本次处理的任务数量。
     """
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     stmt = (
         select(ScnTaskInstance)
         .where(

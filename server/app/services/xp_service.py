@@ -13,6 +13,7 @@ from datetime import datetime, time
 from app.config import settings
 from app.config import XpSection
 from app.models.sys_child import SysChild
+from app.common.timeutil import utcnow
 
 
 # ---- 升级曲线 -----------------------------------------------------------
@@ -69,7 +70,7 @@ def calculate_xp(
     最终 XP = base * rating_mul * timing_mul * speed_mul * type_mul * chain_mul
     """
     cfg = cfg or settings.xp
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     mul = 1.0
 
     # 1) 星级

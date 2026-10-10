@@ -1,7 +1,6 @@
 """上传服务:把文件存到对象存储并写 SysUpload 元数据。"""
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -12,12 +11,13 @@ from app.config import settings
 from app.models.enums import UploadPurpose
 from app.models.sys_account import SysAccount
 from app.models.sys_upload import SysUpload
+from app.common.timeutil import utcnow
 
 
 def _build_object_key(purpose: UploadPurpose, family_id: str, filename: str) -> str:
     safe = filename.replace("/", "_").replace("\\", "_")
     suffix = uuid4().hex
-    return f"{purpose.value}/{family_id}/{datetime.utcnow().strftime('%Y%m%d')}/{suffix}_{safe}"
+    return f"{purpose.value}/{family_id}/{utcnow().strftime('%Y%m%d')}/{suffix}_{safe}"
 
 
 async def save_upload(

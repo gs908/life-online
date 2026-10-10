@@ -32,8 +32,8 @@ class ScnSeason(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     theme_id: Mapped[ThemeId] = mapped_column(String(32), nullable=False, default=ThemeId.DEFAULT)
     narrative_context: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    start_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
     family: Mapped["SysFamily"] = relationship(lazy="noload")

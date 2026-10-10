@@ -32,9 +32,9 @@ class ScnNotification(Base, UUIDPrimaryKeyMixin):
     status: Mapped[NotificationStatus] = mapped_column(
         String(16), nullable=False, default=NotificationStatus.PENDING, index=True
     )
-    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     wechat_msg_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), index=True
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )

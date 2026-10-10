@@ -174,7 +174,7 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     parent_headers = _auth_headers(seeded_family.parent)
     child_headers = _auth_headers(seeded_family.child_account)
 
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     task = await _create_task(api_client, parent_headers, seeded_family, expire_at=future)
 
     await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
@@ -189,7 +189,7 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     # expire_at 拨到过去,而不是真的 sleep 等待,避免测试因时钟精度产生偶发失败;
     # 也避免 db_session 里预先缓存一个旧状态的 ORM 对象,导致后面 get_task 读到
     # 过期的内存态(expire_on_commit=False 下,已加载对象不会被后续查询覆盖)。
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc)
     await db_session.execute(
         update(ScnTaskInstance)
         .where(ScnTaskInstance.id == task["id"])
@@ -211,7 +211,7 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     # 补的窗口必须是 now + REJECT_RESUBMIT_GRACE(24h),而不是随便一个未来时间点;
     # 允许几秒钟的执行耗时误差,否则宽限期意外缩短成很小的正数也会被上面的 `> now` 放过。
     expected_expire_at = now + REJECT_RESUBMIT_GRACE
-    assert abs((rejected_row.expire_at - expected_expire_at).total_seconds()) < 5
+    assert abs((rejected_row.expire_at - expected_expire_at).total_seconds()) < 60  # 远程 Supabase 往返延迟秒级,放宽断言容差
 
     # 下一轮过期批处理不应该把这个任务判过期
     processed = await task_service.expire_overdue_tasks(db_session, now=now)
@@ -245,7 +245,7 @@ async def test_reject_resubmit_grace_window_boundary(
     parent_headers = _auth_headers(seeded_family.parent)
     child_headers = _auth_headers(seeded_family.child_account)
 
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     task = await _create_task(api_client, parent_headers, seeded_family, expire_at=future)
 
     await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
@@ -255,7 +255,7 @@ async def test_reject_resubmit_grace_window_boundary(
         headers=child_headers,
     )
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(timezone.utc)
     await db_session.execute(
         update(ScnTaskInstance)
         .where(ScnTaskInstance.id == task["id"])
@@ -333,7 +333,7 @@ async def test_expire_overdue_tasks(
     await _top_up(db_session, seeded_family)
     parent_headers = _auth_headers(seeded_family.parent)
     child_headers = _auth_headers(seeded_family.child_account)
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None).isoformat()
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
     available_task = await _create_task(api_client, parent_headers, seeded_family, expire_at=past)
 

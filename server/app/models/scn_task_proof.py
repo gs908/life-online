@@ -29,6 +29,6 @@ class ScnTaskProof(Base, UUIDPrimaryKeyMixin):
         String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), index=True
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

@@ -39,7 +39,7 @@ class SysUpload(Base, UUIDPrimaryKeyMixin):
     )
     etag: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     family: Mapped["SysFamily"] = relationship(lazy="noload")

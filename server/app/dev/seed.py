@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +26,7 @@ from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.models.sys_family import SysFamily
 from app.services import family_service
+from app.common.timeutil import utcnow
 
 
 @dataclass
@@ -61,7 +61,7 @@ async def seed_basic_family(db: AsyncSession, *, suffix: str = "smoke") -> Seede
         family_id=family.id,
         name=f"赛季-{suffix}",
         theme_id=ThemeId.DEFAULT,
-        start_date=datetime.now(timezone.utc),
+        start_date=utcnow(),
         is_active=True,
     )
     db.add(season)

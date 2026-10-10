@@ -80,6 +80,32 @@ uv run alembic revision --autogenerate -m "your change"
 uv run alembic upgrade head
 ```
 
+### 4.1 时间与时区规范(全项目统一)
+
+**决策:数据库列统一 `timestamptz`(TIMESTAMPTZ,存 UTC),业务时区为北京(Asia/Shanghai,UTC+8)。**
+
+选择 timestamptz 存 UTC 而非列级"北京时间"的理由:
+- 无歧义:任何时刻的时间点全局唯一,不受会话时区/服务器本地时区影响;
+- 可移植:换部署区域、换数据库会话时区都不需要迁移数据;
+- 北京时间只是一个展示/边界语义,UTC+8 无夏令时,转换是纯固定偏移。
+
+分层落实:
+- **模型层**:所有 `DateTime` 列一律 `DateTime(timezone=True)`;新增列照此办理。
+- **应用层**:一律使用**带时区**的 datetime,统一从 `app/common/timeutil.py` 取:
+  `utcnow()`(写库/比较)、`now_bj()` / `to_bj()`(展示)、`today_bj()`(自然日边界)。
+  禁止裸 `datetime.utcnow()` / `datetime.now()`(产出 naive 值,asyncpg 对 timestamptz 会直接报错或隐式按 UTC 解释,埋坑)。
+- **自然日业务**(每日时间币发放、每日重置任务、每日放弃次数、任务过期判定等)一律锚定
+  `today_bj()` / 北京自然日,不依赖服务器本地时区。
+- **迁移**:`b9e4f7c21a6d` 已把全部 59 个时间列转为 timestamptz,存量 naive 值按 UTC 语义解释(历史值均由 `now()` 在 UTC 会话下写入)。
+- **测试**:断言与构造同样使用带时区 datetime;远程 Supabase 往返延迟秒级,时间断言容差放宽(60s)。
+
+### 4.2 Supabase pooler(事务模式)注意事项
+
+`.env` 指向 6543 端口(Supabase 事务模式 pgbouncer)时,asyncpg 的预编译语句会报
+`prepared statement "..." already exists`。引擎已按 SQLAlchemy 官方适配方案处理
+(`statement_cache_size=0` + `NullPool`,见 `app/common/db/engine.py`)。
+若改用 5432 会话模式 pooler 或直连,可恢复连接池与语句缓存以提升性能。
+
 ## 5. 启动
 
 ```bash

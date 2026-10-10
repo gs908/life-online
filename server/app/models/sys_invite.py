@@ -33,13 +33,13 @@ class SysInvite(Base, UUIDPrimaryKeyMixin):
     created_by: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_by: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     family: Mapped["SysFamily"] = relationship(back_populates="invites", lazy="noload")

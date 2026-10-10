@@ -39,8 +39,8 @@ class ScnHiddenQuest(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     xp_reward: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
     time_deposit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    starts_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     max_claims: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     claimed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_by: Mapped[str | None] = mapped_column(

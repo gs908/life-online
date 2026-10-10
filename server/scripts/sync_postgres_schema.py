@@ -27,7 +27,7 @@ import app.models  # noqa: F401,E402
 from app.common.db.base import Base  # noqa: E402
 from app.config import settings  # noqa: E402
 
-ALEMBIC_HEAD = "8aa7c7e1f4d1"
+ALEMBIC_HEAD = "b9e4f7c21a6d"
 PROJECT_TABLE_PREFIXES = ("sys_", "scn_")
 
 

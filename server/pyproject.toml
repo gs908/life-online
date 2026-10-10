@@ -48,6 +48,9 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+# 全部异步用例/fixture 共用一个 session 级事件循环,避免全局 engine 连接池跨循环复用
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 markers = [
     "db: 需要可连接的数据库(远程优先),不可达时自动跳过",
 ]

@@ -1,7 +1,6 @@
 """特权使用记录服务。"""
 from __future__ import annotations
 
-from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +10,7 @@ from app.models.enums import UserRole
 from app.models.scn_privilege_use import ScnPrivilegeUse
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
+from app.common.timeutil import utcnow
 
 
 def _enum_value(value) -> str:
@@ -48,7 +48,7 @@ async def record_redemption(
         privilege_template_id=None,
         privilege_title=privilege_title,
         cost=cost,
-        used_at=datetime.utcnow(),
+        used_at=utcnow(),
     )
     db.add(rec)
     await db.commit()

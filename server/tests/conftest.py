@@ -11,6 +11,10 @@ Pytest 全局配置。
 from __future__ import annotations
 
 import os
+import logging
+
+# 测试期压掉 engine echo 日志(app.debug=true 时 echo 全量 SQL,严重拖慢远程库用例)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 _TEST_ENV_DEFAULTS = {
     "JWT_SECRET": "test-only-secret-do-not-use-in-prod",

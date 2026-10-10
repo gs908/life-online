@@ -1,7 +1,6 @@
 """账号路由:查看 / 更新自己 / 每日重置。"""
 from __future__ import annotations
 
-from datetime import date
 
 from fastapi import APIRouter
 from sqlalchemy import select
@@ -14,6 +13,7 @@ from app.models.sys_child import SysChild
 from app.schemas.common import ApiResponse, ok
 from app.schemas.user import AdventurerCreate, AdventurerUpdate, UserRead, UserUpdate
 from app.services import coin_service, family_service
+from app.common.timeutil import today_bj
 
 router = APIRouter(prefix="/sys/accounts", tags=["sys-accounts"])
 
@@ -53,7 +53,7 @@ async def _to_read(db: AsyncSession, user: SysAccount) -> UserRead:
 async def get_me(db: DBSession, user: CurrentUser) -> ApiResponse[UserRead]:
     if _role_value(user) == UserRole.ADVENTURER.value:
         child = await _child_for_account(db, user.id)
-        today = date.today()
+        today = today_bj()
         if child and child.last_login_date != today:
             await coin_service.reset_daily_allowance(db, child, today)
             await db.commit()

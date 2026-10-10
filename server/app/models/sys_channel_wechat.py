@@ -34,9 +34,9 @@ class SysChannelWechat(Base, UUIDPrimaryKeyMixin):
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     access_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
     refresh_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     account: Mapped["SysAccount"] = relationship(back_populates="channel_wechats", lazy="joined")

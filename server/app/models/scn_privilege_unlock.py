@@ -36,9 +36,9 @@ class ScnPrivilegeUnlock(Base, UUIDPrimaryKeyMixin):
         String(36), ForeignKey("scn_privilege_template.id", ondelete="CASCADE"), nullable=False, index=True
     )
     unlocked_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), index=True
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     privilege_template: Mapped["ScnPrivilegeTemplate"] = relationship(lazy="joined")

@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,13 +21,14 @@ from sqlalchemy import select
 from app.common.db.session import AsyncSessionLocal
 from app.models.sys_child import SysChild
 from app.services import coin_service, task_service
+from app.common.timeutil import today_bj
 
 log = logging.getLogger(__name__)
 
 
 async def daily_reset_job() -> None:
     """每日 00:05 触发:全员配额重置。"""
-    today = date.today()
+    today = today_bj()
     log.info("daily_reset start, today=%s", today)
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(SysChild))

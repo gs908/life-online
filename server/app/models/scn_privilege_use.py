@@ -29,5 +29,5 @@ class ScnPrivilegeUse(Base, UUIDPrimaryKeyMixin):
     privilege_title: Mapped[str] = mapped_column(String(64), nullable=False)
     cost: Mapped[str | None] = mapped_column(String(32), nullable=True)
     used_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), index=True
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )

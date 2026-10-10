@@ -23,8 +23,8 @@ class ScnOnboardingPath(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str] = mapped_column(String(256), nullable=False, default="")
-    starts_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 

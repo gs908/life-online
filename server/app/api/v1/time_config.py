@@ -37,18 +37,11 @@ async def update_my_config(
     if body.default_daily_allowance is not None:
         tc.default_daily_allowance = body.default_daily_allowance
     if body.exceptions is not None:
-        for e in list(tc.exceptions):
-            await db.delete(e)
-        await db.flush()
-        for ex in body.exceptions:
-            db.add(ScnTimeConfigException(
-                time_config_id=tc.id,
-                day_of_week=ex.day_of_week,
-                coin_amount=ex.coin_amount,
-            ))
+        # 直接替换集合:delete-orphan 级联负责删旧行,新行经集合插入,
+        # commit 后 tc.exceptions 即为最新状态,无需再绕 re-fetch。
+        tc.exceptions = [
+            ScnTimeConfigException(day_of_week=ex.day_of_week, coin_amount=ex.coin_amount)
+            for ex in body.exceptions
+        ]
     await db.commit()
-    # db.refresh() 不会重新应用 get_or_create_time_config 里用的 selectinload(exceptions),
-    # commit 后 tc.exceptions 处于 expired 状态,直接访问会在 AsyncSession 下触发隐式懒加载
-    # 而报错;重新走一次 get_or_create_time_config 拿到带 exceptions 预加载的实例。
-    tc = await coin_service.get_or_create_time_config(db, user.family_id)
     return ok(_to_read(tc))
