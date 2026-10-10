@@ -1,20 +1,20 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# life-online 管理后台(packages/admin)
 
-# Run and deploy your AI Studio app
+React + Vite + Tailwind 的家庭任务游戏化管理后台。
 
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/temp/1
+AI 能力(任务文案生成 / 评分)统一走后端 `/api/v1/scn/ai/*` 接口
+(模型与默认参数配置在后端 `server/config.yaml` 的 `ai:` 段);
+前端不持有任何模型 key。API 调用约定见 `src/services/api/`
+(docs/10-前端API接入计划.md)。
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js + pnpm
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   `pnpm install`
+2. Run the app:
+   `pnpm run dev`
+
+需要登录态的接口走开发期登录(`POST /sys/auth/dev-login`,
+需后端 `DEV_LOGIN_ENABLED=true`);API 地址经 `VITE_API_BASE_URL` 配置。
