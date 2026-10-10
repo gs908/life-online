@@ -312,10 +312,14 @@
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
-| POST | `/sys/uploads` | multipart 上传：`file`（必填）+ `purpose`（`avatar|task_proof|season_banner|other`） | 登录 |
+| POST | `/sys/uploads` | multipart 上传：`file`（必填）+ `purpose`（`avatar|task_proof|season_banner|other`）+ `task_id`（可选，`task_proof` 时建议携带） | 登录 |
 
 **UploadRead** `{ id, family_id, uploader_account_id, storage_provider, object_key, bucket, public_url, content_type, size, purpose, access_url, created_at }`
 > 任务提交用 `object_key`；展示用 `access_url`。（预签名直传 `UploadUrlRequest` 已预留 DTO，暂未启用。）
+>
+> **存储路径规范（DEV-20）**：`object_key = {prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`。`prefix`/`bucket` 由 yaml（`storage.minio` / `storage.local`）统一管理；年/月/日按北京时区；任务号 = `task_id`（未携带时以 `purpose` 代替）；文件序号 = 同用户同日同任务维度自增。`task_id` 校验归属本家庭，跨家庭任务返回 404。
+>
+> **URL 行为（MinIO / local 双模式）**：`access_url` 始终按 `object_key` 现算——MinIO 模式返回带过期时间的预签名 URL（`public_url` 不落库）；local 模式返回稳定路径 `{public_base_url}/{object_key}`（`public_url` 落库）。前端两种模式下都只消费 `access_url` / `TaskRead.proof_url`，无需感知存储差异。
 
 ## 13. AI `/scn/ai`
 

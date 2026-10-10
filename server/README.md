@@ -344,6 +344,11 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
   即可在完全不配置 MinIO 的情况下工作,返回的 `UploadRead.access_url` 指向本地静态文件挂载路径,
   字段形状与 MinIO 模式一致,前端无需区分。AI 功能目前没有"降级实现",未配置 LLM 时就是明确的
   503,前端应据此提示"该功能未开放",而不是重试。
+- **对象存储路径规范**(DEV-20):`{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`。
+  `prefix`(`storage.minio.prefix` / `storage.local.prefix`,默认空)与 `bucket` 均在 yaml 统一管理;
+  年/月/日按北京时区切分;任务号 = 上传时携带的 `task_id`(校验归属本家庭),未携带时以 `purpose`
+  代替;文件序号 = 同用户同日同任务维度自增。两种模式下 `object_key` 生成规则一致,仅 URL 形态
+  不同(MinIO = 现算预签名 URL,不落库;local = 稳定路径,落库)。
 - 二者共用同一套错误语义:`ServiceUnavailableError`(503,"根本没配置")与已有的
   `ExternalServiceError`(502,"配置了但这次调用失败,比如 LLM 限流/微信接口报错")是两类不同的
   错误,前端可以按 `error_code` 区分展示文案。

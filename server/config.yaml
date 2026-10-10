@@ -38,10 +38,12 @@ storage:
     secret_key: ${env:MINIO_SECRET_KEY:}
     secure: ${env:MINIO_SECURE:false}
     bucket: ${env:MINIO_BUCKET:life-online}
+    prefix: ${env:MINIO_PREFIX:}
   local:
     root_path: ${env:LOCAL_STORAGE_ROOT:./uploads}
     public_base_url: ${env:LOCAL_STORAGE_PUBLIC_BASE_URL:/api/v1/files}
     bucket: ${env:LOCAL_STORAGE_BUCKET:local}
+    prefix: ${env:LOCAL_STORAGE_PREFIX:}
 
 llm:
   base_url: ${env:LLM_BASE_URL}

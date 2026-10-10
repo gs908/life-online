@@ -34,12 +34,18 @@ async def upload(
     db: DBSession, user: CurrentUser,
     file: UploadFile = File(...),
     purpose: UploadPurpose = Form(default=UploadPurpose.OTHER),
+    task_id: str | None = Form(default=None),
 ) -> ApiResponse[UploadRead]:
+    """multipart 上传:file + purpose + 可选 task_id。
+
+    task_id(purpose=task_proof 时建议携带)用于对象存储路径规范中的"任务号"段:
+    `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`。
+    """
     content = await file.read()
     fname = file.filename or "upload.bin"
     record = await upload_service.save_upload(
         db, family_id=user.family_id, uploader=user,
         content=content, content_type=file.content_type or "application/octet-stream",
-        purpose=purpose, filename=fname,
+        purpose=purpose, filename=fname, task_id=task_id,
     )
     return ok(_to_read(record))

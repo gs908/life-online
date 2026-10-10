@@ -23,7 +23,23 @@ class ObjectInfo:
 
 
 class StorageClient(ABC):
-    """对象存储客户端统一接口。"""
+    """对象存储客户端统一接口。
+
+    对象 key 统一约定:`{key_prefix}/{业务相对路径}`。
+    key_prefix 来自 yaml 配置(minio.prefix / local.prefix),可空;
+    bucket 由各实现自持,不在 key 内(完整定位 = bucket + key)。
+    """
+
+    #: 存储模式标识("minio" / "local"),业务层按其区分 URL 稳定性等行为
+    provider_name: str = ""
+
+    #: 配置的对象 key 前缀(yaml 管理),空串表示无前缀
+    key_prefix: str = ""
+
+    def full_key(self, relative_key: str) -> str:
+        """把业务相对路径拼成带前缀的完整对象 key(过滤空段,避免 `//`)。"""
+        parts = [p.strip("/") for p in (self.key_prefix, relative_key.strip("/")) if p.strip("/")]
+        return "/".join(parts)
 
     @abstractmethod
     async def ensure_bucket(self) -> None:

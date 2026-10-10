@@ -135,6 +135,8 @@ class StorageMinioSection(BaseModel):
     secret_key: str = ""
     secure: bool = False
     bucket: str = "life-online"
+    #: 对象 key 前缀(多环境/多业务共用同一 bucket 时区分),拼在 bucket 之后、业务路径之前
+    prefix: str = ""
 
     @property
     def is_configured(self) -> bool:
@@ -145,6 +147,8 @@ class StorageLocalSection(BaseModel):
     root_path: str = "./uploads"
     public_base_url: str = "/api/v1/files"
     bucket: str = "local"
+    #: 与 minio.prefix 对齐的本地 key 前缀,保证两种模式下 object_key 一致
+    prefix: str = ""
 
 
 class StorageSection(BaseModel):

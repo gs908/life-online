@@ -12,10 +12,13 @@ from app.common.storage.base import ObjectInfo, StorageClient
 
 
 class LocalFileStorage(StorageClient):
-    def __init__(self, root_path: str, bucket: str, public_base_url: str) -> None:
+    def __init__(self, root_path: str, bucket: str, public_base_url: str,
+                 prefix: str = "") -> None:
         self._root = Path(root_path).resolve()
         self._bucket = bucket
         self._public_base_url = public_base_url.rstrip("/")
+        self.key_prefix = prefix.strip("/")
+        self.provider_name = "local"
 
     async def ensure_bucket(self) -> None:
         await asyncio.to_thread(self._root.mkdir, parents=True, exist_ok=True)

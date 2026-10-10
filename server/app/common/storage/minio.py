@@ -17,7 +17,7 @@ from app.common.storage.base import ObjectInfo, StorageClient
 
 class MinIOStorage(StorageClient):
     def __init__(self, endpoint: str, access_key: str, secret_key: str,
-                 bucket: str, *, secure: bool = False) -> None:
+                 bucket: str, *, secure: bool = False, prefix: str = "") -> None:
         self._client = Minio(
             endpoint=endpoint,
             access_key=access_key,
@@ -25,6 +25,8 @@ class MinIOStorage(StorageClient):
             secure=secure,
         )
         self._bucket = bucket
+        self.key_prefix = prefix.strip("/")
+        self.provider_name = "minio"
 
     async def ensure_bucket(self) -> None:
         def _ensure() -> None:
