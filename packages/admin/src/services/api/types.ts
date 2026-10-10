@@ -173,6 +173,8 @@ export interface SeasonHistoryItem {
   season: SeasonRead;
   total_tasks: number;
   completed_tasks: number;
+  /** 联调补充（docs/09 §5 D1）：后端实际返回、契约 §5 暂未成文 */
+  total_xp: number;
 }
 
 // ---- 任务 /scn/task-instances（契约 §6）----

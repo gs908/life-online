@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Task, Season, UserRole, TaskType, TaskStatus, RedemptionRecord, TimeConfig } from './types';
+import { User, Task, UserRole, TaskType, TaskStatus, RedemptionRecord, TimeConfig } from './types';
 import { THEMES } from './constants/themes';
 import { Bell } from 'lucide-react';
 
@@ -9,6 +9,10 @@ import { Bell } from 'lucide-react';
 import { useAuth } from './auth/AuthContext';
 import { mapUserRead } from './auth/mapUser';
 import LoginPage from './components/LoginPage';
+
+// API（阶段②：赛季接入真实后端）
+import { api, ApiError } from './services/api';
+import type { SeasonRead } from './services/api';
 
 // Components
 import Header from './components/Header';
@@ -28,15 +32,6 @@ import SeasonConfigModal from './components/modals/SeasonConfigModal';
 const DEFAULT_TIME_CONFIG: TimeConfig = {
     defaultDailyAllowance: 100,
     exceptions: { 0: 200, 6: 200 } // Weekend bonus
-};
-
-const DEFAULT_SEASON: Season = {
-  id: 'season_1',
-  name: 'Winter Semester 2024',
-  themeId: 'FROSTBOUND',
-  narrativeContext: 'The Frost Giants are encroaching on the village. We must strengthen our defenses and gather supplies before the Long Night.',
-  startDate: new Date().toISOString(),
-  isActive: true
 };
 
 const INITIAL_TASKS: Task[] = [
@@ -101,10 +96,36 @@ const App: React.FC = () => {
     setChildUser(childUserFromAuth);
   }, [childUserFromAuth]);
 
-  // Season State
-  const [activeSeason, setActiveSeason] = useState<Season>(DEFAULT_SEASON);
-  const [seasonHistory, setSeasonHistory] = useState<Season[]>([]);
+  // Season State（阶段②：真实后端；DEFAULT_SEASON 已下线）
+  const [activeSeason, setActiveSeason] = useState<SeasonRead | null>(null);
+  const [seasons, setSeasons] = useState<SeasonRead[]>([]);
+  const [seasonError, setSeasonError] = useState<string | null>(null);
+  const [seasonLoading, setSeasonLoading] = useState(true);
   const [showSeasonHistory, setShowSeasonHistory] = useState(false);
+
+  const loadSeasons = useCallback(async () => {
+    setSeasonLoading(true);
+    setSeasonError(null);
+    try {
+      const [active, list] = await Promise.all([
+        api.seasons.getActiveSeason(),
+        api.seasons.listSeasons(true),
+      ]);
+      setActiveSeason(active);
+      setSeasons(list);
+    } catch (error) {
+      setSeasonError(error instanceof ApiError ? error.message : t('parent.seasonLoadFailedPlain'));
+    } finally {
+      setSeasonLoading(false);
+    }
+  }, [t]);
+
+  // 登录后拉取赛季上下文（无激活赛季 → 家长端出现创建引导）
+  useEffect(() => {
+    if (status === 'authenticated') {
+      loadSeasons();
+    }
+  }, [status, loadSeasons]);
 
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [redemptionHistory, setRedemptionHistory] = useState<RedemptionRecord[]>([]);
@@ -314,14 +335,20 @@ const App: React.FC = () => {
       setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const handleSeasonSave = (newSeason: Season) => {
-    setActiveSeason(newSeason);
-    setToastMessage({ title: t('toast.seasonUpdatedTitle'), msg: t('toast.seasonUpdatedMsg', { theme: THEMES[newSeason.themeId].name }) });
-    setTimeout(() => setToastMessage(null), 3000);
-  };
+  // 统一 toast（赛季 CRUD 成功反馈从 Modal 回流，避免多个 setTimeout 各自为政）
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((title: string, msg: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToastMessage({ title, msg });
+    toastTimer.current = setTimeout(() => setToastMessage(null), 4000);
+  }, []);
+  useEffect(() => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  }, []);
 
   // --- HELPER DATA FOR RENDER ---
-  const filteredTasks = tasks.filter(t => t.seasonId === activeSeason.id);
+  const currentSeasonTheme = THEMES[activeSeason?.theme_id ?? 'DEFAULT'] || THEMES.DEFAULT;
+  const filteredTasks = activeSeason ? tasks.filter(t => t.seasonId === activeSeason.id) : [];
   const activeQuest = filteredTasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assigneeId === childUser?.id);
   const availableTasks = filteredTasks.filter(t => t.status === TaskStatus.AVAILABLE);
   const completedTasks = filteredTasks.filter(t => t.status === TaskStatus.COMPLETED);
@@ -359,7 +386,7 @@ const App: React.FC = () => {
 
       {/* HEADER（真实用户；角色切换已删除，换角色 = 登出后以另一角色重新登录） */}
       <Header
-        currentSeason={activeSeason.name as any} // Cast for visual compatibility or update Header later
+        currentSeason={activeSeason?.name ?? t('header.noSeason')}
         currentUser={currentUser}
         onLogout={logout}
       />
@@ -369,7 +396,7 @@ const App: React.FC = () => {
           <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
              <ChildDashboard
                 childUser={childUser}
-                currentTheme={THEMES[activeSeason.themeId] || THEMES.DEFAULT}
+                currentTheme={currentSeasonTheme}
                 tasks={tasks}
                 activeQuest={activeQuest}
                 availableTasks={availableTasks}
@@ -384,10 +411,8 @@ const App: React.FC = () => {
           <div className="bg-slate-100 min-h-full p-4 md:p-6 lg:p-8">
              <div className="max-w-7xl mx-auto">
                  {showSeasonHistory ? (
-                     <SeasonHistory 
-                        historySeasons={seasonHistory} 
-                        allTasks={tasks} 
-                        onBack={() => setShowSeasonHistory(false)} 
+                     <SeasonHistory
+                        onBack={() => setShowSeasonHistory(false)}
                      />
                  ) : (
                      <ParentDashboard
@@ -398,6 +423,9 @@ const App: React.FC = () => {
                         pendingTasks={pendingTasks}
                         redemptionHistory={redemptionHistory}
                         activeSeason={activeSeason}
+                        currentTheme={currentSeasonTheme}
+                        seasonError={seasonError}
+                        onRetrySeasons={loadSeasons}
                         onOpenSeasonConfig={() => setIsSeasonConfigModalOpen(true)}
                         onViewHistory={() => setShowSeasonHistory(true)}
                         onOpenAddModal={() => setIsAddModalOpen(true)}
@@ -417,8 +445,8 @@ const App: React.FC = () => {
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         onAdd={handleAddTask}
-        narrativeContext={activeSeason.narrativeContext}
-        seasonId={activeSeason.id}
+        narrativeContext={activeSeason?.narrative_context ?? ''}
+        seasonId={activeSeason?.id ?? ''}
         childLevel={childUser.level}
       />
 
@@ -452,8 +480,10 @@ const App: React.FC = () => {
       <SeasonConfigModal
         isOpen={isSeasonConfigModalOpen}
         onClose={() => setIsSeasonConfigModalOpen(false)}
-        currentSeason={activeSeason}
-        onSave={handleSeasonSave}
+        seasons={seasons}
+        openInCreate={!activeSeason && !seasonLoading}
+        onRefresh={loadSeasons}
+        onToast={showToast}
       />
     </div>
   );

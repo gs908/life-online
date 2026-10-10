@@ -158,3 +158,19 @@
 ---
 
 *比对基准：`packages/admin`@develop cec241a ↔ `server/`@develop 09cf8fc，2026-10-09。*
+
+## 5. 联调差异记录（前端接入实测，DEV 起各阶段追加）
+
+> 前端按 docs/08 契约接入时发现的实际行为差异/补充。**仅记录，不代替契约**——后端确认后应回补 docs/08 并同步 `services/api/types.ts`。
+
+### 阶段② 赛季（DEV-17，2026-10-10，基准 server@develop）
+
+| # | 差异 | 前端处理 |
+|---|------|---------|
+| D1 | `GET /scn/seasons/history` 实际返回 `SeasonHistoryItem` 含 **`total_xp: int`**（契约 §5 只列 `season/total_tasks/completed_tasks`） | `api/types.ts` 已按实际补 `total_xp`；历史页直接展示，不再本地折算 |
+| D2 | `POST /scn/seasons` 创建即激活：服务层先把本家庭激活赛季置 `is_active=false`，新赛季模型默认 `is_active=true` | 创建表单标注"创建后自动激活"；无激活赛季的引导直接进创建表单 |
+| D3 | 单激活约束的冲突路径：并发下部分唯一索引 `ux_scn_season_active_per_family` 兜底，服务层捕获 `IntegrityError` → **409 `conflict`**，msg「该家庭已存在激活中的赛季,请稍后重试」 | 前端不自行判断单激活规则；`conflict` 原样透出后端 msg（errors.ts → 表单/确认层就地呈现） |
+| D4 | `PATCH /scn/seasons/{id}` 无法清空 `end_date`：服务层 `if v is not None` 跳过 None 值 | 编辑表单不允许清空结束日期，字段下方注明"只能改为新日期"；如需支持清空请后端确认语义（显式 null） |
+| D5 | `DELETE /scn/seasons/{id}` 成功返回 `data: {"deleted": true}`（契约未写明返回体） | 前端不读返回体；如后端要统一为 `data: null` 属破坏性变更，需同步契约 |
+
+---

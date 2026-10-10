@@ -1,10 +1,13 @@
 
+// ThemeId / Season 已删除（阶段②，docs/09 §4.6 不共存）：
+// 赛季数据一律使用 services/api 的 SeasonRead / SeasonHistoryItem（snake_case），
+// ThemeId 枚举以 services/api/types.ts 为准
+import type { ThemeId } from './services/api/types';
+
 export enum UserRole {
   PARENT = 'GUILD_MASTER',
   CHILD = 'ADVENTURER'
 }
-
-export type ThemeId = 'DEFAULT' | 'FROSTBOUND' | 'INFERNO' | 'SYLVAN' | 'CYBERPUNK';
 
 export interface SeasonTheme {
   id: ThemeId;
@@ -15,16 +18,6 @@ export interface SeasonTheme {
   textColor: string;
   icon: string; // Emoji or Lucide name reference
   bgImage?: string; // CSS gradient or url
-}
-
-export interface Season {
-  id: string;
-  name: string; // e.g. "Winter Semester 2024"
-  themeId: ThemeId;
-  narrativeContext: string; // e.g. "Frost Giants are attacking the town."
-  startDate: string;
-  endDate?: string;
-  isActive: boolean;
 }
 
 export enum TaskType {
