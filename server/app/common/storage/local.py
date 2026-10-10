@@ -15,7 +15,7 @@ class LocalFileStorage(StorageClient):
     def __init__(self, root_path: str, bucket: str, public_base_url: str,
                  prefix: str = "") -> None:
         self._root = Path(root_path).resolve()
-        self._bucket = bucket
+        self.bucket = bucket
         self._public_base_url = public_base_url.rstrip("/")
         self.key_prefix = prefix.strip("/")
         self.provider_name = "local"
@@ -45,7 +45,7 @@ class LocalFileStorage(StorageClient):
 
         await asyncio.to_thread(_write)
         return ObjectInfo(
-            bucket=self._bucket,
+            bucket=self.bucket,
             key=key,
             size=len(data),
             content_type=content_type,

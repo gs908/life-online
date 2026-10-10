@@ -220,7 +220,7 @@
 **TaskCreate**（POST body；= TaskTemplateCreate + 实例参数）：
 `{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?(50, ≥0), type?(DAILY), target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?(15), time_deposit?(10), is_active?(true), target_user_id?, deadline?, expire_at? }`
 
-**TaskSubmitRequest** `{ proof_object_key: str }` — **不是 base64**：先 `POST /sys/uploads`（purpose=`task_proof`）拿 `object_key`，再提交。
+**TaskSubmitRequest** `{ proof_object_key: str }` — **不是 base64**：先 `POST /sys/uploads`（purpose=`task_proof`，建议带 `task_id`）拿 `object_key`，再提交。`proof_object_key` 做归属校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`，否则 422（防 local 模式下用任意字符串引用/探测他人对象）。
 **TaskApproveRequest** `{ rating: int 1–5（必填）, comment?: str }`
 
 ## 7. 动态主题样式 `/scn/theme-styles`
@@ -320,6 +320,8 @@
 > **存储路径规范（DEV-20）**：`object_key = {prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`。`prefix`/`bucket` 由 yaml（`storage.minio` / `storage.local`）统一管理；年/月/日按北京时区；任务号 = `task_id`（未携带时以 `purpose` 代替）；文件序号 = 同用户同日同任务维度自增。`task_id` 校验归属本家庭，跨家庭任务返回 404。
 >
 > **URL 行为（MinIO / local 双模式）**：`access_url` 始终按 `object_key` 现算——MinIO 模式返回带过期时间的预签名 URL（`public_url` 不落库）；local 模式返回稳定路径 `{public_base_url}/{object_key}`（`public_url` 落库）。前端两种模式下都只消费 `access_url` / `TaskRead.proof_url`，无需感知存储差异。
+>
+> **存量回归（DEV-20 收尾）**：旧实现曾把 MinIO 预签名 URL 落到 `public_url`，该类 URL 会过期；读取端对 `storage_provider=minio` 的行一律忽略存量 `public_url`、按 `object_key` 现算 `access_url`（选读取端忽略而非一次性迁移：无需对每个环境执行 UPDATE，部署即生效，对 local 行为零影响）。文件序号自增采用「先插库占位、后写对象」：object_key 唯一索引在存储写入前仲裁并发，撞号顺延重试；对象写入失败删除占位行，不留孤儿。
 
 ## 13. AI `/scn/ai`
 

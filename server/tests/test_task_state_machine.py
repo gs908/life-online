@@ -19,8 +19,8 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -73,6 +73,33 @@ async def _top_up(db_session: AsyncSession, seeded_family: SeededFamily, amount:
     await db_session.commit()
 
 
+async def _proof_key(db_session: AsyncSession, seeded_family: SeededFamily, label: str = "p") -> str:
+    """为接取孩子造一条真实归属的 task_proof 上传记录。
+
+    DEV-20 起 submit 校验 proof_object_key 归属(存在 + uploader=当前孩子 +
+    purpose=task_proof),测试不再能用裸字符串 "proofs/1.jpg" 蒙混。
+    """
+    from uuid import uuid4
+
+    from app.models.enums import UploadPurpose
+    from app.models.sys_upload import SysUpload
+
+    key = f"proofs/{seeded_family.child_account.id}/{uuid4().hex}-{label}.jpg"
+    db_session.add(SysUpload(
+        family_id=seeded_family.family.id,
+        uploader_account_id=seeded_family.child_account.id,
+        storage_provider="local",
+        object_key=key,
+        bucket="local",
+        public_url=f"/api/v1/files/{key}",
+        content_type="image/jpeg",
+        size=1,
+        purpose=UploadPurpose.TASK_PROOF,
+    ))
+    await db_session.commit()
+    return key
+
+
 async def test_full_lifecycle_create_start_submit_approve(
     api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
 ) -> None:
@@ -93,7 +120,7 @@ async def test_full_lifecycle_create_start_submit_approve(
 
     submit_resp = await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/1.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "1")},
         headers=child_headers,
     )
     assert submit_resp.status_code == 200
@@ -127,7 +154,7 @@ async def test_reject_sends_back_to_in_progress_without_touching_deposit(
     await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
     await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/1.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "1")},
         headers=child_headers,
     )
 
@@ -150,7 +177,7 @@ async def test_reject_sends_back_to_in_progress_without_touching_deposit(
     # 孩子可以重新提交,家长再次通过
     resubmit_resp = await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/2.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "2")},
         headers=child_headers,
     )
     assert resubmit_resp.status_code == 200
@@ -174,13 +201,13 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     parent_headers = _auth_headers(seeded_family.parent)
     child_headers = _auth_headers(seeded_family.child_account)
 
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     task = await _create_task(api_client, parent_headers, seeded_family, expire_at=future)
 
     await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
     submit_resp = await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/1.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "1")},
         headers=child_headers,
     )
     assert submit_resp.status_code == 200  # 截止前提交成功
@@ -189,7 +216,7 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     # expire_at 拨到过去,而不是真的 sleep 等待,避免测试因时钟精度产生偶发失败;
     # 也避免 db_session 里预先缓存一个旧状态的 ORM 对象,导致后面 get_task 读到
     # 过期的内存态(expire_on_commit=False 下,已加载对象不会被后续查询覆盖)。
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db_session.execute(
         update(ScnTaskInstance)
         .where(ScnTaskInstance.id == task["id"])
@@ -222,7 +249,7 @@ async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     # 孩子在新窗口内可以修改后重新提交,家长再审核通过
     resubmit_resp = await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/2.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "2")},
         headers=child_headers,
     )
     assert resubmit_resp.status_code == 200
@@ -245,17 +272,17 @@ async def test_reject_resubmit_grace_window_boundary(
     parent_headers = _auth_headers(seeded_family.parent)
     child_headers = _auth_headers(seeded_family.child_account)
 
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     task = await _create_task(api_client, parent_headers, seeded_family, expire_at=future)
 
     await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
     await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/1.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "1")},
         headers=child_headers,
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db_session.execute(
         update(ScnTaskInstance)
         .where(ScnTaskInstance.id == task["id"])
@@ -333,7 +360,7 @@ async def test_expire_overdue_tasks(
     await _top_up(db_session, seeded_family)
     parent_headers = _auth_headers(seeded_family.parent)
     child_headers = _auth_headers(seeded_family.child_account)
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
     available_task = await _create_task(api_client, parent_headers, seeded_family, expire_at=past)
 
@@ -412,14 +439,14 @@ async def test_illegal_transitions_return_conflict(
 
     await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/1.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "1")},
         headers=child_headers,
     )
 
     # PENDING_REVIEW 状态下孩子不能再次提交/放弃
     submit_again = await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "proofs/2.jpg"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "2")},
         headers=child_headers,
     )
     assert submit_again.status_code == 409
@@ -492,10 +519,10 @@ async def test_permission_boundaries(
     )
     assert abandon_by_parent.status_code == 403
 
-    # 孩子不能审核/驳回任务
+    # 孩子不能审核/驳回任务(先合法提交进 PENDING_REVIEW)
     await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": "x"},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "perm")},
         headers=child_headers,
     )
     approve_by_child = await api_client.post(
@@ -547,3 +574,66 @@ async def test_cross_family_isolation(
     assert list_resp.status_code == 200
     listed_ids = {t["id"] for t in list_resp.json()["data"]["items"]}
     assert task["id"] not in listed_ids
+
+
+async def test_submit_validates_proof_ownership(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """DEV-20:submit 的 proof_object_key 必须是当前孩子本人上传的 task_proof 凭证。
+
+    不存在的 key / 他人上传的 key / 非 task_proof 的 key 一律 422;
+    合法 key 提交成功。防 local 模式下用任意字符串引用/探测他人对象。
+    """
+    from uuid import uuid4
+
+    from app.models.enums import UploadPurpose
+    from app.models.sys_upload import SysUpload
+
+    await _top_up(db_session, seeded_family)
+    parent_headers = _auth_headers(seeded_family.parent)
+    child_headers = _auth_headers(seeded_family.child_account)
+
+    task = await _create_task(api_client, parent_headers, seeded_family)
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
+
+    async def _submit(key: str):
+        return await api_client.post(
+            f"/api/v1/scn/task-instances/{task['id']}/submit",
+            json={"proof_object_key": key},
+            headers=child_headers,
+        )
+
+    # 1) 不存在的 key
+    resp = await _submit(f"proofs/{uuid4().hex}/nonexistent.jpg")
+    assert resp.status_code == 422, resp.text
+
+    # 2) 存在但上传者是家长(他人)的 key
+    parent_key = f"proofs/{uuid4().hex}-parent.jpg"
+    db_session.add(SysUpload(
+        family_id=seeded_family.family.id,
+        uploader_account_id=seeded_family.parent.id,
+        storage_provider="local", object_key=parent_key, bucket="local",
+        public_url=f"/api/v1/files/{parent_key}",
+        content_type="image/jpeg", size=1, purpose=UploadPurpose.TASK_PROOF,
+    ))
+    await db_session.commit()
+    resp = await _submit(parent_key)
+    assert resp.status_code == 422, resp.text
+
+    # 3) 存在、本人上传,但 purpose 不是 task_proof
+    avatar_key = f"avatars/{uuid4().hex}.png"
+    db_session.add(SysUpload(
+        family_id=seeded_family.family.id,
+        uploader_account_id=seeded_family.child_account.id,
+        storage_provider="local", object_key=avatar_key, bucket="local",
+        public_url=f"/api/v1/files/{avatar_key}",
+        content_type="image/png", size=1, purpose=UploadPurpose.AVATAR,
+    ))
+    await db_session.commit()
+    resp = await _submit(avatar_key)
+    assert resp.status_code == 422, resp.text
+
+    # 4) 合法 key:本人上传的 task_proof
+    resp = await _submit(await _proof_key(db_session, seeded_family, "own"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["status"] == TaskStatus.PENDING_REVIEW.value

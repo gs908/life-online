@@ -11,8 +11,23 @@ from app.services import upload_service
 
 router = APIRouter(prefix="/sys/uploads", tags=["sys-uploads"])
 
+# public_url 只对本地文件存储可信(local 的 URL 是稳定路径)。
+# 存量回归(Mars 审查 🟡):旧实现曾把 MinIO 预签名 URL 落库,该类 URL 带签名会过期,
+# 读取端若继续信任存量 minio 行的 public_url 会一直返回失效链接 —— 因此 minio 行
+# 一律忽略 public_url、按 object_key 现算 access_url。选读取端忽略而非一次性迁移:
+# 无需对每个跑过 minio 的环境执行 UPDATE,部署即生效,且对 local 行为零影响;
+# minio 行的存量 public_url 已成死数据,可留待任意维护窗口清理。
+_LOCAL_PROVIDERS = {"local", "filestorage", "file"}
+
+
+def _effective_public_url(u) -> str | None:
+    if u.storage_provider in _LOCAL_PROVIDERS:
+        return u.public_url
+    return None
+
 
 def _to_read(u) -> UploadRead:
+    public_url = _effective_public_url(u)
     return UploadRead(
         id=u.id,
         family_id=u.family_id,
@@ -20,11 +35,11 @@ def _to_read(u) -> UploadRead:
         storage_provider=u.storage_provider,
         object_key=u.object_key,
         bucket=u.bucket,
-        public_url=u.public_url,
+        public_url=public_url,
         content_type=u.content_type,
         size=u.size,
         purpose=u.purpose,
-        access_url=u.public_url or upload_service.build_access_url(u.object_key),
+        access_url=public_url or upload_service.build_access_url(u.object_key),
         created_at=u.created_at,
     )
 

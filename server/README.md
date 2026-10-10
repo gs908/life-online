@@ -362,6 +362,12 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
   年/月/日按北京时区切分;任务号 = 上传时携带的 `task_id`(校验归属本家庭),未携带时以 `purpose`
   代替;文件序号 = 同用户同日同任务维度自增。两种模式下 `object_key` 生成规则一致,仅 URL 形态
   不同(MinIO = 现算预签名 URL,不落库;local = 稳定路径,落库)。
+- **序号并发与孤儿闭环**(DEV-20 审查收尾):序号取号采用「先插库占位、后写对象」——
+  `object_key` 唯一索引在存储写入**前**仲裁并发,两个并发请求撞号时败者撞 `IntegrityError`
+  顺延重试,不会出现"双方都写对象、后者覆盖前者"的凭证错乱;占位成功后对象写入失败则
+  删除占位行,不留"库有引用、存储无对象"的孤儿(commit 在 upload 之前,反向孤儿也不存在)。
+  任务提交的 `proof_object_key` 做归属校验(存在 + 上传者=当前用户 + purpose=task_proof),
+  读取端对存量 minio 行忽略已过期的 `public_url`、一律按 `object_key` 现算。
 - 二者共用同一套错误语义:`ServiceUnavailableError`(503,"根本没配置")与已有的
   `ExternalServiceError`(502,"配置了但这次调用失败,比如 LLM 限流/微信接口报错")是两类不同的
   错误,前端可以按 `error_code` 区分展示文案。

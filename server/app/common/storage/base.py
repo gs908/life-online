@@ -33,6 +33,9 @@ class StorageClient(ABC):
     #: 存储模式标识("minio" / "local"),业务层按其区分 URL 稳定性等行为
     provider_name: str = ""
 
+    #: 当前 bucket 名(完整对象定位 = bucket + key)
+    bucket: str = ""
+
     #: 配置的对象 key 前缀(yaml 管理),空串表示无前缀
     key_prefix: str = ""
 

@@ -60,6 +60,34 @@ def test_key_head_matches_path_spec(tmp_path) -> None:
     assert head == f"p/userA/{today.year:04d}/{today.month:02d}/{today.day:02d}/taskB-"
 
 
+# ---------- 纯单元:LIKE 转义与存量 URL 读取端忽略 ----------
+
+
+def test_escape_like() -> None:
+    # key 前缀里的 `_`/`%`/`\` 不能当通配符(purpose 里就有 `_`)
+    assert upload_service._escape_like("task_proof/100%_a\\b") == "task\\_proof/100\\%\\_a\\\\b"
+
+
+def test_effective_public_url_ignores_legacy_minio_rows() -> None:
+    """存量回归:旧实现曾把 MinIO 预签名 URL 落库,读取端对 minio 行一律忽略。"""
+    from types import SimpleNamespace
+
+    from app.api.v1.uploads import _effective_public_url
+
+    legacy_minio = SimpleNamespace(
+        storage_provider="minio",
+        public_url="http://minio:9000/life-online/x.jpg?X-Amz-Signature=stale",
+    )
+    assert _effective_public_url(legacy_minio) is None
+
+    local = SimpleNamespace(storage_provider="local", public_url="/api/v1/files/a.jpg")
+    assert _effective_public_url(local) == "/api/v1/files/a.jpg"
+
+    # 旧代码曾把 settings.storage.provider 原样落库,local 家族的别名同样可信
+    alias = SimpleNamespace(storage_provider="filestorage", public_url="/api/v1/files/b.jpg")
+    assert _effective_public_url(alias) == "/api/v1/files/b.jpg"
+
+
 # ---------- DB 集成:save_upload 全链路(local 模式) ----------
 
 
@@ -128,3 +156,57 @@ async def test_save_upload_rejects_task_from_other_family(
             purpose=UploadPurpose.TASK_PROOF, filename="x.jpg",
             task_id=seed.task_instance.id,
         )
+
+
+async def test_save_upload_minio_mode_keeps_public_url_none(
+    db_session, seeded_family, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MinIO 模式:预签名 URL 会过期,public_url 一律不落库(Mars 审查回归钉子)。"""
+    storage = LocalFileStorage(str(tmp_path), bucket="life-online",
+                               public_base_url="/api/v1/files")
+    storage.provider_name = "minio"  # 复用本地落盘,只模拟 minio 的 URL 语义
+    monkeypatch.setattr(upload_service, "get_storage", lambda: storage)
+    seed = seeded_family
+
+    record = await upload_service.save_upload(
+        db_session, family_id=seed.family.id, uploader=seed.parent,
+        content=b"m", content_type="image/jpeg", purpose=UploadPurpose.TASK_PROOF,
+        filename="proof.jpg", task_id=seed.task_instance.id,
+    )
+    assert record.public_url is None
+    assert record.storage_provider == "minio"
+    # 对象本体仍正常写入
+    assert (tmp_path / record.object_key).read_bytes() == b"m"
+
+
+async def test_save_upload_cleans_placeholder_when_storage_fails(
+    db_session, seeded_family, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """占位插入成功但对象写入失败:占位行删除,不留"有引用无对象"的孤儿。"""
+    from sqlalchemy import select
+
+    from app.models.sys_upload import SysUpload
+
+    storage = LocalFileStorage(str(tmp_path), bucket="local",
+                               public_base_url="/api/v1/files")
+
+    async def _boom(key, data, *, content_type="application/octet-stream"):
+        raise RuntimeError("storage down")
+
+    storage.upload = _boom  # type: ignore[method-assign]
+    monkeypatch.setattr(upload_service, "get_storage", lambda: storage)
+    seed = seeded_family
+
+    with pytest.raises(RuntimeError):
+        await upload_service.save_upload(
+            db_session, family_id=seed.family.id, uploader=seed.parent,
+            content=b"x", content_type="image/jpeg", purpose=UploadPurpose.TASK_PROOF,
+            filename="p.jpg", task_id=seed.task_instance.id,
+        )
+
+    keys = (
+        await db_session.execute(
+            select(SysUpload.object_key).where(SysUpload.family_id == seed.family.id)
+        )
+    ).scalars().all()
+    assert keys == [], f"占位行应被清理,残留: {keys}"
