@@ -68,6 +68,12 @@ const enUS = {
     season: 'Season',
     logout: 'Sign out',
   },
+  season: {
+    none: 'No Active Season',
+    noneTitle: 'No active season yet',
+    noneHintParent: 'Create and activate a season first to publish quests. Season management is coming soon.',
+    noneHintChild: 'Your parent has not started a season yet. Quests will appear once it begins!',
+  },
   questCard: {
     currentQuest: 'Current Quest',
     late: 'Late',
@@ -93,6 +99,7 @@ const enUS = {
     pendingReview: 'Pending Review',
     noPendingReview: 'No quests waiting for review.',
     availableQuestsBoard: 'Available Quests Board',
+    deleteConfirm: 'Delete this quest? This cannot be undone.',
   },
   child: {
     levelUp: 'LEVEL UP!',
@@ -178,6 +185,7 @@ const enUS = {
     hint: 'Upload a photo to prove your deed, adventurer!',
     proofAlt: 'Proof',
     takePhoto: 'Tap to take photo',
+    submitting: 'Uploading & submitting...',
   },
   abandonQuest: {
     title: 'Abandon Current Quest?',
@@ -220,6 +228,20 @@ const enUS = {
     configSavedMsg: 'Time coin settings updated.',
     seasonUpdatedTitle: 'Season Updated',
     seasonUpdatedMsg: 'Theme changed to {{theme}}',
+    actionFailedMsg: 'Action failed, please try again later.',
+    loadFailedTitle: 'Load Failed',
+    taskCreatedTitle: 'Quest Published',
+    taskCreatedMsg: 'The new quest is now available.',
+    taskCreateFailedTitle: 'Publish Failed',
+    startFailedTitle: 'Accept Failed',
+    abandonFailedTitle: 'Abandon Failed',
+    taskSubmittedTitle: 'Submitted',
+    taskSubmittedMsg: 'The quest is now pending review.',
+    submitFailedTitle: 'Submit Failed',
+    approveSuccessTitle: 'Review Complete',
+    approveSuccessMsg: 'Rated {{rating}} stars. XP and coins are settled by the backend.',
+    approveFailedTitle: 'Review Failed',
+    deleteFailedTitle: 'Delete Failed',
   },
 };
 

@@ -65,6 +65,8 @@ export interface TimeConfig {
 
 export interface User {
   id: string;
+  /** 冒险者扩展档案 ID（任务 target/assignee 用它，不是账号 id；docs/09 A4）。父母为 null */
+  childId: string | null;
   name: string;
   role: UserRole;
   level: number;
@@ -79,26 +81,5 @@ export interface User {
   dailyAbandonCount: number;
 }
 
-export interface Task {
-  id: string;
-  seasonId: string; // Link to specific season for history
-  title: string;
-  description: string; // Can be "lore" text
-  xpReward: number;
-  type: TaskType;
-  status: TaskStatus;
-  deadline?: string; // ISO string for strict deadline
-  requiredStartTime?: string; // "HH:MM" format
-  proofImage?: string; // Base64 data URI
-  rating?: number; // 1-5 stars given by parent
-  assigneeId?: string; // If null, anyone can pick it up
-  loreSnippet?: string; // AI generated flavor text
-  
-  // Logic Fields
-  startedAt?: string; // ISO String, set when status becomes IN_PROGRESS
-  reminderMessage?: string; // "The mist is closing in! (15 mins left)"
-  reminderMinutesBefore?: number; // Default 15
-  
-  // Coin Logic
-  timeDeposit?: number; // Cost to accept task (default 10?)
-}
+// Task 视图类型已删除（阶段③）：任务统一使用后端 TaskRead（services/api，snake_case 直传，
+// docs/09 §1.6 A1-A6 / docs/10 §4 阶段③）。前端不再维护本地任务状态机。

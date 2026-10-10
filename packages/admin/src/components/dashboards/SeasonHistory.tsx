@@ -1,12 +1,13 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Season, Task, TaskStatus } from '../../types';
+import { Season } from '../../types';
+import type { TaskRead } from '../../services/api';
 import { THEMES } from '../../constants/themes';
 import { Calendar, Trophy, CheckCircle2, ScrollText } from 'lucide-react';
 
 interface SeasonHistoryProps {
   historySeasons: Season[];
-  allTasks: Task[];
+  allTasks: TaskRead[];
   onBack: () => void;
 }
 
@@ -30,11 +31,11 @@ const SeasonHistory: React.FC<SeasonHistoryProps> = ({ historySeasons, allTasks,
         <div className="grid grid-cols-1 gap-6">
           {historySeasons.map(season => {
             const theme = THEMES[season.themeId] || THEMES.DEFAULT;
-            const seasonTasks = allTasks.filter(t => t.seasonId === season.id);
-            const completedCount = seasonTasks.filter(t => t.status === TaskStatus.COMPLETED).length;
+            const seasonTasks = allTasks.filter(t => t.season_id === season.id);
+            const completedCount = seasonTasks.filter(t => t.status === 'COMPLETED').length;
             const totalXp = seasonTasks
-                .filter(t => t.status === TaskStatus.COMPLETED)
-                .reduce((sum, t) => sum + t.xpReward, 0);
+                .filter(t => t.status === 'COMPLETED')
+                .reduce((sum, t) => sum + t.xp_reward, 0);
 
             return (
               <div key={season.id} className="bg-white rounded-xl shadow-md overflow-hidden border border-slate-200 flex flex-col md:flex-row">

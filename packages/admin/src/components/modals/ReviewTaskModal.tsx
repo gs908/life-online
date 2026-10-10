@@ -1,38 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Task } from '../../types';
-import { evaluateTaskProof } from '../../services/geminiService';
-import { Star, Sparkles } from 'lucide-react';
+import type { TaskRead } from '../../services/api';
+import { Star } from 'lucide-react';
 
 interface ReviewTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
-  task: Task | undefined;
+  task: TaskRead | undefined;
   onApprove: (taskId: string, rating: number, comment: string) => void;
+  approving?: boolean;
 }
 
-const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task, onApprove }) => {
+/**
+ * 审核弹窗（阶段③）：证明图来自 TaskRead.proof_url（上传链路阶段⑤完善展示细节）。
+ * AI 辅助评分随阶段⑥切到 POST /scn/ai/evaluate-proof；当前为人工星级 + 评语。
+ */
+const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task, onApprove, approving }) => {
   const { t } = useTranslation();
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
-  const [isEvaluating, setIsEvaluating] = useState(false);
 
-  // Reset and auto-evaluate when modal opens
   useEffect(() => {
     if (isOpen && task) {
       setReviewRating(5);
       setReviewComment('');
-      
-      if (task.proofImage) {
-        setIsEvaluating(true);
-        evaluateTaskProof(task.title, task.proofImage).then(res => {
-          setIsEvaluating(false);
-          if (res) {
-            setReviewRating(res.rating);
-            setReviewComment(res.comment);
-          }
-        });
-      }
     }
   }, [isOpen, task]);
 
@@ -46,19 +37,12 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
 
           {/* Proof Display */}
           <div className="bg-slate-100 rounded-lg p-2 mb-4 flex justify-center">
-            {task.proofImage ? (
-              <img src={task.proofImage} className="max-h-64 object-contain rounded" alt={t('reviewTask.proofAlt')} />
+            {task.proof_url ? (
+              <img src={task.proof_url} className="max-h-64 object-contain rounded" alt={t('reviewTask.proofAlt')} />
             ) : (
               <div className="p-8 text-slate-400 italic">{t('reviewTask.noImage')}</div>
             )}
           </div>
-
-          {/* AI Evaluation */}
-          {isEvaluating && (
-            <div className="bg-purple-50 p-3 rounded mb-4 text-purple-700 text-xs flex items-center gap-2 animate-pulse">
-              <Sparkles size={14} /> {t('reviewTask.evaluating')}
-            </div>
-          )}
 
           <div className="space-y-4">
             <div>
@@ -80,11 +64,12 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
         </div>
         <div className="p-4 bg-slate-50 border-t flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold">{t('common.close')}</button>
-          <button 
-            onClick={() => onApprove(task.id, reviewRating, reviewComment)} 
-            className="px-6 py-2 bg-yellow-500 text-white font-bold rounded shadow hover:bg-yellow-600"
+          <button
+            onClick={() => onApprove(task.id, reviewRating, reviewComment)}
+            disabled={approving}
+            className="px-6 py-2 bg-yellow-500 text-white font-bold rounded shadow hover:bg-yellow-600 disabled:opacity-50"
           >
-            {t('reviewTask.approve')}
+            {approving ? t('common.loading') : t('reviewTask.approve')}
           </button>
         </div>
       </div>

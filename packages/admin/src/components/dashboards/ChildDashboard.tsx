@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Task, UserRole, SeasonTheme, TaskType } from '../../types';
+import { User, UserRole, SeasonTheme } from '../../types';
+import type { TaskRead } from '../../services/api';
 import XPBar from '../XPBar';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
@@ -10,11 +11,11 @@ import { Sparkles, BrainCircuit, Trophy, Star, Coins, ScrollText, ChevronLeft, C
 interface ChildDashboardProps {
   childUser: User;
   currentTheme: SeasonTheme;
-  tasks: Task[];
-  activeQuest: Task | undefined;
-  availableTasks: Task[];
-  completedTasks: Task[];
-  pendingTasks: Task[];
+  tasks: TaskRead[];
+  activeQuest: TaskRead | undefined;
+  availableTasks: TaskRead[];
+  completedTasks: TaskRead[];
+  pendingTasks: TaskRead[];
   onAcceptAttempt: (id: string) => void;
   onSubmit: (id: string) => void;
   onAbandonCurrent: (id: string) => void;
@@ -35,8 +36,8 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
   const [showLevelUp, setShowLevelUp] = useState(false);
   const prevLevelRef = useRef(childUser.level);
 
-  // Quest Book State
-  const categories = ['ALL', ...Object.values(TaskType)];
+  // Quest Book State（任务类型标签；数据源 TaskRead.type 为字符串联合）
+  const categories = ['ALL', 'DAILY', 'CHALLENGE', 'CHAIN', 'TIMED', 'COOP'];
   const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const activeCategory = categories[activeCategoryIndex];
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Task, Season, UserRole, RedemptionRecord } from '../../types';
+import { User, UserRole, RedemptionRecord } from '../../types';
+import type { TaskRead, SeasonRead } from '../../services/api';
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
@@ -8,12 +9,12 @@ import { History, Plus, Sparkles, Clock, Palette, Archive } from 'lucide-react';
 
 interface ParentDashboardProps {
   childUser: User;
-  tasks: Task[];
-  activeQuest: Task | undefined;
-  availableTasks: Task[];
-  pendingTasks: Task[];
+  tasks: TaskRead[];
+  activeQuest: TaskRead | undefined;
+  availableTasks: TaskRead[];
+  pendingTasks: TaskRead[];
   redemptionHistory: RedemptionRecord[];
-  activeSeason: Season;
+  activeSeason: SeasonRead;
   onOpenSeasonConfig: () => void;
   onViewHistory: () => void;
   onOpenAddModal: () => void;
@@ -49,7 +50,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
           <h2 className="text-xl font-bold text-slate-800">{t('parent.management')}</h2>
           <div className="flex items-center gap-2 mt-1">
              <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{activeSeason.name}</span>
-             <span className="text-xs text-slate-400 truncate max-w-[200px]">"{activeSeason.narrativeContext}"</span>
+             <span className="text-xs text-slate-400 truncate max-w-[200px]">"{activeSeason.narrative_context}"</span>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">

@@ -1,9 +1,13 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Task, Season, UserRole, TaskType, TaskStatus, RedemptionRecord, TimeConfig } from './types';
+import { UserRole, TaskType, TaskStatus, Season, RedemptionRecord, TimeConfig } from './types';
 import { THEMES } from './constants/themes';
-import { Bell } from 'lucide-react';
+import { Bell, CalendarDays } from 'lucide-react';
+
+// API Client（阶段③：任务链路接入；赛季仅读取激活赛季上下文，CRUD 属阶段②）
+import { api, ApiError } from './services/api';
+import type { TaskCreate, TaskRead, SeasonRead } from './services/api';
 
 // Auth（阶段①：登录态与家庭上下文）
 import { useAuth } from './auth/AuthContext';
@@ -24,69 +28,35 @@ import AbandonQuestModal from './components/modals/AbandonQuestModal';
 import TimeConfigModal from './components/modals/TimeConfigModal';
 import SeasonConfigModal from './components/modals/SeasonConfigModal';
 
-// --- MOCK DATA ---
+// --- MOCK DATA（阶段③残留：时间币/特权/赛季编辑属阶段②④，随对应阶段下线） ---
 const DEFAULT_TIME_CONFIG: TimeConfig = {
     defaultDailyAllowance: 100,
     exceptions: { 0: 200, 6: 200 } // Weekend bonus
 };
 
-const DEFAULT_SEASON: Season = {
-  id: 'season_1',
-  name: 'Winter Semester 2024',
-  themeId: 'FROSTBOUND',
-  narrativeContext: 'The Frost Giants are encroaching on the village. We must strengthen our defenses and gather supplies before the Long Night.',
-  startDate: new Date().toISOString(),
-  isActive: true
-};
-
-const INITIAL_TASKS: Task[] = [
-  {
-    id: 't1',
-    title: 'Fortify the Bedding',
-    description: 'Make the bed neatly.',
-    loreSnippet: 'A well-kept barracks boosts morale against the cold.',
-    xpReward: 50,
-    type: TaskType.DAILY,
-    status: TaskStatus.AVAILABLE,
-    seasonId: 'season_1',
-    timeDeposit: 10
-  },
-  {
-    id: 't2',
-    title: 'Decipher the Runes (Math)',
-    description: 'Complete math worksheet.',
-    loreSnippet: 'Calculate the trajectory of the ice catapults.',
-    xpReward: 150,
-    type: TaskType.CHALLENGE,
-    status: TaskStatus.AVAILABLE,
-    seasonId: 'season_1',
-    timeDeposit: 20
-  },
-  {
-    id: 't3',
-    title: 'Bardic Practice',
-    description: '30 mins of piano.',
-    xpReward: 100,
-    type: TaskType.TIMED,
-    requiredStartTime: '18:00',
-    reminderMessage: "The Ice Queen demands a song before sunset!",
-    reminderMinutesBefore: 30,
-    status: TaskStatus.AVAILABLE,
-    seasonId: 'season_1',
-    timeDeposit: 30
-  }
-];
+/** SeasonRead → 旧视图 Season（SeasonConfigModal 仍消费旧类型，阶段②接入真实 CRUD 后移除本适配） */
+function mapSeasonRead(s: SeasonRead): Season {
+  return {
+    id: s.id,
+    name: s.name,
+    themeId: s.theme_id,
+    narrativeContext: s.narrative_context,
+    startDate: s.start_date,
+    endDate: s.end_date ?? undefined,
+    isActive: s.is_active,
+  };
+}
 
 const App: React.FC = () => {
   const { t } = useTranslation();
   // --- AUTH（阶段①：真实登录态，Mock 用户已删除） ---
-  const { status, user, family, logout } = useAuth();
+  const { status, user, family, logout, refreshUser } = useAuth();
 
   const currentUser = useMemo(() => (user ? mapUserRead(user) : null), [user]);
 
   // 冒险者视角用户：ADVENTURER 即本人；GUILD_MASTER 取家庭中的第一个冒险者
   // （家庭暂无冒险者时回退为本人，待任务接入阶段补"邀请孩子"引导）
-  const childUserFromAuth = useMemo(() => {
+  const childUser = useMemo(() => {
     if (!currentUser) return null;
     if (currentUser.role === UserRole.CHILD) return currentUser;
     const firstAdventurer = family?.adventurers?.[0];
@@ -94,19 +64,14 @@ const App: React.FC = () => {
   }, [currentUser, family]);
 
   // --- STATE ---
-  // 本地镜像：任务全链路（阶段③）接入后端后，以下本地增减逻辑整体退役
-  const [childUser, setChildUser] = useState<User | null>(childUserFromAuth);
-
-  useEffect(() => {
-    setChildUser(childUserFromAuth);
-  }, [childUserFromAuth]);
-
-  // Season State
-  const [activeSeason, setActiveSeason] = useState<Season>(DEFAULT_SEASON);
-  const [seasonHistory, setSeasonHistory] = useState<Season[]>([]);
+  // 赛季上下文（阶段②仅读取激活赛季；赛季 CRUD 接入后由 SeasonConfigModal 驱动）
+  const [activeSeason, setActiveSeason] = useState<SeasonRead | null>(null);
+  const [seasonHistory] = useState<Season[]>([]);
   const [showSeasonHistory, setShowSeasonHistory] = useState(false);
 
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  // 任务链路（阶段③）：请求 + 响应驱动，本地任务状态机已退役
+  const [tasks, setTasks] = useState<TaskRead[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
   const [redemptionHistory, setRedemptionHistory] = useState<RedemptionRecord[]>([]);
   const [timeConfig, setTimeConfig] = useState<TimeConfig>(DEFAULT_TIME_CONFIG);
 
@@ -122,66 +87,100 @@ const App: React.FC = () => {
   const [pendingQuestId, setPendingQuestId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ title: string, msg: string } | null>(null);
 
-  // --- EFFECT: TIMED TASK ALERTS ---
+  const toast = useCallback((title: string, msg: string, ttl = 4000) => {
+    setToastMessage({ title, msg });
+    setTimeout(() => setToastMessage(null), ttl);
+  }, []);
+
+  /** 后端错误统一呈现：msg 为后端人话文案（docs/10 §2.4），网络错误兜底 */
+  const showApiError = useCallback((error: unknown, title: string) => {
+    if (error instanceof ApiError) {
+      toast(title, error.message);
+    } else {
+      toast(title, t('toast.actionFailedMsg'));
+    }
+  }, [toast, t]);
+
+  // --- 数据加载：激活赛季 + 任务列表（响应驱动） ---
+  const loadBoard = useCallback(async () => {
+    setTasksLoading(true);
+    try {
+      const season = await api.seasons.getActiveSeason();
+      setActiveSeason(season);
+      if (!season) {
+        setTasks([]);
+        return;
+      }
+      const result = await api.tasks.listTasks({ season_id: season.id, page_size: 200 });
+      setTasks(result.items);
+    } catch (error) {
+      showApiError(error, t('toast.loadFailedTitle'));
+    } finally {
+      setTasksLoading(false);
+    }
+  }, [showApiError, t]);
+
+  useEffect(() => {
+    if (status === 'authenticated') {
+      loadBoard();
+    }
+  }, [status, loadBoard]);
+
+  // --- EFFECT: TIMED TASK ALERTS（数据源改 TaskRead；本地倍率/押金逻辑已删） ---
   useEffect(() => {
     const checkTimers = setInterval(() => {
       const now = new Date();
       tasks.forEach(task => {
-        if (task.type === TaskType.TIMED && task.requiredStartTime && task.status === TaskStatus.AVAILABLE) {
-          const [h, m] = task.requiredStartTime.split(':').map(Number);
+        if (task.type === TaskType.TIMED && task.required_start_time && task.status === TaskStatus.AVAILABLE) {
+          const [h, m] = task.required_start_time.split(':').map(Number);
           const deadlineDate = new Date();
           deadlineDate.setHours(h, m, 0, 0);
 
           const diffMs = deadlineDate.getTime() - now.getTime();
           const diffMins = Math.round(diffMs / 60000);
-          const remindMins = task.reminderMinutesBefore || 15;
+          const remindMins = task.reminder_minutes_before || 15;
 
           if (diffMins === remindMins) {
-            setToastMessage({
-              title: t('toast.questClosingTitle'),
-              msg: task.reminderMessage || t('toast.questClosingMsg', { minutes: remindMins, title: task.title })
-            });
-            setTimeout(() => setToastMessage(null), 8000);
+            toast(
+              t('toast.questClosingTitle'),
+              task.reminder_message || t('toast.questClosingMsg', { minutes: remindMins, title: task.title }),
+              8000
+            );
           }
         }
       });
     }, 60000);
     return () => clearInterval(checkTimers);
-  }, [tasks, t]);
+  }, [tasks, t, toast]);
 
-  // --- HANDLERS ---
+  // --- HANDLERS（全部走后端；押金/罚币/XP 由后端处理，变更后重拉列表与用户） ---
 
-  const handleAddTask = (newTask: Task) => {
-    setTasks([...tasks, newTask]);
-    setIsAddModalOpen(false);
+  const handleAddTask = async (payload: TaskCreate) => {
+    try {
+      await api.tasks.createTask(payload);
+      setIsAddModalOpen(false);
+      toast(t('toast.taskCreatedTitle'), t('toast.taskCreatedMsg'));
+      await loadBoard();
+    } catch (error) {
+      // 422 validation_error 等：表单保留，toast 提示后端字段错误
+      showApiError(error, t('toast.taskCreateFailedTitle'));
+    }
   };
 
-  const startQuest = (id: string) => {
-    const task = tasks.find(t => t.id === id);
-    if (!task) return;
-
-    // DEPOSIT CHECK
-    const deposit = task.timeDeposit || 10;
-    if (childUser.timeCoins < deposit) {
-        setToastMessage({ title: t('toast.insufficientCoinsTitle'), msg: t('toast.insufficientCoinsMsg', { deposit }) });
-        setTimeout(() => setToastMessage(null), 4000);
-        return;
+  const startQuest = async (id: string) => {
+    try {
+      await api.tasks.startTask(id); // 后端扣押金；余额不足时抛 validation_error
+      await Promise.all([loadBoard(), refreshUser()]);
+    } catch (error) {
+      showApiError(error, t('toast.startFailedTitle'));
     }
-
-    // Deduct Deposit
-    setChildUser(prev => ({ ...prev, timeCoins: prev.timeCoins - deposit }));
-
-    setTasks(prev => prev.map(t =>
-      t.id === id
-        ? { ...t, status: TaskStatus.IN_PROGRESS, assigneeId: childUser.id, startedAt: new Date().toISOString() }
-        : t
-    ));
   };
 
   const handleAcceptAttempt = (id: string) => {
-    const activeQuest = tasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assigneeId === childUser.id);
+    const activeQuest = tasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childUser?.childId);
     if (activeQuest) {
       if (activeQuest.id === id) return;
+      // UI 门禁：同一时间一个任务（后端不限制，纯前端体验约束）
       setPendingQuestId(id);
       setSelectedTaskId(activeQuest.id);
       setIsAbandonModalOpen(true);
@@ -190,46 +189,32 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAbandonQuest = () => {
-    if (!selectedTaskId) return;
+  const [abandoning, setAbandoning] = useState(false);
 
-    const task = tasks.find(t => t.id === selectedTaskId);
-    if (task) {
-        // Refund Logic
-        const deposit = task.timeDeposit || 10;
-        let refund = deposit;
-        
-        // Penalty if abandoned > 3 times
-        if (childUser.dailyAbandonCount >= 3) {
-            refund = Math.floor(deposit * 0.6); // 40% penalty, so 60% refund
-            setToastMessage({ title: t('toast.penaltyTitle'), msg: t('toast.penaltyMsg', { amount: deposit - refund }) });
-            setTimeout(() => setToastMessage(null), 4000);
-        } else {
-            setToastMessage({ title: t('toast.depositReturnedTitle'), msg: t('toast.depositReturnedMsg', { deposit }) });
-            setTimeout(() => setToastMessage(null), 3000);
-        }
-
-        setChildUser(prev => ({ 
-            ...prev, 
-            timeCoins: prev.timeCoins + refund,
-            dailyAbandonCount: prev.dailyAbandonCount + 1 
-        }));
+  const handleAbandonQuest = async () => {
+    if (!selectedTaskId || abandoning) return;
+    setAbandoning(true);
+    try {
+      const task = await api.tasks.abandonTask(selectedTaskId); // 后端罚币/退款
+      // coin_delta = refund - deposit（后端语义）：负数=被扣罚金，0=全额退还
+      if (task.coin_delta < 0) {
+        toast(t('toast.penaltyTitle'), t('toast.penaltyMsg', { amount: -task.coin_delta }));
+      } else {
+        toast(t('toast.depositReturnedTitle'), t('toast.depositReturnedMsg', { deposit: task.time_deposit }));
+      }
+      await Promise.all([loadBoard(), refreshUser()]);
+      if (pendingQuestId) {
+        const next = pendingQuestId;
+        setPendingQuestId(null);
+        await startQuest(next);
+      }
+    } catch (error) {
+      showApiError(error, t('toast.abandonFailedTitle'));
+    } finally {
+      setAbandoning(false);
+      setIsAbandonModalOpen(false);
+      setSelectedTaskId(null);
     }
-
-    setTasks(prev => prev.map(t =>
-      t.id === selectedTaskId
-        ? { ...t, status: TaskStatus.AVAILABLE, assigneeId: undefined, startedAt: undefined }
-        : t
-    ));
-
-    if (pendingQuestId) {
-       // Ideally we auto-trigger startQuest(pendingQuestId) but state updates are async.
-       // For UX simplicity, we just clear pending and let user select new quest.
-       setPendingQuestId(null);
-    }
-
-    setIsAbandonModalOpen(false);
-    setSelectedTaskId(null);
   };
 
   const handleAbandonCurrent = (id: string) => {
@@ -238,58 +223,41 @@ const App: React.FC = () => {
     setIsAbandonModalOpen(true);
   };
 
-  const handleSubmitTask = (proofImage: string | null) => {
-    if (!selectedTaskId) return;
-    setTasks(prev => prev.map(t => t.id === selectedTaskId ? { ...t, status: TaskStatus.PENDING_REVIEW, proofImage: proofImage || undefined } : t));
-    setIsSubmitModalOpen(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  /** 提交流：先 POST /sys/uploads(task_proof) 拿 object_key，再 submit（docs/10 §4 阶段③） */
+  const handleSubmitTask = async (file: File) => {
+    if (!selectedTaskId || submitting) return;
+    setSubmitting(true);
+    try {
+      const uploaded = await api.uploads.uploadFile(file, 'task_proof');
+      await api.tasks.submitTask(selectedTaskId, { proof_object_key: uploaded.object_key });
+      setIsSubmitModalOpen(false);
+      setSelectedTaskId(null);
+      toast(t('toast.taskSubmittedTitle'), t('toast.taskSubmittedMsg'));
+      await loadBoard();
+    } catch (error) {
+      showApiError(error, t('toast.submitFailedTitle'));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleApproveTask = (taskId: string, rating: number, comment: string) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
+  const [approving, setApproving] = useState(false);
 
-    // REFUND DEPOSIT
-    const deposit = task.timeDeposit || 10;
-    setChildUser(prev => ({ ...prev, timeCoins: prev.timeCoins + deposit }));
-
-    // XP Logic
-    let multiplier = 1;
-    if (rating === 5) multiplier *= 1.2;
-    else if (rating === 4) multiplier *= 1.1;
-    else if (rating < 3) multiplier *= 0.8;
-
-    if (task.requiredStartTime) {
-      const [h, m] = task.requiredStartTime.split(':').map(Number);
-      const deadline = new Date();
-      deadline.setHours(h, m, 0, 0);
-      if (new Date() > deadline) multiplier *= 0.8;
+  const handleApproveTask = async (taskId: string, rating: number, comment: string) => {
+    if (approving) return;
+    setApproving(true);
+    try {
+      await api.tasks.approveTask(taskId, { rating, comment: comment || undefined }); // 后端发 XP、退/扣币
+      setIsReviewModalOpen(false);
+      toast(t('toast.approveSuccessTitle'), t('toast.approveSuccessMsg', { rating }));
+      await Promise.all([loadBoard(), refreshUser()]);
+    } catch (error) {
+      showApiError(error, t('toast.approveFailedTitle'));
+    } finally {
+      setApproving(false);
     }
-
-    if (task.startedAt) {
-      const diffMins = (new Date().getTime() - new Date(task.startedAt).getTime()) / 60000;
-      if (diffMins < 60) multiplier *= 1.1;
-    }
-
-    const finalXP = Math.round(task.xpReward * multiplier);
-
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: TaskStatus.COMPLETED, rating } : t));
-
-    setChildUser(prev => {
-        const newXP = prev.xp + finalXP;
-        const xpNeeded = prev.level * 1000;
-        let newLevel = prev.level;
-        let remainingXP = newXP;
-    
-        if (remainingXP >= xpNeeded) {
-          newLevel += 1;
-          remainingXP = remainingXP - xpNeeded;
-          setToastMessage({ title: t('toast.levelUpTitle'), msg: t('toast.levelUpMsg', { name: prev.name, level: newLevel }) });
-          setTimeout(() => setToastMessage(null), 5000);
-        }
-        return { ...prev, xp: remainingXP, level: newLevel };
-    });
-
-    setIsReviewModalOpen(false);
   };
 
   const handleRecordUsage = (privilegeTitle: string) => {
@@ -297,35 +265,46 @@ const App: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9),
       privilegeTitle,
       date: new Date().toISOString(),
-      user: childUser.name
+      user: childUser?.name ?? ''
     };
     setRedemptionHistory(prev => [record, ...prev]);
-    setToastMessage({ title: t('toast.usageRecordedTitle'), msg: t('toast.usageRecordedMsg', { title: privilegeTitle }) });
-    setTimeout(() => setToastMessage(null), 3000);
+    toast(t('toast.usageRecordedTitle'), t('toast.usageRecordedMsg', { title: privilegeTitle }), 3000);
   };
 
-  const handleDeleteTask = (id: string) => {
-    setTasks(prev => prev.filter(t => t.id !== id));
+  const handleDeleteTask = async (id: string) => {
+    if (!window.confirm(t('parent.deleteConfirm'))) return;
+    try {
+      await api.tasks.deleteTask(id);
+      await loadBoard();
+    } catch (error) {
+      showApiError(error, t('toast.deleteFailedTitle'));
+    }
   };
 
   const handleTimeConfigSave = (newConfig: TimeConfig) => {
       setTimeConfig(newConfig);
-      setToastMessage({ title: t('toast.configSavedTitle'), msg: t('toast.configSavedMsg') });
-      setTimeout(() => setToastMessage(null), 3000);
+      toast(t('toast.configSavedTitle'), t('toast.configSavedMsg'), 3000);
   };
 
-  const handleSeasonSave = (newSeason: Season) => {
-    setActiveSeason(newSeason);
-    setToastMessage({ title: t('toast.seasonUpdatedTitle'), msg: t('toast.seasonUpdatedMsg', { theme: THEMES[newSeason.themeId].name }) });
-    setTimeout(() => setToastMessage(null), 3000);
+  // 阶段②接入口：赛季编辑仍在 SeasonConfigModal（本阶段仅保存后重拉真实激活赛季）
+  const handleSeasonSave = async () => {
+    try {
+      const season = await api.seasons.getActiveSeason();
+      setActiveSeason(season);
+      await loadBoard();
+      if (season) {
+        toast(t('toast.seasonUpdatedTitle'), t('toast.seasonUpdatedMsg', { theme: THEMES[season.theme_id]?.name ?? season.theme_id }));
+      }
+    } catch (error) {
+      showApiError(error, t('toast.loadFailedTitle'));
+    }
   };
 
-  // --- HELPER DATA FOR RENDER ---
-  const filteredTasks = tasks.filter(t => t.seasonId === activeSeason.id);
-  const activeQuest = filteredTasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assigneeId === childUser?.id);
-  const availableTasks = filteredTasks.filter(t => t.status === TaskStatus.AVAILABLE);
-  const completedTasks = filteredTasks.filter(t => t.status === TaskStatus.COMPLETED);
-  const pendingTasks = filteredTasks.filter(t => t.status === TaskStatus.PENDING_REVIEW);
+  // --- HELPER DATA FOR RENDER（列表已按激活赛季服务端过滤） ---
+  const activeQuest = tasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childUser?.childId);
+  const availableTasks = tasks.filter(t => t.status === TaskStatus.AVAILABLE);
+  const completedTasks = tasks.filter(t => t.status === TaskStatus.COMPLETED);
+  const pendingTasks = tasks.filter(t => t.status === TaskStatus.PENDING_REVIEW);
 
   // 登录门卫：loading → 启动屏；anonymous → 登录页（401 刷新失败也会广播回这里）
   if (status === 'loading') {
@@ -338,6 +317,31 @@ const App: React.FC = () => {
   if (status === 'anonymous' || !currentUser || !childUser) {
     return <LoginPage />;
   }
+
+  // 无激活赛季：任务链路依赖赛季上下文，给出引导（赛季 CRUD 属阶段②）
+  if (!activeSeason) {
+    const isParent = currentUser.role === UserRole.PARENT;
+    return (
+      <div className="flex flex-col h-full font-sans relative">
+        <Header
+          currentSeason={t('season.none')}
+          currentUser={currentUser}
+          onLogout={logout}
+        />
+        <main className="flex-1 overflow-y-auto w-full bg-slate-100 flex items-center justify-center p-6">
+          <div className="bg-white rounded-2xl shadow-md border border-slate-200 p-10 max-w-md text-center">
+            <CalendarDays className="mx-auto text-slate-300 mb-4" size={48} />
+            <h2 className="text-xl font-bold text-slate-800 mb-2">{t('season.noneTitle')}</h2>
+            <p className="text-sm text-slate-500">
+              {isParent ? t('season.noneHintParent') : t('season.noneHintChild')}
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  const currentTheme = THEMES[activeSeason.theme_id] || THEMES.DEFAULT;
 
   return (
     <div className="flex flex-col h-full font-sans relative">
@@ -357,19 +361,23 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* HEADER（真实用户；角色切换已删除，换角色 = 登出后以另一角色重新登录） */}
+      {/* HEADER（真实用户 + 真实激活赛季） */}
       <Header
-        currentSeason={activeSeason.name as any} // Cast for visual compatibility or update Header later
+        currentSeason={activeSeason.name}
         currentUser={currentUser}
         onLogout={logout}
       />
 
       <main className="flex-1 overflow-y-auto w-full">
-        {currentUser.role === UserRole.CHILD ? (
+        {tasksLoading ? (
+          <div className="h-full flex items-center justify-center" role="status" aria-live="polite">
+            <div className="text-slate-400 text-sm animate-pulse">{t('common.loading')}</div>
+          </div>
+        ) : currentUser.role === UserRole.CHILD ? (
           <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
              <ChildDashboard
                 childUser={childUser}
-                currentTheme={THEMES[activeSeason.themeId] || THEMES.DEFAULT}
+                currentTheme={currentTheme}
                 tasks={tasks}
                 activeQuest={activeQuest}
                 availableTasks={availableTasks}
@@ -384,15 +392,15 @@ const App: React.FC = () => {
           <div className="bg-slate-100 min-h-full p-4 md:p-6 lg:p-8">
              <div className="max-w-7xl mx-auto">
                  {showSeasonHistory ? (
-                     <SeasonHistory 
-                        historySeasons={seasonHistory} 
-                        allTasks={tasks} 
-                        onBack={() => setShowSeasonHistory(false)} 
+                     <SeasonHistory
+                        historySeasons={seasonHistory}
+                        allTasks={tasks}
+                        onBack={() => setShowSeasonHistory(false)}
                      />
                  ) : (
                      <ParentDashboard
                         childUser={childUser}
-                        tasks={filteredTasks}
+                        tasks={tasks}
                         activeQuest={activeQuest}
                         availableTasks={availableTasks}
                         pendingTasks={pendingTasks}
@@ -417,7 +425,7 @@ const App: React.FC = () => {
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         onAdd={handleAddTask}
-        narrativeContext={activeSeason.narrativeContext}
+        narrativeContext={activeSeason.narrative_context}
         seasonId={activeSeason.id}
         childLevel={childUser.level}
       />
@@ -426,6 +434,7 @@ const App: React.FC = () => {
         isOpen={isSubmitModalOpen}
         onClose={() => setIsSubmitModalOpen(false)}
         onSubmit={handleSubmitTask}
+        submitting={submitting}
       />
 
       <ReviewTaskModal
@@ -433,12 +442,14 @@ const App: React.FC = () => {
         onClose={() => setIsReviewModalOpen(false)}
         task={tasks.find(t => t.id === selectedTaskId)}
         onApprove={handleApproveTask}
+        approving={approving}
       />
 
       <AbandonQuestModal
         isOpen={isAbandonModalOpen}
         onClose={() => setIsAbandonModalOpen(false)}
         onConfirm={handleAbandonQuest}
+        confirming={abandoning}
         taskTitle={tasks.find(t => t.id === selectedTaskId)?.title}
       />
 
@@ -452,7 +463,7 @@ const App: React.FC = () => {
       <SeasonConfigModal
         isOpen={isSeasonConfigModalOpen}
         onClose={() => setIsSeasonConfigModalOpen(false)}
-        currentSeason={activeSeason}
+        currentSeason={mapSeasonRead(activeSeason)}
         onSave={handleSeasonSave}
       />
     </div>

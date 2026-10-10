@@ -1,10 +1,10 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Task, TaskStatus, TaskType } from '../types';
+import type { TaskRead } from '../services/api';
 import { PieChart, Star, Activity, CheckCircle2, Clock } from 'lucide-react';
 
 interface StatsBoardProps {
-  tasks: Task[];
+  tasks: TaskRead[];
 }
 
 const StatsBoard: React.FC<StatsBoardProps> = ({ tasks }) => {
@@ -12,10 +12,10 @@ const StatsBoard: React.FC<StatsBoardProps> = ({ tasks }) => {
 
   // --- CALCULATIONS ---
   const totalTasks = tasks.length;
-  const completedTasks = tasks.filter(t => t.status === TaskStatus.COMPLETED);
+  const completedTasks = tasks.filter(t => t.status === 'COMPLETED');
   const completedCount = completedTasks.length;
   const completionRate = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
-  
+
   // Star Distribution
   const starCounts = [0, 0, 0, 0, 0]; // 1 to 5 stars
   completedTasks.forEach(t => {
@@ -27,7 +27,8 @@ const StatsBoard: React.FC<StatsBoardProps> = ({ tasks }) => {
 
   // Task Type Breakdown
   const typeCounts: Record<string, number> = {};
-  Object.values(TaskType).forEach(type => typeCounts[type] = 0);
+  const taskTypes = ['DAILY', 'CHALLENGE', 'CHAIN', 'TIMED', 'COOP'];
+  taskTypes.forEach(type => typeCounts[type] = 0);
   tasks.forEach(t => {
       if (!typeCounts[t.type]) typeCounts[t.type] = 0;
       typeCounts[t.type]++;

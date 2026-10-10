@@ -68,6 +68,12 @@ const zhCN = {
     season: '赛季',
     logout: '退出登录',
   },
+  season: {
+    none: '暂无激活赛季',
+    noneTitle: '还没有激活的赛季',
+    noneHintParent: '请先创建并激活一个赛季，之后即可发布任务。赛季管理入口即将开放。',
+    noneHintChild: '家长还没有开启赛季，开启后就可以领取任务啦！',
+  },
   questCard: {
     currentQuest: '当前任务',
     late: '迟到',
@@ -93,6 +99,7 @@ const zhCN = {
     pendingReview: '待审核',
     noPendingReview: '暂无等待审核的任务。',
     availableQuestsBoard: '可领取任务板',
+    deleteConfirm: '确定删除该任务吗？此操作不可撤销。',
   },
   child: {
     levelUp: '升级了！',
@@ -178,6 +185,7 @@ const zhCN = {
     hint: '上传照片来证明你的壮举吧，冒险者！',
     proofAlt: '凭证',
     takePhoto: '点击拍照',
+    submitting: '上传提交中...',
   },
   abandonQuest: {
     title: '放弃当前任务？',
@@ -220,6 +228,20 @@ const zhCN = {
     configSavedMsg: '时间币设置已更新。',
     seasonUpdatedTitle: '赛季已更新',
     seasonUpdatedMsg: '主题已切换为 {{theme}}',
+    actionFailedMsg: '操作失败，请稍后重试。',
+    loadFailedTitle: '加载失败',
+    taskCreatedTitle: '任务已发布',
+    taskCreatedMsg: '新任务已进入可领取列表。',
+    taskCreateFailedTitle: '发布失败',
+    startFailedTitle: '接取失败',
+    abandonFailedTitle: '放弃失败',
+    taskSubmittedTitle: '提交成功',
+    taskSubmittedMsg: '任务已进入待审核状态。',
+    submitFailedTitle: '提交失败',
+    approveSuccessTitle: '审核完成',
+    approveSuccessMsg: '已给出 {{rating}} 星评价，XP 与时间币由后端结算。',
+    approveFailedTitle: '审核失败',
+    deleteFailedTitle: '删除失败',
   },
 };
 
