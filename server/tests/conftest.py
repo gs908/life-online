@@ -2,8 +2,9 @@
 Pytest 全局配置。
 
 - 在任何 `app.*` 模块被 import 之前,为必填的环境变量注入开发期占位默认值,
-  确保 `uv run pytest` 在没有真实 `.env` 的干净环境下也能跑通(现有 `Settings`
-  对 `jwt.secret` / `llm.*` 没有默认值,缺失会在 import `app.config` 时直接报错)。
+  确保 `uv run pytest` 在没有真实 `.env` 的干净环境下也能跑通(`jwt.secret`
+  没有默认值,缺失会在 import `app.config` 时直接报错;AI 段留空也能启动,
+  注入 AI_LLM_* 占位只是让依赖"LLM 已配置"的用例行为与旧版一致)。
   已经配置了真实 `.env` / 环境变量的开发者不受影响:这里只 `setdefault`,不覆盖。
 - 数据库相关 fixture 按"远程数据库优先"口径实现:先探测配置的数据库是否可达,
   不可达就跳过依赖 DB 的用例,不在本机拉起 Docker 做实机验证。
@@ -18,9 +19,9 @@ logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 _TEST_ENV_DEFAULTS = {
     "JWT_SECRET": "test-only-secret-do-not-use-in-prod",
-    "LLM_BASE_URL": "http://127.0.0.1:0/mock",
-    "LLM_API_KEY": "test-key",
-    "LLM_MODEL": "test-model",
+    "AI_LLM_BASE_URL": "http://127.0.0.1:0/mock",
+    "AI_LLM_API_KEY": "test-key",
+    "AI_LLM_MODEL": "test-model",
 }
 for _key, _value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(_key, _value)

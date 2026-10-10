@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Task } from '../../types';
-import { evaluateTaskProof } from '../../services/geminiService';
+import { api, ApiError } from '../../services/api';
 import { Star, Sparkles } from 'lucide-react';
 
 interface ReviewTaskModalProps {
@@ -16,25 +16,37 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
   const [isEvaluating, setIsEvaluating] = useState(false);
+  const [evaluateError, setEvaluateError] = useState<string | null>(null);
 
   // Reset and auto-evaluate when modal opens
   useEffect(() => {
     if (isOpen && task) {
       setReviewRating(5);
       setReviewComment('');
-      
+      setEvaluateError(null);
+
       if (task.proofImage) {
         setIsEvaluating(true);
-        evaluateTaskProof(task.title, task.proofImage).then(res => {
-          setIsEvaluating(false);
-          if (res) {
+        // AI 评分统一走后端 /scn/ai(后端当前为纯文本评分,结果仅供参考)
+        api.ai
+          .evaluateProof({ task_title: task.title, image_data_url: task.proofImage })
+          .then(res => {
             setReviewRating(res.rating);
             setReviewComment(res.comment);
-          }
-        });
+          })
+          .catch(err => {
+            // 评分只是辅助建议,失败不阻塞人工审核,保留默认 5 星
+            // 503(能力未启用/未配置)单独提示,与 AddTaskModal 口径一致
+            if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
+              setEvaluateError(t('addTask.aiNotConfigured'));
+            } else {
+              setEvaluateError(t('reviewTask.evaluateFailed'));
+            }
+          })
+          .finally(() => setIsEvaluating(false));
       }
     }
-  }, [isOpen, task]);
+  }, [isOpen, task, t]);
 
   if (!isOpen || !task) return null;
 
@@ -57,6 +69,11 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
           {isEvaluating && (
             <div className="bg-purple-50 p-3 rounded mb-4 text-purple-700 text-xs flex items-center gap-2 animate-pulse">
               <Sparkles size={14} /> {t('reviewTask.evaluating')}
+            </div>
+          )}
+          {evaluateError && (
+            <div className="bg-orange-50 p-3 rounded mb-4 text-orange-700 text-xs" data-testid="evaluate-error">
+              {evaluateError}
             </div>
           )}
 

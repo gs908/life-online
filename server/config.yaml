@@ -43,10 +43,43 @@ storage:
     public_base_url: ${env:LOCAL_STORAGE_PUBLIC_BASE_URL:/api/v1/files}
     bucket: ${env:LOCAL_STORAGE_BUCKET:local}
 
-llm:
-  base_url: ${env:LLM_BASE_URL}
-  api_key: ${env:LLM_API_KEY}
-  model: ${env:LLM_MODEL}
+# AI 能力配置:按能力三分(llm / image / video),各自独立指定 provider、模型与默认参数。
+# - API key 一律经环境变量引用,yaml 不落明文(见 .env.example 的 AI_* 占位)。
+# - 请求级参数可覆盖默认值:默认值收敛在这里,调用方(含前端经后端)只传业务参数。
+# - enabled=false 或未配置时,该能力的调用链路返回 503(沿用 DEV-9 降级约定)。
+# - 本期纯静态配置,修改后重启生效;管理端运行时读写暂不接入。
+ai:
+  llm:
+    enabled: true
+    provider: ${env:AI_LLM_PROVIDER:openai-compatible}
+    base_url: ${env:AI_LLM_BASE_URL:}
+    api_key: ${env:AI_LLM_API_KEY:}
+    model: ${env:AI_LLM_MODEL:}
+    default_params:
+      temperature: 0.7
+      max_tokens: 2048
+      timeout_s: 60
+      max_retries: 2
+  image:
+    enabled: false
+    provider: ${env:AI_IMAGE_PROVIDER:openai-compatible}
+    base_url: ${env:AI_IMAGE_BASE_URL:}
+    api_key: ${env:AI_IMAGE_API_KEY:}
+    model: ${env:AI_IMAGE_MODEL:}
+    default_params:
+      size: 1024x1024
+      quality: standard
+      n: 1
+      response_format: url
+  video:
+    enabled: false
+    provider: ${env:AI_VIDEO_PROVIDER:openai-compatible}
+    base_url: ${env:AI_VIDEO_BASE_URL:}
+    api_key: ${env:AI_VIDEO_API_KEY:}
+    model: ${env:AI_VIDEO_MODEL:}
+    default_params:
+      duration_s: 10
+      resolution: 720p
 
 jwt:
   secret: ${env:JWT_SECRET}
