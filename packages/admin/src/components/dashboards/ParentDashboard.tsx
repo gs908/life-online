@@ -1,10 +1,11 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Task, Season, UserRole, RedemptionRecord } from '../../types';
+import { User, Task, UserRole, RedemptionRecord, SeasonTheme } from '../../types';
+import type { SeasonRead } from '../../services/api';
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
-import { History, Plus, Sparkles, Clock, Palette, Archive } from 'lucide-react';
+import { History, Plus, Sparkles, Clock, Palette, Archive, Zap } from 'lucide-react';
 
 interface ParentDashboardProps {
   childUser: User;
@@ -13,7 +14,11 @@ interface ParentDashboardProps {
   availableTasks: Task[];
   pendingTasks: Task[];
   redemptionHistory: RedemptionRecord[];
-  activeSeason: Season;
+  /** 当前激活赛季；null = 家庭尚未创建/激活赛季（引导创建） */
+  activeSeason: SeasonRead | null;
+  currentTheme: SeasonTheme;
+  seasonError: string | null;
+  onRetrySeasons: () => void;
   onOpenSeasonConfig: () => void;
   onViewHistory: () => void;
   onOpenAddModal: () => void;
@@ -31,6 +36,9 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   pendingTasks,
   redemptionHistory,
   activeSeason,
+  currentTheme,
+  seasonError,
+  onRetrySeasons,
   onOpenSeasonConfig,
   onViewHistory,
   onOpenAddModal,
@@ -48,8 +56,16 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
         <div>
           <h2 className="text-xl font-bold text-slate-800">{t('parent.management')}</h2>
           <div className="flex items-center gap-2 mt-1">
-             <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{activeSeason.name}</span>
-             <span className="text-xs text-slate-400 truncate max-w-[200px]">"{activeSeason.narrativeContext}"</span>
+             {activeSeason ? (
+               <>
+                 <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{activeSeason.name}</span>
+                 {activeSeason.narrative_context && (
+                   <span className="text-xs text-slate-400 truncate max-w-[200px]">"{activeSeason.narrative_context}"</span>
+                 )}
+               </>
+             ) : (
+               <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded">{t('parent.noActiveSeason')}</span>
+             )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -79,6 +95,32 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* 赛季加载失败 / 无激活赛季引导（阶段②） */}
+      {seasonError ? (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <p className="text-sm font-bold text-red-700">{t('parent.seasonLoadFailed', { msg: seasonError })}</p>
+          <button onClick={onRetrySeasons} className="bg-red-600 text-white text-sm font-bold px-4 py-2 rounded-lg hover:bg-red-700 shrink-0">
+            {t('parent.retry')}
+          </button>
+        </div>
+      ) : !activeSeason ? (
+        <button
+          onClick={onOpenSeasonConfig}
+          className="w-full bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-dashed border-amber-300 rounded-xl p-5 flex items-center justify-between gap-4 hover:border-amber-400 transition-colors group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center text-xl">{currentTheme.icon}</div>
+            <div className="text-left">
+              <p className="font-bold text-slate-800 text-sm">{t('parent.noActiveSeasonTitle')}</p>
+              <p className="text-xs text-slate-500">{t('parent.noActiveSeasonHint')}</p>
+            </div>
+          </div>
+          <span className="bg-amber-500 text-white text-sm font-bold px-4 py-2 rounded-lg flex items-center gap-2 group-hover:bg-amber-600 shrink-0">
+            <Zap size={16} /> {t('parent.createSeasonNow')}
+          </span>
+        </button>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 

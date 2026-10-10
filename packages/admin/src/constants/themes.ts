@@ -1,5 +1,7 @@
 
-import { SeasonTheme, ThemeId } from '../types';
+// ThemeId 以 services/api/types.ts 为准（阶段②：契约枚举唯一事实来源）
+import type { ThemeId } from '../services/api/types';
+import type { SeasonTheme } from '../types';
 
 export const THEMES: Record<ThemeId, SeasonTheme> = {
   DEFAULT: {
