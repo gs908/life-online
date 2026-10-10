@@ -60,15 +60,18 @@ const CoinLogsModal: React.FC<CoinLogsModalProps> = ({ isOpen, onClose, family, 
     }
   }, [t]);
 
+  // 打开时仅复位表单默认值；分页/筛选在关闭时复位。
+  // 数据加载统一由下方数据 effect 单点负责，避免打开时双请求（review 🟡-1）。
   useEffect(() => {
-    if (!isOpen) return;
-    setPage(1);
-    setChildFilter('');
+    if (!isOpen) {
+      setPage(1);
+      setChildFilter('');
+      return;
+    }
     setAdjustChild(adventurers[0]?.child_id ?? '');
     setAdjustAmount('');
     setAdjustNote('');
     setAdjustError(null);
-    loadLogs(1, '');
     // adventurers 由 family 派生，重开时仅取首项做默认值，不随其变化重置表单
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
