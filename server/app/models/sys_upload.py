@@ -42,5 +42,5 @@ class SysUpload(Base, UUIDPrimaryKeyMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    family: Mapped["SysFamily"] = relationship(lazy="noload")
-    uploader: Mapped["SysAccount | None"] = relationship(lazy="noload")
+    family: Mapped["SysFamily"] = relationship(lazy="raise")
+    uploader: Mapped["SysAccount | None"] = relationship(lazy="raise")

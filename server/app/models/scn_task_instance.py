@@ -60,5 +60,7 @@ class ScnTaskInstance(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     time_deposit: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
 
-    season: Mapped["ScnSeason"] = relationship(back_populates="task_instances", lazy="noload")
-    template: Mapped["ScnTaskTemplate | None"] = relationship(lazy="noload")
+    season: Mapped["ScnSeason"] = relationship(back_populates="task_instances", lazy="raise")
+    # template 被 _to_read / approve_task 读取(含 create_task 提交后的 refresh 路径),
+    # 是 16 处 noload 中唯一确有加载需求的,按语义改 selectin 而非 raise。
+    template: Mapped["ScnTaskTemplate | None"] = relationship(lazy="selectin")

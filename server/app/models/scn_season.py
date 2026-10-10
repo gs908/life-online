@@ -36,7 +36,7 @@ class ScnSeason(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     end_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
-    family: Mapped["SysFamily"] = relationship(lazy="noload")
+    family: Mapped["SysFamily"] = relationship(lazy="raise")
     task_templates: Mapped[list["ScnTaskTemplate"]] = relationship(
         back_populates="season", cascade="all, delete-orphan", passive_deletes=True
     )

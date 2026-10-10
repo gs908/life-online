@@ -59,4 +59,4 @@ class SysChild(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     )
 
     account: Mapped["SysAccount"] = relationship(lazy="joined")
-    family: Mapped["SysFamily"] = relationship(lazy="noload")
+    family: Mapped["SysFamily"] = relationship(lazy="raise")
