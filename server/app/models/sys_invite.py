@@ -42,10 +42,10 @@ class SysInvite(Base, UUIDPrimaryKeyMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    family: Mapped["SysFamily"] = relationship(back_populates="invites", lazy="noload")
+    family: Mapped["SysFamily"] = relationship(back_populates="invites", lazy="raise")
     creator: Mapped["SysAccount | None"] = relationship(
-        foreign_keys=[created_by], lazy="noload"
+        foreign_keys=[created_by], lazy="raise"
     )
     consumer: Mapped["SysAccount | None"] = relationship(
-        foreign_keys=[used_by], lazy="noload"
+        foreign_keys=[used_by], lazy="raise"
     )

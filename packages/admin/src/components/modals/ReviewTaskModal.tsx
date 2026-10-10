@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { api, ApiError } from '../../services/api';
 import type { TaskRead } from '../../services/api';
-import { Star } from 'lucide-react';
+import { Star, Sparkles } from 'lucide-react';
 
 interface ReviewTaskModalProps {
   isOpen: boolean;
@@ -12,20 +13,54 @@ interface ReviewTaskModalProps {
 }
 
 /**
- * 审核弹窗（阶段③）：证明图来自 TaskRead.proof_url（上传链路阶段⑤完善展示细节）。
- * AI 辅助评分随阶段⑥切到 POST /scn/ai/evaluate-proof；当前为人工星级 + 评语。
+ * 审核弹窗（阶段③+⑥）：证明图来自 TaskRead.proof_url（上传链路阶段⑤完善展示细节）。
+ * AI 辅助评分走 POST /scn/ai/evaluate-proof（后端当前为纯文本评分,结果仅供参考）。
  */
 const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task, onApprove, approving }) => {
   const { t } = useTranslation();
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [evaluateError, setEvaluateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen && task) {
       setReviewRating(5);
       setReviewComment('');
+      setEvaluateError(null);
+
+      if (task.proof_url) {
+        setIsEvaluating(true);
+        // 阶段③后前端只持有 proof_url；evaluate-proof 契约要求 image_data_url，
+        // 取回图片转 data URL 再送评（评分只是辅助建议,失败不阻塞人工审核）
+        fetch(task.proof_url)
+          .then(res => res.blob())
+          .then(
+            blob =>
+              new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              })
+          )
+          .then(image_data_url => api.ai.evaluateProof({ task_title: task.title, image_data_url }))
+          .then(res => {
+            setReviewRating(res.rating);
+            setReviewComment(res.comment);
+          })
+          .catch(err => {
+            // 503(能力未启用/未配置)单独提示,与 AddTaskModal 口径一致
+            if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
+              setEvaluateError(t('addTask.aiNotConfigured'));
+            } else {
+              setEvaluateError(t('reviewTask.evaluateFailed'));
+            }
+          })
+          .finally(() => setIsEvaluating(false));
+      }
     }
-  }, [isOpen, task]);
+  }, [isOpen, task, t]);
 
   if (!isOpen || !task) return null;
 
@@ -43,6 +78,18 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
               <div className="p-8 text-slate-400 italic">{t('reviewTask.noImage')}</div>
             )}
           </div>
+
+          {/* AI Evaluation */}
+          {isEvaluating && (
+            <div className="bg-purple-50 p-3 rounded mb-4 text-purple-700 text-xs flex items-center gap-2 animate-pulse">
+              <Sparkles size={14} /> {t('reviewTask.evaluating')}
+            </div>
+          )}
+          {evaluateError && (
+            <div className="bg-orange-50 p-3 rounded mb-4 text-orange-700 text-xs" data-testid="evaluate-error">
+              {evaluateError}
+            </div>
+          )}
 
           <div className="space-y-4">
             <div>

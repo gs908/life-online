@@ -26,4 +26,4 @@ class ScnTimeConfigException(Base, UUIDPrimaryKeyMixin):
     day_of_week: Mapped[int] = mapped_column(Integer, nullable=False, comment="0=Sun, 6=Sat")
     coin_amount: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    time_config: Mapped["ScnTimeConfig"] = relationship(back_populates="exceptions", lazy="noload")
+    time_config: Mapped["ScnTimeConfig"] = relationship(back_populates="exceptions", lazy="raise")

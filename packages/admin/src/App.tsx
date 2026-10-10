@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { UserRole, TaskType, TaskStatus, RedemptionRecord, TimeConfig } from './types';
 import { THEMES } from './constants/themes';
@@ -28,7 +28,7 @@ import AbandonQuestModal from './components/modals/AbandonQuestModal';
 import TimeConfigModal from './components/modals/TimeConfigModal';
 import SeasonConfigModal from './components/modals/SeasonConfigModal';
 
-// --- MOCK DATA（阶段④残留：时间币配置/特权兑换属阶段④，随对应阶段下线） ---
+// --- MOCK DATA（阶段④残留：时间币配置/特权兑换属阶段④，随对应阶段下线；任务/赛季/上传 Mock 已在前序阶段删除） ---
 const DEFAULT_TIME_CONFIG: TimeConfig = {
     defaultDailyAllowance: 100,
     exceptions: { 0: 200, 6: 200 } // Weekend bonus
@@ -76,9 +76,15 @@ const App: React.FC = () => {
   const [pendingQuestId, setPendingQuestId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ title: string, msg: string } | null>(null);
 
+  // 统一 toast（含 SeasonConfigModal 回流）：单计时器去重，避免多条 toast 各自 setTimeout 互相提前清掉
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toast = useCallback((title: string, msg: string, ttl = 4000) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
     setToastMessage({ title, msg });
-    setTimeout(() => setToastMessage(null), ttl);
+    toastTimer.current = setTimeout(() => setToastMessage(null), ttl);
+  }, []);
+  useEffect(() => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
 
   /** 后端错误统一呈现：msg 为后端人话文案（docs/10 §2.4），网络错误兜底 */
@@ -128,6 +134,7 @@ const App: React.FC = () => {
     }
   }, [showApiError, t]);
 
+  // 登录后拉取赛季上下文（赛季列表/错误态）与任务板（无激活赛季 → 家长端出现创建引导）
   useEffect(() => {
     if (status === 'authenticated') {
       loadSeasons();

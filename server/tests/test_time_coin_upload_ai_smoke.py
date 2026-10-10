@@ -169,9 +169,9 @@ async def test_ai_endpoints_return_503_when_llm_not_configured(
     api_client: AsyncClient, seeded_family: SeededFamily, monkeypatch
 ) -> None:
     get_llm_client.cache_clear()
-    monkeypatch.setattr(settings.llm, "base_url", "")
-    monkeypatch.setattr(settings.llm, "api_key", "")
-    monkeypatch.setattr(settings.llm, "model", "")
+    monkeypatch.setattr(settings.ai.llm, "base_url", "")
+    monkeypatch.setattr(settings.ai.llm, "api_key", "")
+    monkeypatch.setattr(settings.ai.llm, "model", "")
     parent_headers = _auth_headers(seeded_family.parent)
     try:
         resp = await api_client.post(

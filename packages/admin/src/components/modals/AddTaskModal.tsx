@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { api, ApiError } from '../../services/api';
 import type { TaskCreate, TaskType } from '../../services/api';
-import { generateQuestSuggestion } from '../../services/geminiService';
 import { X, Plus, BrainCircuit, Info } from 'lucide-react';
 
 interface AddTaskModalProps {
@@ -24,9 +24,10 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
   const [newTaskXP, setNewTaskXP] = useState(50);
   const [newTaskType, setNewTaskType] = useState<TaskType>('DAILY');
 
-  // AI State（AI 链路切换到后端属阶段⑥，当前仍为 geminiService）
+  // AI State（阶段⑥已切后端 /scn/ai/generate-quest）
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // 打开时重置表单（创建失败时 App 保留弹窗与已填内容，成功后关闭并在此处复位）
   useEffect(() => {
@@ -45,15 +46,27 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
   const handleGenerateQuest = async () => {
     if (!aiPrompt) return;
     setIsGenerating(true);
-    const suggestion = await generateQuestSuggestion(aiPrompt, childLevel, narrativeContext);
-    setIsGenerating(false);
-
-    if (suggestion) {
+    setAiError(null);
+    // AI 调用统一走后端 /scn/ai(模型与默认参数收敛在后端 config.yaml 的 ai.llm 段)
+    try {
+      const suggestion = await api.ai.generateQuest({
+        topic: aiPrompt,
+        child_level: childLevel,
+        narrative_context: narrativeContext,
+      });
       setNewTaskTitle(suggestion.title);
       setNewTaskDesc(suggestion.description);
-      setNewTaskLore(suggestion.loreSnippet);
-      setNewTaskXP(suggestion.xpReward);
-      setNewTaskType(suggestion.type);
+      setNewTaskLore(suggestion.lore_snippet ?? '');
+      setNewTaskXP(suggestion.xp_reward);
+      setNewTaskType(suggestion.type as TaskType);
+    } catch (err) {
+      if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
+        setAiError(t('addTask.aiNotConfigured'));
+      } else {
+        setAiError(err instanceof Error ? err.message : t('addTask.aiFailed'));
+      }
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -101,6 +114,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
                 {isGenerating ? t('common.loadingThinking') : t('common.generate')}
               </button>
             </div>
+            {aiError && (
+              <p className="text-xs text-red-600 mt-2" data-testid="ai-error">{aiError}</p>
+            )}
           </div>
 
           <div className="space-y-2">

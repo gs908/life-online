@@ -49,4 +49,4 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     time_deposit: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
-    season: Mapped["ScnSeason"] = relationship(back_populates="task_templates", lazy="noload")
+    season: Mapped["ScnSeason"] = relationship(back_populates="task_templates", lazy="raise")

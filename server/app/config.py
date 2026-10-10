@@ -157,16 +157,63 @@ class StorageSection(BaseModel):
     local: StorageLocalSection = Field(default_factory=StorageLocalSection)
 
 
-class LLMSection(BaseModel):
-    """LLM 配置。三个字段均可留空 —— 未配置时应用仍可正常启动,
-    只有实际调用 AI 接口时才会报出明确的"未配置"错误(见 app.common.llm.factory)。"""
+class LLMDefaultParams(BaseModel):
+    """LLM 能力默认请求参数(请求级可覆盖)。"""
+    temperature: float = 0.7
+    max_tokens: int | None = None
+    timeout_s: float = 60.0
+    max_retries: int = 2
+
+
+class ImageDefaultParams(BaseModel):
+    """图片生成能力默认请求参数(请求级可覆盖)。"""
+    size: str = "1024x1024"
+    quality: str = "standard"
+    n: int = 1
+    response_format: str = "url"
+
+
+class VideoDefaultParams(BaseModel):
+    """视频生成能力默认请求参数(请求级可覆盖)。"""
+    duration_s: int = 10
+    resolution: str = "720p"
+
+
+class AICapabilitySection(BaseModel):
+    """AI 能力段的公共字段。
+
+    所有字段均可留空 —— 未配置时应用仍可正常启动,只有实际调用该能力的
+    AI 接口时才会报出明确的"未配置/未启用"错误(见 app.common.ai.capability)。
+    """
+    provider: str = "openai-compatible"
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+    enabled: bool = False
 
     @property
     def is_configured(self) -> bool:
         return bool(self.base_url and self.api_key and self.model)
+
+
+class LLMCapabilitySection(AICapabilitySection):
+    enabled: bool = True
+    default_params: LLMDefaultParams = Field(default_factory=LLMDefaultParams)
+
+
+class ImageCapabilitySection(AICapabilitySection):
+    default_params: ImageDefaultParams = Field(default_factory=ImageDefaultParams)
+
+
+class VideoCapabilitySection(AICapabilitySection):
+    default_params: VideoDefaultParams = Field(default_factory=VideoDefaultParams)
+
+
+class AISection(BaseModel):
+    """AI 能力配置:按 llm / image / video 三分,各能力独立指定模型与默认参数。"""
+    llm: LLMCapabilitySection = Field(default_factory=LLMCapabilitySection)
+    image: ImageCapabilitySection = Field(default_factory=ImageCapabilitySection)
+    video: VideoCapabilitySection = Field(default_factory=VideoCapabilitySection)
 
 
 class JWTSection(BaseModel):
@@ -232,7 +279,7 @@ class Settings(BaseModel):
     app: AppSection
     database: DatabaseSection
     storage: StorageSection
-    llm: LLMSection
+    ai: AISection = Field(default_factory=AISection)
     jwt: JWTSection
     wechat: WechatSection
     redis: RedisSection = Field(default_factory=RedisSection)
