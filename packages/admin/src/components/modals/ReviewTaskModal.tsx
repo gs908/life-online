@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Task } from '../../types';
-import { api } from '../../services/api';
+import { api, ApiError } from '../../services/api';
 import { Star, Sparkles } from 'lucide-react';
 
 interface ReviewTaskModalProps {
@@ -34,9 +34,14 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
             setReviewRating(res.rating);
             setReviewComment(res.comment);
           })
-          .catch(() => {
+          .catch(err => {
             // 评分只是辅助建议,失败不阻塞人工审核,保留默认 5 星
-            setEvaluateError(t('reviewTask.evaluateFailed'));
+            // 503(能力未启用/未配置)单独提示,与 AddTaskModal 口径一致
+            if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
+              setEvaluateError(t('addTask.aiNotConfigured'));
+            } else {
+              setEvaluateError(t('reviewTask.evaluateFailed'));
+            }
           })
           .finally(() => setIsEvaluating(false));
       }
