@@ -332,6 +332,11 @@
 → `{ rating: 1–5, comment: str }`
 > ⚠️ 当前实现为**纯文本 LLM 评分**（未把图片送入模型，见 `ai_service.evaluate_proof`）；多模态支持是后端待办，前端不要假设评分已"看图"。
 
+**AI 配置口径（DEV-24）**：模型选择与默认参数（temperature / max_tokens / timeout 等）收敛在后端
+`config.yaml` 的 `ai:` 段（按 `llm` / `image` / `video` 三能力分组，key 只经环境变量引用）。请求体
+**只携带业务参数**（如上），不接受也不返回任何模型配置；前端不接触模型配置。某能力未启用
+（`enabled=false`）或未配置时，对应接口返回 `503 service_unavailable`。
+
 ## 14. 已规划但**尚未实现**的接口（前端禁止对接）
 
 以下接口只存在于旧文档 `06-API设计要点.md`，**后端代码中没有**，前端不得按其开发（需要时先提后端 issue）：

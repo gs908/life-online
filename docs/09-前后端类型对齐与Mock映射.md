@@ -119,8 +119,8 @@
 | `DEFAULT_TIME_CONFIG`（TimeConfigModal） | `GET/PUT /scn/time-configs/me` | ✅ 已有（形状不同，C1） |
 | `redemptionHistory`（特权使用记录） | `GET /scn/privilege-uses`、`POST /scn/privilege-uses`、`POST /scn/privileges/uses` | ✅ 已有 |
 | 特权树（PrivilegeTree 组件） | `GET /scn/privileges/templates`、`GET /scn/privileges/unlocks` | ✅ 已有 |
-| **geminiService.generateQuestSuggestion**（浏览器直连 Gemini） | `POST /scn/ai/generate-quest` | ⚠️ **改造**：见 §3 |
-| **geminiService.evaluateTaskProof**（浏览器直连 Gemini） | `POST /scn/ai/evaluate-proof` | ⚠️ **改造**：见 §3 |
+| **geminiService.generateQuestSuggestion**（浏览器直连 Gemini） | `POST /scn/ai/generate-quest` | ✅ 已完成（DEV-24，见 §3） |
+| **geminiService.evaluateTaskProof**（浏览器直连 Gemini） | `POST /scn/ai/evaluate-proof` | ✅ 已完成（DEV-24，见 §3） |
 | 时间币余额展示（`timeCoins`） | `UserRead.time_coins` | ✅ 已有 |
 | 时间币流水/调整 | `GET /scn/time-coin-logs`、`POST /scn/time-coin-logs/adjust` | 🔵 后端已备、前端缺页面 |
 | 动态主题（AI 生成/激活） | `/scn/theme-styles`（含 `/generate`） | 🔵 后端已备、前端缺页面 |
@@ -133,6 +133,8 @@
 ## 3. Gemini 直连移除方案（强制）
 
 **结论：前端 `packages/admin/src/services/geminiService.ts` 整体删除，禁止任何浏览器直连 LLM 的实现进入主干。**
+
+✅ **已执行（DEV-24）**：文件与 `@google/genai` 依赖、vite `API_KEY` 注入均已删除；两个调用经 `services/api/modules/ai.ts` 走后端（模型配置收敛在后端 `config.yaml` 的 `ai.llm` 段）。下表为原始迁移方案，留档备查。
 
 | 现状（geminiService.ts） | 迁移目标 | 说明 |
 |--------------------------|---------|------|

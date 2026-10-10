@@ -183,31 +183,42 @@ uv run python start.py --port 9000
 - `GET http://localhost:8000/docs` — Swagger UI
 - `GET http://localhost:8000/redoc` — ReDoc
 
-## 6. 切换 LLM
+## 6. AI 能力配置(llm / image / video)
 
-修改 `server/.env`:
+AI 配置统一收敛在 `config.yaml` 的 `ai:` 段,按能力三分,各能力独立指定
+provider、模型与默认参数;API key 一律经环境变量引用(`.env`),yaml 不落明文。
+调用方(含前端经后端)只传业务参数,默认参数由 yaml 收敛、请求级可覆盖。
+
+修改 `server/.env` 切换 LLM:
 
 ```ini
 # 默认:火山引擎 Ark Coding + Kimi K2.6
-LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/coding
-LLM_API_KEY=...
-LLM_MODEL=kimi-k2.6
+AI_LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/coding
+AI_LLM_API_KEY=...
+AI_LLM_MODEL=kimi-k2.6
 
 # 切到 OpenAI
-# LLM_BASE_URL=https://api.openai.com/v1
-# LLM_MODEL=gpt-4o-mini
+# AI_LLM_BASE_URL=https://api.openai.com/v1
+# AI_LLM_MODEL=gpt-4o-mini
 
 # 切到 DeepSeek
-# LLM_BASE_URL=https://api.deepseek.com/v1
-# LLM_MODEL=deepseek-chat
+# AI_LLM_BASE_URL=https://api.deepseek.com/v1
+# AI_LLM_MODEL=deepseek-chat
 
 # 切到 Ollama 本地
-# LLM_BASE_URL=http://localhost:11434/v1
-# LLM_API_KEY=ollama
-# LLM_MODEL=qwen2.5:7b
+# AI_LLM_BASE_URL=http://localhost:11434/v1
+# AI_LLM_API_KEY=ollama
+# AI_LLM_MODEL=qwen2.5:7b
 ```
 
-无需改代码,重启服务即可。
+启用图片 / 视频生成:`config.yaml` 置 `ai.image.enabled` / `ai.video.enabled`
+为 `true`,并在 `.env` 填 `AI_IMAGE_*` / `AI_VIDEO_*`。
+
+降级约定(沿用 DEV-9):某能力 `enabled=false` 或未配置时,应用照常启动,
+该能力的接口返回 503 `service_unavailable`,错误信息带需要设置的环境变量名。
+
+本期为纯 yaml 静态配置,修改后重启生效;管理端运行时读写该配置暂不接入
+(后续如需,经配置接口暴露,注意 key 的脱敏读写)。
 
 ## 7. 开发期非微信登录
 
@@ -329,13 +340,15 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
 `default_daily_allowance`)写回余额并落 `DAILY_RESET` 流水;孩子调用 `GET /sys/accounts/me` 时
 也会触发同一条重置逻辑,不需要等定时任务。
 
-**LLM / MinIO 未配置时的降级规则**(DEV-9 新增):
+**LLM / MinIO 未配置时的降级规则**(DEV-9 新增,DEV-24 扩展为按 AI 能力分组):
 
-- **LLM**(`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`,对应 `config.yaml` 的 `llm:` 段)三个字段
-  均允许留空 —— 留空时应用照常启动,不会因为缺少 AI 配置就整体起不来。只有真正调用
-  `/scn/ai/generate-quest` 或 `/scn/ai/evaluate-proof` 时,`app/common/llm/factory.get_llm_client()`
-  才会检查 `settings.llm.is_configured`,未配置时抛出 `ServiceUnavailableError`,统一映射为
-  `HTTP 503` + `{"data": {"error_code": "service_unavailable"}}`,而不是连接超时或 500。
+- **AI 能力**(对应 `config.yaml` 的 `ai:` 段,按 `ai.llm` / `ai.image` / `ai.video` 三分)
+  每个能力独立配置 `enabled` / `provider` / `base_url` / `api_key` / `model` / `default_params`,
+  字段均允许留空 —— 留空时应用照常启动,不会因为缺少 AI 配置就整体起不来。只有真正调用
+  该能力的接口时,`app/common/ai.require_ai_capability` 才会做两步检查:先看
+  `ai.<能力>.enabled`(未启用直接 503),再看字段是否齐全(未配置 503,错误信息带对应的
+  `AI_<能力>_*` 环境变量名),统一映射为 `HTTP 503` + `{"data": {"error_code": "service_unavailable"}}`,
+  而不是连接超时或 500。`app/common/llm/factory.get_llm_client()` 即经此门槛读取 `ai.llm` 段。
 - **MinIO**(`STORAGE_PROVIDER=minio` 时需要 `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` /
   `MINIO_SECRET_KEY`)同理:`app/common/storage/factory.get_storage()` 在
   `settings.storage.minio.is_configured` 为假时直接抛 `ServiceUnavailableError`(503),不会把空
@@ -356,10 +369,11 @@ uv run pytest
 
 测试策略是"远程数据库优先,不做 Docker 实机验证":
 
-- `tests/conftest.py` 在 import 任何 `app.*` 模块之前,为 `JWT_SECRET` / `LLM_BASE_URL` /
-  `LLM_API_KEY` / `LLM_MODEL` 这几个没有默认值的必填配置注入开发期占位默认值(仅
+- `tests/conftest.py` 在 import 任何 `app.*` 模块之前,为 `JWT_SECRET` 注入开发期占位默认值,
+  并为 `AI_LLM_BASE_URL` / `AI_LLM_API_KEY` / `AI_LLM_MODEL` 注入占位(仅
   `setdefault`,已配置真实 `.env` 的开发者不受影响),这样 `uv run pytest` 在一个干净环境
-  (没有 `.env`)里也能跑起来。
+  (没有 `.env`)里也能跑起来(AI 段本身留空也能启动,注入占位只是让依赖"LLM 已配置"
+  的用例行为稳定)。
 - `db_ready` fixture 会先对配置的数据库探测一次 `SELECT 1`。数据库不可达时,依赖它的用例会
   被自动 `pytest.skip`,而不是失败,也不会在本机拉起 Docker MySQL 做实机验证。
 - 标了 `@pytest.mark.db` 的测试模块(例如 `tests/test_auth_smoke.py`)依赖真实数据库连接;
