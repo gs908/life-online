@@ -36,5 +36,5 @@ class ScnOnboardingStep(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     reward_xp: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reward_coin: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    path: Mapped["ScnOnboardingPath"] = relationship(back_populates="steps", lazy="noload")
-    template: Mapped["ScnTaskTemplate | None"] = relationship(lazy="noload")
+    path: Mapped["ScnOnboardingPath"] = relationship(back_populates="steps", lazy="raise")
+    template: Mapped["ScnTaskTemplate | None"] = relationship(lazy="raise")

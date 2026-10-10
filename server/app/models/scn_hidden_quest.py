@@ -48,4 +48,4 @@ class ScnHiddenQuest(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
-    template: Mapped["ScnTaskTemplate | None"] = relationship(lazy="noload")
+    template: Mapped["ScnTaskTemplate | None"] = relationship(lazy="raise")
