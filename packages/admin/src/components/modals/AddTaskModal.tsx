@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Task, TaskType, TaskStatus } from '../../types';
-import { generateQuestSuggestion } from '../../services/geminiService';
+import { api, ApiError } from '../../services/api';
 import { X, Plus, BrainCircuit, Info } from 'lucide-react';
 
 interface AddTaskModalProps {
@@ -23,20 +23,33 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
   // AI State
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleGenerateQuest = async () => {
     if (!aiPrompt) return;
     setIsGenerating(true);
-    const suggestion = await generateQuestSuggestion(aiPrompt, childLevel, narrativeContext);
-    setIsGenerating(false);
-
-    if (suggestion) {
+    setAiError(null);
+    // AI 调用统一走后端 /scn/ai(模型与默认参数收敛在后端 config.yaml 的 ai.llm 段)
+    try {
+      const suggestion = await api.ai.generateQuest({
+        topic: aiPrompt,
+        child_level: childLevel,
+        narrative_context: narrativeContext,
+      });
       setNewTaskTitle(suggestion.title);
-      setNewTaskDesc(`${suggestion.description}\n\n${t('addTask.lorePrefix')}: ${suggestion.loreSnippet}`);
-      setNewTaskXP(suggestion.xpReward);
-      setNewTaskType(suggestion.type);
+      setNewTaskDesc(`${suggestion.description}\n\n${t('addTask.lorePrefix')}: ${suggestion.lore_snippet}`);
+      setNewTaskXP(suggestion.xp_reward);
+      setNewTaskType(suggestion.type as TaskType);
+    } catch (err) {
+      if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
+        setAiError(t('addTask.aiNotConfigured'));
+      } else {
+        setAiError(err instanceof Error ? err.message : t('addTask.aiFailed'));
+      }
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -90,6 +103,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
                 {isGenerating ? t('common.loadingThinking') : t('common.generate')}
               </button>
             </div>
+            {aiError && (
+              <p className="text-xs text-red-600 mt-2" data-testid="ai-error">{aiError}</p>
+            )}
           </div>
 
           <div className="space-y-2">

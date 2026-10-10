@@ -37,8 +37,8 @@ packages/admin/src/services/
 │   │   ├── uploads.ts      # /sys/uploads
 │   │   └── ai.ts           # /scn/ai/*（替代 geminiService）
 │   └── index.ts            # 统一出口
-└── geminiService.ts        # ⚠️ 待删除（阶段 6，见 §5）
 ```
+（`geminiService.ts` 已删除 —— 阶段⑥，DEV-24 执行）
 
 调用方向：`组件/hook → services/api/modules/* → http.ts`。**禁止组件直接 fetch、禁止绕过解包层。**
 
@@ -138,9 +138,11 @@ docs/09 §2 已给出逐条映射，本表补 **UI 载体**（哪些文件动手
 - 验收：上传→提交→列表展示 proof_url 全链路。
 
 ### 阶段⑥ AI（Gemini 直连移除）
-见 §5。
+见 §5。✅ 已完成（DEV-24，按业主要求提前执行，早于阶段②~⑤）。
 
 ## 5. Gemini 直连移除（强制，随阶段⑥执行）
+
+✅ **已完成（DEV-24）**：`geminiService.ts` / `@google/genai` 依赖 / vite `API_KEY` 注入均已删除，AddTaskModal / ReviewTaskModal 已切到 `api.ai.generateQuest` / `api.ai.evaluateProof`（后端 `ai.llm` 段配置驱动）。以下为原始执行清单，留档备查。
 
 1. 删除 `packages/admin/src/services/geminiService.ts` 整文件；从 `package.json` 移除 `@google/genai` 依赖；清理构建配置中的 `API_KEY` 注入（**浏览器持有 LLM key 属于密钥泄漏，必须一并清除**）。
 2. `services/api/modules/ai.ts` 提供等价薄封装：
