@@ -28,17 +28,42 @@ log = logging.getLogger(__name__)
 
 
 class OpenAICompatClient(LLMClient):
-    def __init__(self, base_url: str, api_key: str, model: str) -> None:
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        *,
+        default_temperature: float = 0.7,
+        default_max_tokens: int | None = None,
+        timeout_s: float = 60.0,
+        max_retries: int = 2,
+    ) -> None:
+        # timeout / max_retries 是请求基础设施参数,直接挂在底层 HTTP 客户端上
+        self._client = AsyncOpenAI(
+            base_url=base_url, api_key=api_key, timeout=timeout_s, max_retries=max_retries
+        )
         self._model = model
+        self._default_temperature = default_temperature
+        self._default_max_tokens = default_max_tokens
+
+    def _resolve_params(
+        self, temperature: float | None, max_tokens: int | None
+    ) -> tuple[float, int | None]:
+        """请求级参数覆盖默认值;None 表示回落到 config.yaml 的默认参数。"""
+        return (
+            self._default_temperature if temperature is None else temperature,
+            self._default_max_tokens if max_tokens is None else max_tokens,
+        )
 
     async def chat(
         self,
         messages: list[LLMMessage],
         *,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
+        temperature, max_tokens = self._resolve_params(temperature, max_tokens)
         try:
             resp = await self._client.chat.completions.create(
                 model=self._model,
@@ -66,7 +91,7 @@ class OpenAICompatClient(LLMClient):
         messages: list[LLMMessage],
         json_schema: dict | None = None,
         *,
-        temperature: float = 0.7,
+        temperature: float | None = None,
     ) -> LLMJsonResponse:
         # 在 system / 最后一条 user 中追加格式说明,提高遵循率
         hint = "请严格以合法 JSON 格式返回,不要包含代码块标记或额外解释。"
@@ -75,6 +100,7 @@ class OpenAICompatClient(LLMClient):
         augmented = list(messages) + [
             LLMMessage(role="user", content=hint),
         ]
+        temperature, _ = self._resolve_params(temperature, None)
         try:
             resp = await self._client.chat.completions.create(
                 model=self._model,
