@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Task, UserRole, RedemptionRecord, SeasonTheme } from '../../types';
-import type { SeasonRead } from '../../services/api';
+import { User, UserRole, RedemptionRecord, SeasonTheme } from '../../types';
+import type { TaskRead, SeasonRead } from '../../services/api';
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
@@ -9,10 +9,10 @@ import { History, Plus, Sparkles, Clock, Palette, Archive, Zap } from 'lucide-re
 
 interface ParentDashboardProps {
   childUser: User;
-  tasks: Task[];
-  activeQuest: Task | undefined;
-  availableTasks: Task[];
-  pendingTasks: Task[];
+  tasks: TaskRead[];
+  activeQuest: TaskRead | undefined;
+  availableTasks: TaskRead[];
+  pendingTasks: TaskRead[];
   redemptionHistory: RedemptionRecord[];
   /** 当前激活赛季；null = 家庭尚未创建/激活赛季（引导创建） */
   activeSeason: SeasonRead | null;

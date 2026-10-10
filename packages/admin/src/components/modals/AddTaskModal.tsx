@@ -1,28 +1,44 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Task, TaskType, TaskStatus } from '../../types';
+import type { TaskCreate, TaskType } from '../../services/api';
 import { generateQuestSuggestion } from '../../services/geminiService';
 import { X, Plus, BrainCircuit, Info } from 'lucide-react';
 
 interface AddTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (task: Task) => void;
+  /** 提交 TaskCreate（season_id 必填，由 App 注入激活赛季）；失败时 App toast 且弹窗保留 */
+  onAdd: (task: TaskCreate) => void;
   narrativeContext: string;
   seasonId: string;
   childLevel: number;
+  submitting?: boolean;
 }
 
-const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, narrativeContext, seasonId, childLevel }) => {
+/** 新建任务（阶段③）：表单产出 TaskCreate，POST /scn/task-instances 由 App 调用（docs/09 A6） */
+const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, narrativeContext, seasonId, childLevel, submitting }) => {
   const { t } = useTranslation();
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [newTaskLore, setNewTaskLore] = useState('');
   const [newTaskXP, setNewTaskXP] = useState(50);
-  const [newTaskType, setNewTaskType] = useState<TaskType>(TaskType.DAILY);
-  
-  // AI State
+  const [newTaskType, setNewTaskType] = useState<TaskType>('DAILY');
+
+  // AI State（AI 链路切换到后端属阶段⑥，当前仍为 geminiService）
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // 打开时重置表单（创建失败时 App 保留弹窗与已填内容，成功后关闭并在此处复位）
+  useEffect(() => {
+    if (isOpen) {
+      setNewTaskTitle('');
+      setNewTaskDesc('');
+      setNewTaskLore('');
+      setNewTaskXP(50);
+      setNewTaskType('DAILY');
+      setAiPrompt('');
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -34,30 +50,25 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
 
     if (suggestion) {
       setNewTaskTitle(suggestion.title);
-      setNewTaskDesc(`${suggestion.description}\n\n${t('addTask.lorePrefix')}: ${suggestion.loreSnippet}`);
+      setNewTaskDesc(suggestion.description);
+      setNewTaskLore(suggestion.loreSnippet);
       setNewTaskXP(suggestion.xpReward);
       setNewTaskType(suggestion.type);
     }
   };
 
   const handleSubmit = () => {
-    const newTask: Task = {
-      id: Math.random().toString(36).substr(2, 9),
-      seasonId: seasonId,
-      title: newTaskTitle,
+    if (!newTaskTitle.trim() || !seasonId) return;
+    onAdd({
+      season_id: seasonId,
+      title: newTaskTitle.trim(),
       description: newTaskDesc,
-      xpReward: newTaskXP,
+      lore_snippet: newTaskLore || undefined,
+      xp_reward: Math.max(0, newTaskXP),
       type: newTaskType,
-      status: TaskStatus.AVAILABLE,
-      reminderMessage: t('addTask.defaultReminder'),
-      reminderMinutesBefore: 15
-    };
-    onAdd(newTask);
-    
-    // Reset
-    setNewTaskTitle('');
-    setNewTaskDesc('');
-    setAiPrompt('');
+      reminder_message: t('addTask.defaultReminder'),
+      reminder_minutes_before: 15,
+    });
   };
 
   return (
@@ -101,12 +112,12 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
             <div className="space-y-2 flex-1">
               <label className="text-sm font-bold text-slate-700">{t('addTask.type')}</label>
               <select className="w-full border p-2 rounded" value={newTaskType} onChange={e => setNewTaskType(e.target.value as TaskType)}>
-                {Object.values(TaskType).map(type => <option key={type} value={type}>{t(`taskType.${type}`)}</option>)}
+                {(['DAILY', 'CHALLENGE', 'CHAIN', 'TIMED', 'COOP'] as TaskType[]).map(type => <option key={type} value={type}>{t(`taskType.${type}`)}</option>)}
               </select>
             </div>
             <div className="space-y-2 w-24">
               <label className="text-sm font-bold text-slate-700">{t('common.xp')}</label>
-              <input type="number" className="w-full border p-2 rounded" value={newTaskXP} onChange={e => setNewTaskXP(Number(e.target.value))} />
+              <input type="number" min={0} className="w-full border p-2 rounded" value={newTaskXP} onChange={e => setNewTaskXP(Number(e.target.value))} />
             </div>
           </div>
 
@@ -127,7 +138,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
         </div>
         <div className="p-4 bg-slate-50 flex justify-end gap-2 border-t">
           <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded">{t('common.cancel')}</button>
-          <button onClick={handleSubmit} className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md transform active:scale-95">{t('addTask.postQuest')}</button>
+          <button onClick={handleSubmit} disabled={submitting || !newTaskTitle.trim()} className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md transform active:scale-95 disabled:opacity-50">{submitting ? t('common.loading') : t('addTask.postQuest')}</button>
         </div>
       </div>
     </div>

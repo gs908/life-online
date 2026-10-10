@@ -109,12 +109,13 @@
 | `currentUser` 切换父母/孩子视图 | `UserRead.role`（GUILD_MASTER/ADVENTURER） | ✅ 已有（无"切换"概念——按登录角色渲染）；**已接入（DEV-23），`switchUser` 已删除** |
 | `DEFAULT_SEASON` / `activeSeason` | `GET /scn/seasons/active`、`POST /scn/seasons`、`PATCH /scn/seasons/{id}`、`POST /{id}/activate` | ✅ 已有 |
 | `seasonHistory`（`Season[]`） | `GET /scn/seasons/history`（SeasonHistoryItem） | ✅ 已有（形状不同，见 S3） |
-| `INITIAL_TASKS` / `tasks` | `GET /scn/task-instances`（分页+过滤） | ✅ 已有 |
-| 新建任务（AddTaskModal） | `POST /scn/task-instances` | ✅ 已有 |
-| 接取任务 | `POST /scn/task-instances/{id}/start` | ✅ 已有 |
-| 提交证明（SubmitTaskModal，base64） | `POST /sys/uploads` + `POST /scn/task-instances/{id}/submit` | ✅ 已有（需改造为上传流，A2） |
-| 审核打分（ReviewTaskModal） | `POST /scn/task-instances/{id}/approve` | ✅ 已有 |
-| 放弃任务（AbandonQuestModal） | `POST /scn/task-instances/{id}/abandon` | ✅ 已有 |
+| `INITIAL_TASKS` / `tasks` | `GET /scn/task-instances`（分页+过滤） | ✅ 已有；**已接入（DEV-18 阶段③），本地任务状态机已删除，视图组件统一消费 `TaskRead`** |
+| 新建任务（AddTaskModal） | `POST /scn/task-instances` | ✅ 已有；**已接入（DEV-18），表单产出 `TaskCreate`（docs/09 A6）** |
+| 接取任务 | `POST /scn/task-instances/{id}/start` | ✅ 已有；**已接入（DEV-18），押金由后端扣除，余额变更后 refetch `UserRead.time_coins`** |
+| 提交证明（SubmitTaskModal，base64） | `POST /sys/uploads` + `POST /scn/task-instances/{id}/submit` | ✅ 已有；**已接入（DEV-18 按 docs/10 §4 ③→⑤ 交替约定打通上传流；DEV-20 阶段⑤收尾：multipart 透传 `task_id` 落存储路径规范 `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{序号}.{扩展名}`，base64 方案与 Mock 已删除，QuestCard/ReviewTaskModal 经 `proof_url` 展示凭证）** |
+| 审核打分（ReviewTaskModal） | `POST /scn/task-instances/{id}/approve` | ✅ 已有；**已接入（DEV-18），本地 XP 倍率/升级计算已删除（后端 `approve` 结算 `xp_awarded`）；AI 辅助评分留待阶段⑥** |
+| 放弃任务（AbandonQuestModal） | `POST /scn/task-instances/{id}/abandon` | ✅ 已有；**已接入（DEV-18），罚币/退款由后端处理** |
+| `handleDeleteTask`（本地 filter） | `DELETE /scn/task-instances/{id}` | ✅ 已有；**已接入（DEV-18），含确认交互** |
 | `DEFAULT_TIME_CONFIG`（TimeConfigModal） | `GET/PUT /scn/time-configs/me` | ✅ 已有（形状不同，C1） |
 | `redemptionHistory`（特权使用记录） | `GET /scn/privilege-uses`、`POST /scn/privilege-uses`、`POST /scn/privileges/uses` | ✅ 已有 |
 | 特权树（PrivilegeTree 组件） | `GET /scn/privileges/templates`、`GET /scn/privileges/unlocks` | ✅ 已有 |
@@ -154,6 +155,21 @@
    - 契约变更后在开发群/issue 通知前端侧；前端 `types.ts` 的接口层类型与契约保持同步提交。
    - 季度性对齐：后端跑 OpenAPI diff（`openapi diff` 或 `/docs` 导出对比），核对 08 是否漂移。
 6. **Mock 数据退场**：`App.tsx` 中的 MOCK 常量在对应页面接入真实 API 后立即删除，不允许 Mock 与真实调用长期共存。
+
+---
+
+## 5. 联调差异记录（前端接入执行期发现）
+
+接入阶段③（DEV-18）时对照后端真实代码（`server/app/api/v1/tasks.py`、`server/app/services/task_service.py`）发现的差异与约定，供后端/契约侧确认：
+
+| # | 差异 | 现状与前端处理 | 建议 |
+|---|------|---------------|------|
+| D1 | **`POST /scn/task-instances/{id}/reject`（审核驳回）后端已实现，但 docs/08 §6 未收录** | 前端本阶段**未接入**（契约唯一事实来源为 docs/08）；ReviewTaskModal 仅提供 approve | 后端确认保留该接口后在 docs/08 §6 补条目（`TaskRejectRequest { comment? }`），前端再决定是否在审核弹窗加"驳回重做" |
+| D2 | **后端 `start` 不限制"同孩子同时仅一个进行中任务"**（Mock 有此本地门禁） | 前端保留该 UX 门禁：接取第二个任务前弹 AbandonQuestModal 先放弃当前任务（纯展示层规则，依据服务端列表判断），后端行为未改动 | 若产品确认允许多任务并行，可移除前端门禁；若要求后端强约束，提后端 issue |
+| D3 | 接取实际扣押金 = `coin_service.calculate_deposit_fee(task.time_deposit)`，当前实现恒等于 `time_deposit` | 前端 QuestCard 展示 `time_deposit` 即押金，无需改动；若后续引入手续费系数需同步契约 | 保持现状，留意 `calculate_deposit_fee` 未来变更 |
+| D4 | `start` 余额不足抛 `validation_error`（HTTP 422），而非专用错误码 | 前端按 docs/10 §2.4 兜底：toast 后端 msg（文案已含"需要 X，当前 Y"） | 可选：后端为余额不足定义专用 error_code，便于前端精准提示 |
+
+*记录基准：`packages/admin`@agent/leo2/301d69de19a0（DEV-18 阶段③）↔ `server/`@agent/leo2/682cb47f7926 基线，2026-10-10。*
 
 ---
 

@@ -132,10 +132,11 @@ docs/09 §2 已给出逐条映射，本表补 **UI 载体**（哪些文件动手
 - 验收：调整/流水/配置保存正确；周末 exceptions 生效显示正确。
 
 ### 阶段⑤ 上传
-- 接口：`POST /sys/uploads`（multipart：`file` + `purpose`）。
+- 接口：`POST /sys/uploads`（multipart：`file` + `purpose` + 可选 `task_id`）。
 - 改造：SubmitTaskModal 从 base64 改 `<input type=file>`/Vant Uploader → multipart 上传 → 拿 `object_key` 提交 submit；头像/赛季横幅同理（purpose 区分）。展示统一 `access_url`（任务证明用 TaskRead.`proof_url`）。
 - 删除：`proofImage` base64 类型与数据流。
 - 验收：上传→提交→列表展示 proof_url 全链路。
+- ✅ 已接入（DEV-20）：上传流随 DEV-18 阶段③先打通，本次收尾补齐 —— multipart 透传 `task_id`（后端按 `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{序号}.{扩展名}` 落存储）；QuestCard/ReviewTaskModal 凭证展示统一走 `proof_url`（MinIO 预签名 / local 稳定路径双模式无感）；base64 数据流与 uploads Mock 已删除。头像/横幅上传入口待对应页面接入时复用 `uploadFile`。
 
 ### 阶段⑥ AI（Gemini 直连移除）
 见 §5。
