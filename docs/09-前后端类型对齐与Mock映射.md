@@ -61,10 +61,10 @@
 | # | 差异 | 裁决 |
 |---|---|---|
 | P1 | 字段名：`timeCoins→time_coins`、`dailyAbandonCount→daily_abandon_count`、`lastLoginDate→last_login_date` | **[后端为准]** |
-| P2 | 前端 `privilegesUnlocked: number[]`（等级数组）vs 后端 `privileges_unlocked: string[]`（特权模板 ID 数组） | **[后端为准]** **类型冲突（number vs string）**。后端模型以特权模板为粒度（`PrivilegeRead.level_required`），"按等级解锁"改由前端把 `templates` 按 `level_required` 分组渲染特权树；已解锁集合用 `/scn/privileges/unlocks` |
+| P2 | 前端 `privilegesUnlocked: number[]`（等级数组）vs 后端 `privileges_unlocked: string[]`（特权模板 ID 数组） | **[后端为准]** **类型冲突（number vs string）**。后端模型以特权模板为粒度（`PrivilegeRead.level_required`），"按等级解锁"改由前端把 `templates` 按 `level_required` 分组渲染特权树；已解锁集合用 `/scn/privileges/unlocks`。本地视图类型的 `privilegesUnlocked` 字段已删除（DEV-23），接入（阶段④）时不再有类型冲突 |
 | P3 | 前端缺：`family_id、child_id、current_season_id、created_at、updated_at` | **[后端为准]** 补齐 |
 | P4 | Mock 中父母 `level:99, timeCoins:9999`；后端父母 level 固定 1、time_coins 0 | **[后端为准]** 父母端不展示等级/时间币（或展示家庭汇总，那是新需求→走后端 issue） |
-| P5 | 前端每日重置靠 `lastLoginDate` 本地比对；后端在 `GET /sys/accounts/me`（冒险者）服务端自动重置 | **[后端为准]** 前端删除本地重置逻辑，登录/刷新调 `/sys/accounts/me` 即可 |
+| P5 | 前端每日重置靠 `lastLoginDate` 本地比对；后端在 `GET /sys/accounts/me`（冒险者）服务端自动重置 | **[后端为准]** ✅ 已执行（DEV-23）：本地重置逻辑已删除，登录/引导调 `/sys/accounts/me` 即可 |
 
 ### 1.8 Privilege（types.ts:46-51 vs PrivilegeRead）
 
@@ -93,7 +93,7 @@
 
 | # | 前端 Mock 现状 | 后端现状 | 裁决 |
 |---|---------------|---------|------|
-| M1 | 无登录/无家庭概念，`MOCK_USERS` 写死两个用户 | 完整 auth+家庭+邀请码体系（契约 §2–§4） | **[后端为准]** 前端补登录态与家庭上下文（admin 管理端可用 `POST /sys/families` + `POST /sys/accounts/adventurers` 或邀请码流程） |
+| M1 | ~~无登录/无家庭概念，`MOCK_USERS` 写死两个用户~~ **已解决（DEV-23）**：Mock 用户已删除，接入登录态与家庭上下文（开发期 H5 走 `POST /sys/auth/dev-login`，契约 §2） | 完整 auth+家庭+邀请码体系（契约 §2–§4） | **[后端为准]** 已接入；生产期 H5 微信网页授权仍待后端 issue |
 | M2 | 时间币流水无页面 | `GET /scn/time-coin-logs` 分页流水 + `POST /adjust` | **[后端为准]** 父母端补"时间币流水"页（后端能力已就绪） |
 | M3 | 主题仅静态 5 皮肤 | 动态主题 CRUD + AI 生成 | **[后端为准]** 按契约 §7 接入 |
 
@@ -105,8 +105,8 @@
 
 | 前端 Mock（App.tsx） | 后端接口 | 状态 |
 |---------------------|---------|------|
-| `MOCK_USERS`（用户/角色） | `GET /sys/auth/me`、`GET /sys/families/me`、`GET /sys/accounts/me` | ✅ 已有 |
-| `currentUser` 切换父母/孩子视图 | `UserRead.role`（GUILD_MASTER/ADVENTURER） | ✅ 已有（无"切换"概念——admin 端按登录角色渲染） |
+| `MOCK_USERS`（用户/角色） | `GET /sys/auth/me`、`GET /sys/families/me`、`GET /sys/accounts/me` | ✅ 已有；**已接入（DEV-23 阶段①），Mock 已删除** |
+| `currentUser` 切换父母/孩子视图 | `UserRead.role`（GUILD_MASTER/ADVENTURER） | ✅ 已有（无"切换"概念——按登录角色渲染）；**已接入（DEV-23），`switchUser` 已删除** |
 | `DEFAULT_SEASON` / `activeSeason` | `GET /scn/seasons/active`、`POST /scn/seasons`、`PATCH /scn/seasons/{id}`、`POST /{id}/activate` | ✅ 已有 |
 | `seasonHistory`（`Season[]`） | `GET /scn/seasons/history`（SeasonHistoryItem） | ✅ 已有（形状不同，见 S3） |
 | `INITIAL_TASKS` / `tasks` | `GET /scn/task-instances`（分页+过滤） | ✅ 已有 |
