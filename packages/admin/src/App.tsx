@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { UserRole, TaskType, TaskStatus, RedemptionRecord, TimeConfig } from './types';
+import { UserRole, TaskType, TaskStatus, RedemptionRecord } from './types';
 import { THEMES } from './constants/themes';
 import { Bell } from 'lucide-react';
 
@@ -26,13 +26,8 @@ import SubmitTaskModal from './components/modals/SubmitTaskModal';
 import ReviewTaskModal from './components/modals/ReviewTaskModal';
 import AbandonQuestModal from './components/modals/AbandonQuestModal';
 import TimeConfigModal from './components/modals/TimeConfigModal';
+import CoinLogsModal from './components/modals/CoinLogsModal';
 import SeasonConfigModal from './components/modals/SeasonConfigModal';
-
-// --- MOCK DATA（阶段④残留：时间币/特权，随对应阶段下线；任务与赛季 Mock 已在前序阶段删除） ---
-const DEFAULT_TIME_CONFIG: TimeConfig = {
-    defaultDailyAllowance: 100,
-    exceptions: { 0: 200, 6: 200 } // Weekend bonus
-};
 
 const App: React.FC = () => {
   const { t } = useTranslation();
@@ -79,7 +74,6 @@ const App: React.FC = () => {
   const [tasks, setTasks] = useState<TaskRead[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [redemptionHistory, setRedemptionHistory] = useState<RedemptionRecord[]>([]);
-  const [timeConfig, setTimeConfig] = useState<TimeConfig>(DEFAULT_TIME_CONFIG);
 
   // UI State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -87,6 +81,7 @@ const App: React.FC = () => {
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [isAbandonModalOpen, setIsAbandonModalOpen] = useState(false);
   const [isTimeConfigModalOpen, setIsTimeConfigModalOpen] = useState(false);
+  const [isCoinLogsOpen, setIsCoinLogsOpen] = useState(false);
   const [isSeasonConfigModalOpen, setIsSeasonConfigModalOpen] = useState(false);
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -289,11 +284,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleTimeConfigSave = (newConfig: TimeConfig) => {
-      setTimeConfig(newConfig);
-      toast(t('toast.configSavedTitle'), t('toast.configSavedMsg'), 3000);
-  };
-
   // 统一 toast（赛季 CRUD 成功反馈从 Modal 回流，避免多个 setTimeout 各自为政）
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = useCallback((title: string, msg: string) => {
@@ -397,6 +387,7 @@ const App: React.FC = () => {
                         onReviewTask={(id) => { setSelectedTaskId(id); setIsReviewModalOpen(true); }}
                         onDeleteTask={handleDeleteTask}
                         onOpenTimeConfig={() => setIsTimeConfigModalOpen(true)}
+                        onViewCoinLogs={() => setIsCoinLogsOpen(true)}
                      />
                  )}
              </div>
@@ -440,8 +431,15 @@ const App: React.FC = () => {
       <TimeConfigModal
         isOpen={isTimeConfigModalOpen}
         onClose={() => setIsTimeConfigModalOpen(false)}
-        config={timeConfig}
-        onSave={handleTimeConfigSave}
+        onToast={showToast}
+      />
+
+      <CoinLogsModal
+        isOpen={isCoinLogsOpen}
+        onClose={() => setIsCoinLogsOpen(false)}
+        family={family}
+        onToast={showToast}
+        onAdjusted={refreshUser}
       />
 
       <SeasonConfigModal
