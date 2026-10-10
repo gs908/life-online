@@ -39,4 +39,4 @@ class SysParent(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     notify_settings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     account: Mapped["SysAccount"] = relationship(lazy="joined")
-    family: Mapped["SysFamily"] = relationship(lazy="noload")
+    family: Mapped["SysFamily"] = relationship(lazy="raise")

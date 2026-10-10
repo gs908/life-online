@@ -34,7 +34,11 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
         // 阶段③后前端只持有 proof_url；evaluate-proof 契约要求 image_data_url，
         // 取回图片转 data URL 再送评（评分只是辅助建议,失败不阻塞人工审核）
         fetch(task.proof_url)
-          .then(res => res.blob())
+          .then(res => {
+            // 404/403（如预签名 URL 过期、dev 无反代）不能把错误页 HTML 当图片送评（review 🟡-2）
+            if (!res.ok) throw new Error(`proof fetch failed: ${res.status}`);
+            return res.blob();
+          })
           .then(
             blob =>
               new Promise<string>((resolve, reject) => {

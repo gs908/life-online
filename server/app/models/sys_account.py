@@ -40,7 +40,7 @@ class SysAccount(Base, TimestampMixin, UUIDPrimaryKeyMixin):
         String(16), nullable=False, default="active", comment="active | disabled"
     )
 
-    family: Mapped["SysFamily"] = relationship(back_populates="accounts", lazy="noload")
+    family: Mapped["SysFamily"] = relationship(back_populates="accounts", lazy="raise")
     channel_wechats: Mapped[list["SysChannelWechat"]] = relationship(
         back_populates="account", cascade="all, delete-orphan", passive_deletes=True
     )

@@ -171,6 +171,7 @@
 | D2 | **后端 `start` 不限制"同孩子同时仅一个进行中任务"**（Mock 有此本地门禁） | 前端保留该 UX 门禁：接取第二个任务前弹 AbandonQuestModal 先放弃当前任务（纯展示层规则，依据服务端列表判断），后端行为未改动 | 若产品确认允许多任务并行，可移除前端门禁；若要求后端强约束，提后端 issue |
 | D3 | 接取实际扣押金 = `coin_service.calculate_deposit_fee(task.time_deposit)`，当前实现恒等于 `time_deposit` | 前端 QuestCard 展示 `time_deposit` 即押金，无需改动；若后续引入手续费系数需同步契约 | 保持现状，留意 `calculate_deposit_fee` 未来变更 |
 | D4 | `start` 余额不足抛 `validation_error`（HTTP 422），而非专用错误码 | 前端按 docs/10 §2.4 兜底：toast 后端 msg（文案已含"需要 X，当前 Y"） | 可选：后端为余额不足定义专用 error_code，便于前端精准提示 |
+| D5 | **`evaluateTaskProof`（geminiService 评审直连）的调用随阶段③移除**：base64 方案下线后无数据可传（`proof_url` 为 presigned URL，fetch 转 base64 受 CORS 约束），当前审核为人工星级+评语 | 审查裁决（Mars 建议 / Gin 拍板 Option A）：接受移除 | 死代码已在阶段⑥清理：`geminiService.ts` 随 DEV-21（`7aa3926`）整体删除，AI 评审后续走 `POST /scn/ai/evaluate-proof`（见 `services/api/modules/ai.ts`） |
 
 *记录基准：`packages/admin`@agent/leo2/301d69de19a0（DEV-18 阶段③）↔ `server/`@agent/leo2/682cb47f7926 基线，2026-10-10。*
 

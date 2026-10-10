@@ -5,7 +5,7 @@ import type { TaskRead, SeasonRead } from '../../services/api';
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
-import { History, Plus, Sparkles, Clock, Palette, Archive, Zap } from 'lucide-react';
+import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap } from 'lucide-react';
 
 interface ParentDashboardProps {
   childUser: User;
@@ -26,6 +26,7 @@ interface ParentDashboardProps {
   onReviewTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
   onOpenTimeConfig: () => void;
+  onViewCoinLogs: () => void;
 }
 
 const ParentDashboard: React.FC<ParentDashboardProps> = ({
@@ -45,7 +46,8 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onRecordUsage,
   onReviewTask,
   onDeleteTask,
-  onOpenTimeConfig
+  onOpenTimeConfig,
+  onViewCoinLogs
 }) => {
   const { t } = useTranslation();
 
@@ -74,6 +76,12 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
              className="bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-100 transition-colors"
           >
              <Clock size={16} /> {t('parent.coins')}
+          </button>
+          <button
+             onClick={onViewCoinLogs}
+             className="bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-100 transition-colors"
+          >
+             <Coins size={16} /> {t('parent.coinLogs')}
           </button>
           <button
              onClick={onOpenSeasonConfig}

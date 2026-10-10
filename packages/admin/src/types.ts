@@ -51,11 +51,6 @@ export interface RedemptionRecord {
   user?: string;
 }
 
-export interface TimeConfig {
-  defaultDailyAllowance: number;
-  exceptions: Record<number, number>; // 0=Sunday, 1=Monday... key is day index, value is coin amount
-}
-
 export interface User {
   id: string;
   /** 冒险者扩展档案 ID（任务 target/assignee 用它，不是账号 id；docs/09 A4）。父母为 null */
