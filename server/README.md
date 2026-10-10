@@ -106,6 +106,28 @@ uv run alembic upgrade head
 (`statement_cache_size=0` + `NullPool`,见 `app/common/db/engine.py`)。
 若改用 5432 会话模式 pooler 或直连,可恢复连接池与语句缓存以提升性能。
 
+### 4.3 字符集与连接串约定
+
+**Postgres 不需要(也不要加)MySQL 式的 `charset=` 连接参数。**
+
+为什么:
+- MySQL 的字符集是**连接级**的,客户端不声明就可能按 latin1 之类默认值收发,所以必须 `?charset=utf8mb4`;
+- PostgreSQL 的编码是**库级属性**(database encoding),在 `create database` 时确定,本项目 Supabase 实例实测为 **UTF8**(`server_encoding`/`client_encoding`/库编码三者均为 UTF8,已实测中文读写 roundtrip 一致);
+- 客户端通过协议层的 `client_encoding` 自动协商,驱动(asyncpg/psycopg)默认跟随服务端,无需 URL 参数。手工加 `charset=` 只会被驱动当作未知参数报错。
+
+两条连接串的参数约定(由 `app/config.py` 统一拼装,**不要手写完整 URL**):
+
+| 参数 | `url_async`(asyncpg,应用运行) | `url_sync`(psycopg,Alembic/脚本) | 来源 |
+|---|---|---|---|
+| TLS | `ssl=require`(asyncpg 写法) | `sslmode=require`(标准 PG 写法) | `DATABASE_SSLMODE`,默认 require |
+| 应用名 | 经 `server_settings.application_name` 传递 | URL 查询参数 `application_name` | `DATABASE_APPLICATION_NAME`,默认 life-online |
+| 连接池 | 引擎层配置(`pool.*`,见下),不在 URL 上 | 不适用(一次性连接) | — |
+
+- 池相关参数(`pool_pre_ping` / `pool_recycle`)在 `config.yaml` 的 `database.pool` 下,由引擎读取;
+  但 6543 事务模式 pgbouncer 下强制 `NullPool`(见 §4.2),这两项此时不生效。
+- 当前两条 URL 均未设置连接超时;asyncpg/psycopg 用各自默认值。远程库网络抖动场景下
+  报错形态是 `WinError 121` / `connection_lost`,与字符集无关。
+
 ## 5. 启动
 
 ```bash
