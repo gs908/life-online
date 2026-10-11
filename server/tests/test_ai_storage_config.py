@@ -182,3 +182,59 @@ def test_get_storage_local_provider_never_needs_minio_config(
         assert storage is not None
     finally:
         get_storage.cache_clear()
+
+
+def _make_minio_storage_with_stub_client(monkeypatch: pytest.MonkeyPatch, exc: Exception):
+    """构造底层连接注入指定异常的 MinIOStorage —— 不碰真实网络。"""
+    from app.common.storage.minio import MinIOStorage
+
+    storage = MinIOStorage(
+        endpoint="localhost:9000", access_key="a", secret_key="s",
+        bucket="life-online",
+    )
+
+    class _StubClient:
+        def bucket_exists(self, bucket: str) -> bool:
+            raise exc
+
+    monkeypatch.setattr(storage, "_client", _StubClient())
+    return storage
+
+
+async def test_minio_conn_error_translated_to_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DEV-28:MinIO 配置了但连不上 → StorageUnavailableError(503),不裸 500。
+
+    用 stub 客户端注入 urllib3.MaxRetryError(业主本地 500 的原始异常形态),
+    断言翻译层的判定与文案。
+    """
+    from urllib3.connectionpool import HTTPConnectionPool
+    from urllib3.exceptions import MaxRetryError
+
+    from app.common.exceptions import StorageUnavailableError
+
+    raw = MaxRetryError(HTTPConnectionPool(host="localhost", port=9000), "/life-online?location=")
+    storage = _make_minio_storage_with_stub_client(monkeypatch, raw)
+
+    with pytest.raises(StorageUnavailableError) as exc_info:
+        await storage.ensure_bucket()
+    assert exc_info.value.http_status == 503
+    assert exc_info.value.code == "storage_unavailable"
+    assert "STORAGE_PROVIDER=local" in exc_info.value.message
+    assert "localhost:9000" in exc_info.value.message
+
+
+async def test_minio_s3_error_not_translated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S3Error(服务在、请求被拒,如权限)不是"不可达",必须原样上抛给上层处理。"""
+    from minio.error import S3Error
+
+    from app.common.exceptions import StorageUnavailableError
+
+    s3_err = S3Error(
+        code="AccessDenied", message="denied", resource="bucket", request_id="r",
+        host_id="h", response=None,
+    )
+    storage = _make_minio_storage_with_stub_client(monkeypatch, s3_err)
+
+    with pytest.raises(S3Error) as exc_info:
+        await storage.ensure_bucket()
+    assert not isinstance(exc_info.value, StorageUnavailableError)
