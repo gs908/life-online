@@ -388,13 +388,14 @@ PUT  /api/v1/sys/auth/password/me         {"new_password": "...", "old_password"
 - **凭据存储**:`sys_channel_password` 渠道表(与 `sys_channel_wechat` 并列),一账号至多一条;
   密码 scrypt 哈希(N=2^15, r=8, p=1,标准库实现)。username 全表唯一、统一小写(登录大小写不敏感)。
 - **注册**:与小程序 `/sys/families/join` 同语义,消费一张邀请码创建账号并直接返回 `TokenPair`。
-- **防爆破**:登录失败统一 401(不区分用户名是否存在);同一用户名 15 分钟内失败 5 次
+- **防爆破**:登录失败统一 401(不区分用户名是否存在,用户不存在时也对固定 dummy 哈希做
+  一次等参数 scrypt 校验,消除时序侧信道);同一用户名 15 分钟内失败 5 次
   (`AUTH_LOGIN_MAX_ATTEMPTS`/`AUTH_LOGIN_WINDOW_MINUTES` 可调)后返回 429 `rate_limited`。
-  限流为进程内计数(重启清零,多 worker 各自计数)。
+  限流为进程内计数(重启清零,多 worker 各自计数;计数字典容量上限 10000,防喷射撑爆内存)。
 - **改密/补设**:`PUT /sys/auth/password/me` 已有密码时必须校验 `old_password`;微信注册的账号
-  可首次设置(必须带 `username`)。
-- **开关**:`AUTH_PASSWORD_LOGIN_ENABLED`(默认 `true`,生产可用;关闭时 503)。与
-  `DEV_LOGIN_ENABLED`(仅开发环境)互不相关。
+  可首次设置(必须带 `username`)。受 `AUTH_PASSWORD_LOGIN_ENABLED` 门禁(关闭时 503)。
+- **开关**:`AUTH_PASSWORD_LOGIN_ENABLED`(默认 `true`,生产可用;关闭时 login/register/改密
+  均返回 503)。与 `DEV_LOGIN_ENABLED`(仅开发环境)互不相关。
 
 ## 8. 测试
 
