@@ -59,12 +59,11 @@ async def tcp_probe(host: str, port: int, rounds: int) -> None:
     """TCP 握手耗时(不发送任何数据,不需要数据库凭据)。"""
     values: list[float] = []
     fails = 0
-    loop = asyncio.get_running_loop()
     for _ in range(rounds):
         t0 = time.perf_counter()
         try:
             _reader, writer = await asyncio.wait_for(
-                loop.open_connection(host, port), timeout=5.0
+                asyncio.open_connection(host, port), timeout=5.0
             )
             values.append((time.perf_counter() - t0) * 1000)
             writer.close()

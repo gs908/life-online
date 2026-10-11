@@ -90,6 +90,7 @@ def _index_wheres(conn: Connection) -> dict[str, str | None]:
 
 def _collect_db(conn: Connection) -> dict[str, dict]:
     """从目标库 public schema 反射出结构摘要。"""
+    pg_dialect = postgresql.dialect()
     inspector = inspect(conn)
     index_wheres = _index_wheres(conn)
     summary: dict[str, dict] = {}
@@ -98,7 +99,10 @@ def _collect_db(conn: Connection) -> dict[str, dict]:
             continue
         columns = {
             col["name"]: {
-                "type": _norm_type(str(col["type"])),
+                # 与模型侧同口径:用 PG 方言编译类型。反射得到的方言类型用 str()
+                # 会丢掉时区信息(TIMESTAMP(timezone=True) -> 'TIMESTAMP'),
+                # 导致 timestamptz 列被误报为与模型不一致(DEV-29 本地建库时发现)。
+                "type": _norm_type(col["type"].compile(dialect=pg_dialect)),
                 "nullable": col["nullable"],
                 "default": _norm(col.get("default")),
             }
