@@ -16,6 +16,7 @@ from app.common.exceptions import (
 from app.common.timeutil import utcnow
 from app.models.enums import (
     CoinTransactionType,
+    TaskParticipantRole,
     TaskStatus,
     TaskType,
     UploadPurpose,
@@ -23,11 +24,12 @@ from app.models.enums import (
 )
 from app.models.scn_season import ScnSeason
 from app.models.scn_task_instance import ScnTaskInstance
+from app.models.scn_task_participant import ScnTaskParticipant
 from app.models.scn_task_template import ScnTaskTemplate
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.models.sys_upload import SysUpload
-from app.services import coin_service, privilege_service, xp_service
+from app.services import chain_service, coin_service, coop_service, privilege_service, xp_service
 
 # 驳回时若原 expire_at 已过(孩子在截止前提交,但家长审核拖到截止后才驳回),
 # 补一个重新提交窗口,避免下一轮过期批处理(expire_overdue_tasks)把它当成
@@ -70,6 +72,60 @@ async def _ensure_task_refs(
         await _ensure_child(db, family_id=family_id, child_id=target_child_id)
 
 
+async def create_task_template(
+    db: AsyncSession, *, family_id: str, creator_id: str, **kwargs
+) -> ScnTaskTemplate:
+    """只建模板、不投放实例(DEV-36 块 F)。
+
+    CHAIN 链的第 2..N 步用本入口创建:链式任务的实例由"链首投放 +
+    逐步解锁"生成,后续步骤模板不该在创建时就长出实例(详见 chain_service)。
+    """
+    season_id = kwargs["season_id"]
+    await _ensure_task_refs(
+        db,
+        family_id=family_id,
+        season_id=season_id,
+        target_child_id=kwargs.get("target_child_id"),
+    )
+    task_type = kwargs.get("type") or TaskType.DAILY
+    await chain_service.validate_chain_template(
+        db,
+        family_id=family_id,
+        task_type=task_type,
+        chain_key=kwargs.get("chain_key"),
+        chain_order=kwargs.get("chain_order", 1),
+        chain_total=kwargs.get("chain_total", 1),
+    )
+
+    template = ScnTaskTemplate(
+        family_id=family_id,
+        season_id=season_id,
+        creator_account_id=creator_id,
+        library_id=kwargs.get("library_id"),
+        target_child_id=kwargs.get("target_child_id"),
+        category=kwargs.get("category"),
+        title=kwargs["title"],
+        description=kwargs.get("description", ""),
+        lore_snippet=kwargs.get("lore_snippet"),
+        xp_reward=kwargs.get("xp_reward", 50),
+        type=task_type,
+        required_start_time=kwargs.get("required_start_time"),
+        reminder_message=kwargs.get("reminder_message"),
+        reminder_minutes_before=kwargs.get("reminder_minutes_before", 15),
+        time_deposit=kwargs.get("time_deposit", 10),
+        is_active=kwargs.get("is_active", True),
+        chain_key=kwargs.get("chain_key"),
+        chain_order=kwargs.get("chain_order", 1),
+        chain_total=kwargs.get("chain_total", 1),
+        estimated_minutes=kwargs.get("estimated_minutes"),
+        difficulty=kwargs.get("difficulty", 1),
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+    return template
+
+
 async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kwargs) -> ScnTaskInstance:
     """兼容旧 create_task API:同时创建模板与一条初始实例。"""
     target_child_id = kwargs.pop("target_child_id", None) or kwargs.pop("target_user_id", None)
@@ -79,6 +135,21 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         family_id=family_id,
         season_id=season_id,
         target_child_id=target_child_id,
+    )
+    task_type = kwargs.get("type") or TaskType.DAILY
+    chain_order = kwargs.get("chain_order", 1)
+    if task_type == TaskType.CHAIN and chain_order != 1:
+        raise ValidationError(
+            "CHAIN 任务只投放链首步(chain_order=1);"
+            "后续步骤模板请走 POST /scn/task-templates,由链逐步解锁生成实例"
+        )
+    await chain_service.validate_chain_template(
+        db,
+        family_id=family_id,
+        task_type=task_type,
+        chain_key=kwargs.get("chain_key"),
+        chain_order=chain_order,
+        chain_total=kwargs.get("chain_total", 1),
     )
 
     template = ScnTaskTemplate(
@@ -92,12 +163,17 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         description=kwargs.get("description", ""),
         lore_snippet=kwargs.get("lore_snippet"),
         xp_reward=kwargs.get("xp_reward", 50),
-        type=kwargs.get("type"),
+        type=task_type,
         required_start_time=kwargs.get("required_start_time"),
         reminder_message=kwargs.get("reminder_message"),
         reminder_minutes_before=kwargs.get("reminder_minutes_before", 15),
         time_deposit=kwargs.get("time_deposit", 10),
         is_active=True,
+        chain_key=kwargs.get("chain_key"),
+        chain_order=chain_order,
+        chain_total=kwargs.get("chain_total", 1),
+        estimated_minutes=kwargs.get("estimated_minutes"),
+        difficulty=kwargs.get("difficulty", 1),
     )
     db.add(template)
     await db.flush()
@@ -116,6 +192,8 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         deadline=kwargs.get("deadline"),
         expire_at=kwargs.get("expire_at") or kwargs.get("deadline"),
         time_deposit=template.time_deposit,
+        chain_index=template.chain_order if template.chain_key else None,
+        chain_total=template.chain_total if template.chain_key else None,
     )
     db.add(task)
     await db.commit()
@@ -170,7 +248,12 @@ async def start_task(
     if task.target_child_id and task.target_child_id != child.id:
         raise PermissionDeniedError("该任务指定了其他接取人")
 
-    deposit = coin_service.calculate_deposit_fee(task.time_deposit or 10)
+    if coop_service.is_coop(task):
+        # COOP:主接取人先按 n=1 承担全额押金并登记 OWNER 参与者;
+        # 后续孩子 join 时会重新均摊并向他退差额(coop_service.join_task)。
+        deposit = coop_service.per_participant_shares(task.time_deposit or 10, 1)[0]
+    else:
+        deposit = coin_service.calculate_deposit_fee(task.time_deposit or 10)
     if not coin_service.has_sufficient_coins(child, deposit):
         raise ValidationError(
             f"时间币不足,需要 {deposit},当前 {child.time_coin_balance}"
@@ -188,6 +271,17 @@ async def start_task(
     task.status = TaskStatus.IN_PROGRESS
     task.assignee_child_id = child.id
     task.started_at = utcnow()
+
+    if coop_service.is_coop(task):
+        task.participants.append(ScnTaskParticipant(
+            task_instance_id=task.id,
+            account_id=child.account_id,
+            child_id=child.id,
+            role=TaskParticipantRole.OWNER,
+            confirmed_at=utcnow(),
+            deposit_share=deposit,
+        ))
+
     await db.commit()
     await db.refresh(task)
     return task
@@ -246,8 +340,9 @@ async def approve_task(
         raise ValidationError("任务没有接取人")
 
     assignee = await _ensure_child(db, family_id=family_id, child_id=task.assignee_child_id)
-    required_start_time = task.template.required_start_time if task.template else None
-    is_challenge = bool(task.template and task.template.type == TaskType.CHALLENGE)
+    template = task.template
+    required_start_time = template.required_start_time if template else None
+    is_challenge = bool(template and template.type == TaskType.CHALLENGE)
     final_xp = xp_service.calculate_xp(
         task.xp_reward,
         rating=rating,
@@ -255,36 +350,87 @@ async def approve_task(
         submitted_at=task.submitted_at,
         required_start_time=required_start_time,
         is_challenge=is_challenge,
-    )
-    level_info = xp_service.apply_xp_and_level(assignee, final_xp)
-    unlocked_privileges = await privilege_service.unlock_for_user(db, assignee)
-
-    deposit = task.time_deposit or 10
-    assignee.time_coin_balance += deposit
-    await coin_service.record_transaction(
-        db,
-        child=assignee,
-        type=CoinTransactionType.TASK_REFUND,
-        amount=deposit,
-        task_instance_id=task.id,
-        note="任务完成退还押金",
+        # CHAIN 链末步骤(chain_index == chain_total)享受链末加成(docs/04 §2.3)
+        chain_index=task.chain_index,
+        chain_total=task.chain_total,
     )
 
     task.status = TaskStatus.COMPLETED
     task.rating = rating
     task.review_comment = comment
     task.xp_awarded = final_xp
-    task.coin_delta = deposit
     task.completed_at = utcnow()
+
+    settle_info: dict = {}
+    unlocked_privileges: list = []
+    if coop_service.is_coop(task):
+        wallets = coop_service.wallet_participants(task)
+        # XP 在孩子参与者间均摊(家长参与者不获得 XP,也不占份额)
+        xp_shares = coop_service.split_evenly(final_xp, len(wallets)) if wallets else []
+        xp_results = []
+        for i, p in enumerate(wallets):
+            share = xp_shares[i]
+            p_child = await db.get(SysChild, p.child_id)
+            if p_child is None:
+                continue
+            info = xp_service.apply_xp_and_level(p_child, share)
+            p.xp_awarded = share
+            xp_results.append(info)
+            # 押金按各自份额退还
+            p_child.time_coin_balance += p.deposit_share
+            await coin_service.record_transaction(
+                db,
+                child=p_child,
+                type=CoinTransactionType.TASK_REFUND,
+                amount=p.deposit_share,
+                task_instance_id=task.id,
+                note="协作任务完成退还押金份额",
+            )
+            unlocked = await privilege_service.unlock_for_user(db, p_child)
+            unlocked_privileges.extend(unlocked)
+        level_info = xp_results[0] if xp_results else xp_service.apply_xp_and_level(assignee, 0)
+        total_refund = sum(p.deposit_share for p in wallets)
+        task.coin_delta = total_refund
+        settle_info = {
+            "participants": [
+                {
+                    "child_id": p.child_id,
+                    "role": p.role.value if hasattr(p.role, "value") else str(p.role),
+                    "deposit_refunded": p.deposit_share,
+                    "xp_awarded": p.xp_awarded,
+                }
+                for p in task.participants
+            ],
+        }
+    else:
+        level_info = xp_service.apply_xp_and_level(assignee, final_xp)
+        unlocked_privileges = await privilege_service.unlock_for_user(db, assignee)
+
+        deposit = task.time_deposit or 10
+        assignee.time_coin_balance += deposit
+        await coin_service.record_transaction(
+            db,
+            child=assignee,
+            type=CoinTransactionType.TASK_REFUND,
+            amount=deposit,
+            task_instance_id=task.id,
+            note="任务完成退还押金",
+        )
+        task.coin_delta = deposit
+
+    # CHAIN:第 N 步 COMPLETED -> 生成第 N+1 步。
+    # 唯一接线点在 chain_service.spawn_next_chain_step(DEV-35 合入后只改那一处)。
+    await chain_service.spawn_next_chain_step(db, task)
 
     await db.commit()
     await db.refresh(task)
     await db.refresh(assignee)
     return task, assignee, {
         "xp_awarded": final_xp,
-        "deposit_refunded": deposit,
+        "deposit_refunded": task.coin_delta,
         "unlocked_privilege_count": len(unlocked_privileges),
         **level_info,
+        **settle_info,
     }
 
 
@@ -324,38 +470,76 @@ async def abandon_task(
     if task.status != TaskStatus.IN_PROGRESS:
         raise ConflictError(f"当前状态 {_enum_value(task.status)},无法放弃")
 
-    deposit = task.time_deposit or 10
-    refund = coin_service.calculate_refund(deposit, child.daily_abandon_count)
-    child.time_coin_balance += refund
-    await coin_service.record_transaction(
-        db,
-        child=child,
-        type=CoinTransactionType.TASK_REFUND,
-        amount=refund,
-        task_instance_id=task.id,
-        note="放弃任务退还押金",
-    )
-    penalty = deposit - refund
-    if penalty > 0:
+    if coop_service.is_coop(task):
+        # COOP 放弃:发起放弃的主接取人按连续放弃规则打折退款并计数;
+        # 其他参与者未发起放弃,全额退还份额,不计入其惩罚。
+        # 参与者行随放弃清除,任务回 AVAILABLE 后可重新接取/加入;
+        # 更细的"部分完成"结算见 docs/13 设计草案(待独立立项实现)。
+        total_refund = 0
+        for p in coop_service.wallet_participants(task):
+            p_child = await db.get(SysChild, p.child_id)
+            if p_child is None:
+                continue
+            if p.child_id == child.id:
+                refund = coin_service.calculate_refund(p.deposit_share, child.daily_abandon_count)
+            else:
+                refund = p.deposit_share
+            p_child.time_coin_balance += refund
+            await coin_service.record_transaction(
+                db,
+                child=p_child,
+                type=CoinTransactionType.TASK_REFUND,
+                amount=refund,
+                task_instance_id=task.id,
+                note="放弃协作任务退还押金份额",
+            )
+            total_refund += refund
+            penalty = p.deposit_share - refund
+            if penalty > 0:
+                await coin_service.record_transaction(
+                    db,
+                    child=p_child,
+                    type=CoinTransactionType.ABANDON_PENALTY,
+                    amount=-penalty,
+                    task_instance_id=task.id,
+                    note="连续放弃任务惩罚",
+                )
+        child.daily_abandon_count += 1
+        task.participants.clear()
+        task.coin_delta = total_refund - (task.time_deposit or 10)
+    else:
+        deposit = task.time_deposit or 10
+        refund = coin_service.calculate_refund(deposit, child.daily_abandon_count)
+        child.time_coin_balance += refund
         await coin_service.record_transaction(
             db,
             child=child,
-            type=CoinTransactionType.ABANDON_PENALTY,
-            amount=-penalty,
+            type=CoinTransactionType.TASK_REFUND,
+            amount=refund,
             task_instance_id=task.id,
-            note="连续放弃任务惩罚",
+            note="放弃任务退还押金",
         )
-    child.daily_abandon_count += 1
+        penalty = deposit - refund
+        if penalty > 0:
+            await coin_service.record_transaction(
+                db,
+                child=child,
+                type=CoinTransactionType.ABANDON_PENALTY,
+                amount=-penalty,
+                task_instance_id=task.id,
+                note="连续放弃任务惩罚",
+            )
+        child.daily_abandon_count += 1
+        task.coin_delta = refund - deposit
 
     task.status = TaskStatus.AVAILABLE
     task.assignee_child_id = None
     task.started_at = None
-    task.coin_delta = refund - deposit
 
     await db.commit()
     await db.refresh(task)
     await db.refresh(child)
-    return task, child, refund
+    return task, child, task.coin_delta
 
 
 async def delete_task(db: AsyncSession, *, task_id: str, family_id: str | None = None) -> None:
@@ -394,19 +578,38 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
     processed = 0
     for task in tasks:
         if task.status == TaskStatus.IN_PROGRESS and task.assignee_child_id:
-            child = await db.get(SysChild, task.assignee_child_id)
-            if child is not None:
-                deposit = task.time_deposit or 10
-                child.time_coin_balance += deposit
-                await coin_service.record_transaction(
-                    db,
-                    child=child,
-                    type=CoinTransactionType.TASK_REFUND,
-                    amount=deposit,
-                    task_instance_id=task.id,
-                    note="任务过期退还押金",
-                )
+            if coop_service.is_coop(task):
+                # COOP 过期:已确认的钱包参与者各自全额退还份额,不计放弃惩罚
+                refunded = 0
+                for p in coop_service.wallet_participants(task):
+                    p_child = await db.get(SysChild, p.child_id)
+                    if p_child is None:
+                        continue
+                    p_child.time_coin_balance += p.deposit_share
+                    await coin_service.record_transaction(
+                        db,
+                        child=p_child,
+                        type=CoinTransactionType.TASK_REFUND,
+                        amount=p.deposit_share,
+                        task_instance_id=task.id,
+                        note="协作任务过期退还押金份额",
+                    )
+                    refunded += p.deposit_share
                 task.coin_delta = 0
+            else:
+                child = await db.get(SysChild, task.assignee_child_id)
+                if child is not None:
+                    deposit = task.time_deposit or 10
+                    child.time_coin_balance += deposit
+                    await coin_service.record_transaction(
+                        db,
+                        child=child,
+                        type=CoinTransactionType.TASK_REFUND,
+                        amount=deposit,
+                        task_instance_id=task.id,
+                        note="任务过期退还押金",
+                    )
+                    task.coin_delta = 0
         task.status = TaskStatus.EXPIRED
         processed += 1
 

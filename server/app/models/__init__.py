@@ -12,6 +12,7 @@ from app.models.enums import (
     NotificationType,
     ProofKind,
     TaskCategory,
+    TaskParticipantRole,
     TaskStatus,
     TaskType,
     ThemeId,
@@ -28,6 +29,7 @@ from app.models.scn_privilege_use import ScnPrivilegeUse
 from app.models.scn_season import ScnSeason
 from app.models.scn_stats_daily import ScnStatsDaily
 from app.models.scn_task_instance import ScnTaskInstance
+from app.models.scn_task_participant import ScnTaskParticipant
 from app.models.scn_task_proof import ScnTaskProof
 from app.models.scn_task_template import ScnTaskTemplate
 from app.models.scn_task_template_library import ScnTaskTemplateLibrary
@@ -64,6 +66,7 @@ __all__ = [
     "ScnSeason",
     "ScnStatsDaily",
     "ScnTaskInstance",
+    "ScnTaskParticipant",
     "ScnTaskProof",
     "ScnTaskTemplate",
     "ScnTaskTemplateLibrary",
@@ -82,6 +85,7 @@ __all__ = [
     "SysParent",
     "SysUpload",
     "TaskCategory",
+    "TaskParticipantRole",
     "TaskStatus",
     "TaskType",
     "ThemeId",

@@ -49,4 +49,16 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     time_deposit: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
+    # ---- CHAIN 递进串行(DEV-36 块 F)------------------------------------
+    # 同一条链的各步模板共享 chain_key,按 chain_order(1-based)排序;
+    # 实例化时 chain_order/chain_total 快照到 scn_task_instance.chain_index/chain_total,
+    # 供链末 XP 加成判定。链的投放/顺延/重做池语义属于 DEV-35 的生成器,
+    # 本表只承载链的结构定义。
+    chain_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    chain_order: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    chain_total: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 递进难度:每步独立配置,"越来越难"由家长按步设置体现
+    estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    difficulty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
     season: Mapped["ScnSeason"] = relationship(back_populates="task_templates", lazy="raise")

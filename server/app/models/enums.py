@@ -96,6 +96,20 @@ class HiddenTriggerKind(str, Enum):
     RANDOM_IN_TIME_WINDOW = "RANDOM_IN_TIME_WINDOW"
 
 
+class TaskParticipantRole(str, Enum):
+    """COOP 任务的参与者角色。
+
+    - OWNER: 主接取人,对应 scn_task_instance.assignee_child_id,接取时自动登记。
+    - MEMBER: 其他孩子参与者,主动 join 时登记。
+    - PARENT: 亲子协作中的家长参与者。家长没有时间币/XP 账户,
+      不参与押金均摊,也不获得 XP(见 docs/04 §4)。
+    """
+
+    OWNER = "OWNER"
+    MEMBER = "MEMBER"
+    PARENT = "PARENT"
+
+
 class ProofKind(str, Enum):
     IMAGE = "IMAGE"
     VIDEO = "VIDEO"

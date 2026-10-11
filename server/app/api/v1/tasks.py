@@ -9,14 +9,17 @@ from app.schemas.common import ApiResponse, PageQuery, PageResult, ok
 from app.schemas.task import (
     TaskApproveRequest,
     TaskCreate,
+    TaskParticipantRead,
     TaskRead,
     TaskRejectRequest,
     TaskSubmitRequest,
+    TaskTemplateCreate,
+    TaskTemplateRead,
 )
-from app.services import task_service
+from app.services import coop_service, task_service
 from app.services.upload_service import build_access_url
 
-router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
+router = APIRouter(prefix="/scn", tags=["scn-task-instances"])
 
 
 def _template_value(t, name: str, default=None):
@@ -31,6 +34,17 @@ def _to_read(t) -> TaskRead:
             proof_url = build_access_url(t.proof_object_key)
         except Exception:
             proof_url = None
+    participants = [
+        TaskParticipantRead(
+            account_id=p.account_id,
+            child_id=p.child_id,
+            role=p.role,
+            confirmed_at=p.confirmed_at,
+            deposit_share=p.deposit_share,
+            xp_awarded=p.xp_awarded,
+        )
+        for p in getattr(t, "participants", [])
+    ]
     return TaskRead(
         id=t.id,
         family_id=t.family_id,
@@ -61,6 +75,11 @@ def _to_read(t) -> TaskRead:
         reminder_message=_template_value(t, "reminder_message"),
         reminder_minutes_before=_template_value(t, "reminder_minutes_before", 15),
         time_deposit=t.time_deposit,
+        chain_index=t.chain_index,
+        chain_total=t.chain_total,
+        estimated_minutes=_template_value(t, "estimated_minutes"),
+        difficulty=_template_value(t, "difficulty"),
+        participants=participants,
         created_at=t.created_at,
         updated_at=t.updated_at,
         creator_id=t.creator_account_id,
@@ -69,7 +88,7 @@ def _to_read(t) -> TaskRead:
     )
 
 
-@router.get("", response_model=ApiResponse[PageResult[TaskRead]], summary="任务实例列表")
+@router.get("/task-instances", response_model=ApiResponse[PageResult[TaskRead]], summary="任务实例列表")
 async def list_tasks(
     db: DBSession, user: CurrentUser,
     page: int = Query(default=1, ge=1),
@@ -93,7 +112,7 @@ async def list_tasks(
     ))
 
 
-@router.get("/{task_id}", response_model=ApiResponse[TaskRead], summary="任务实例详情")
+@router.get("/task-instances/{task_id}", response_model=ApiResponse[TaskRead], summary="任务实例详情")
 async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiResponse[TaskRead]:
     t = await task_service.get_task(db, task_id)
     if t.family_id != user.family_id:
@@ -102,7 +121,7 @@ async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiRespons
     return ok(_to_read(t))
 
 
-@router.post("", response_model=ApiResponse[TaskRead], summary="创建任务模板并生成初始实例(父母)")
+@router.post("/task-instances", response_model=ApiResponse[TaskRead], summary="创建任务模板并生成初始实例(父母)")
 async def create_task(
     body: TaskCreate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
@@ -113,13 +132,51 @@ async def create_task(
     return ok(_to_read(t))
 
 
-@router.delete("/{task_id}", response_model=ApiResponse[dict], summary="删除任务实例(父母)")
+@router.post("/task-templates", response_model=ApiResponse[TaskTemplateRead], summary="只建任务模板、不投放实例(父母)")
+async def create_task_template(
+    body: TaskTemplateCreate, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[TaskTemplateRead]:
+    """CHAIN 链的第 2..N 步走这里:链式任务的实例由"链首投放 + 逐步解锁"生成,
+    后续步骤模板创建时不该长出实例。"""
+    data = body.model_dump()
+    t = await task_service.create_task_template(
+        db, family_id=user.family_id, creator_id=user.id, **data,
+    )
+    return ok(TaskTemplateRead(
+        id=t.id,
+        family_id=t.family_id,
+        season_id=t.season_id,
+        creator_account_id=t.creator_account_id,
+        library_id=t.library_id,
+        target_child_id=t.target_child_id,
+        category=t.category,
+        title=t.title,
+        description=t.description,
+        lore_snippet=t.lore_snippet,
+        xp_reward=t.xp_reward,
+        type=t.type,
+        required_start_time=t.required_start_time,
+        reminder_message=t.reminder_message,
+        reminder_minutes_before=t.reminder_minutes_before,
+        time_deposit=t.time_deposit,
+        is_active=t.is_active,
+        chain_key=t.chain_key,
+        chain_order=t.chain_order,
+        chain_total=t.chain_total,
+        estimated_minutes=t.estimated_minutes,
+        difficulty=t.difficulty,
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+    ))
+
+
+@router.delete("/task-instances/{task_id}", response_model=ApiResponse[dict], summary="删除任务实例(父母)")
 async def delete_task(task_id: str, db: DBSession, user: GuildMasterOnly) -> ApiResponse[dict]:
     await task_service.delete_task(db, task_id=task_id, family_id=user.family_id)
     return ok({"ok": True})
 
 
-@router.post("/{task_id}/start", response_model=ApiResponse[TaskRead], summary="孩子接取任务")
+@router.post("/task-instances/{task_id}/start", response_model=ApiResponse[TaskRead], summary="孩子接取任务")
 async def start_task(
     task_id: str, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:
@@ -127,7 +184,15 @@ async def start_task(
     return ok(_to_read(t))
 
 
-@router.post("/{task_id}/submit", response_model=ApiResponse[TaskRead], summary="孩子提交")
+@router.post("/task-instances/{task_id}/join", response_model=ApiResponse[TaskRead], summary="加入 COOP 协作任务(孩子=均摊押金 / 家长=亲子参与)")
+async def join_task(
+    task_id: str, db: DBSession, user: CurrentUser,
+) -> ApiResponse[TaskRead]:
+    t = await coop_service.join_task(db, task_id=task_id, user=user)
+    return ok(_to_read(t))
+
+
+@router.post("/task-instances/{task_id}/submit", response_model=ApiResponse[TaskRead], summary="孩子提交")
 async def submit_task(
     task_id: str, body: TaskSubmitRequest, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:
@@ -137,7 +202,7 @@ async def submit_task(
     return ok(_to_read(t))
 
 
-@router.post("/{task_id}/approve", response_model=ApiResponse[TaskRead], summary="父母审核通过")
+@router.post("/task-instances/{task_id}/approve", response_model=ApiResponse[TaskRead], summary="父母审核通过")
 async def approve_task(
     task_id: str, body: TaskApproveRequest, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
@@ -147,7 +212,7 @@ async def approve_task(
     return ok(_to_read(t))
 
 
-@router.post("/{task_id}/reject", response_model=ApiResponse[TaskRead], summary="父母审核驳回(打回重做)")
+@router.post("/task-instances/{task_id}/reject", response_model=ApiResponse[TaskRead], summary="父母审核驳回(打回重做)")
 async def reject_task(
     task_id: str, body: TaskRejectRequest, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
@@ -157,7 +222,7 @@ async def reject_task(
     return ok(_to_read(t))
 
 
-@router.post("/{task_id}/abandon", response_model=ApiResponse[TaskRead], summary="孩子放弃")
+@router.post("/task-instances/{task_id}/abandon", response_model=ApiResponse[TaskRead], summary="孩子放弃")
 async def abandon_task(
     task_id: str, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:

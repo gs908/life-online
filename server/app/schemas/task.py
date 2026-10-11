@@ -5,7 +5,7 @@ from datetime import datetime, time
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import TaskCategory, TaskStatus, TaskType
+from app.models.enums import TaskCategory, TaskParticipantRole, TaskStatus, TaskType
 
 
 class TaskTemplateCreate(BaseModel):
@@ -23,6 +23,13 @@ class TaskTemplateCreate(BaseModel):
     reminder_minutes_before: int = 15
     time_deposit: int = 10
     is_active: bool = True
+    # CHAIN 链式字段(仅 CHAIN 类型可用,创建时校验)
+    chain_key: str | None = Field(default=None, max_length=64)
+    chain_order: int = Field(default=1, ge=1)
+    chain_total: int = Field(default=1, ge=1)
+    # 递进难度:预计完成分钟数(链内步骤顺延窗口的默认来源)/ 难度 1-5
+    estimated_minutes: int | None = Field(default=None, ge=1)
+    difficulty: int = Field(default=1, ge=1, le=5)
 
 
 class TaskTemplateRead(BaseModel):
@@ -43,6 +50,11 @@ class TaskTemplateRead(BaseModel):
     reminder_minutes_before: int
     time_deposit: int
     is_active: bool
+    chain_key: str | None = None
+    chain_order: int
+    chain_total: int
+    estimated_minutes: int | None = None
+    difficulty: int
     created_at: datetime
     updated_at: datetime
 
@@ -52,6 +64,17 @@ class TaskCreate(TaskTemplateCreate):
     target_user_id: str | None = None
     deadline: datetime | None = None
     expire_at: datetime | None = None
+
+
+class TaskParticipantRead(BaseModel):
+    """COOP 参与者(非 COOP 任务该列表为空)。"""
+
+    account_id: str
+    child_id: str | None = None
+    role: TaskParticipantRole
+    confirmed_at: datetime | None = None
+    deposit_share: int
+    xp_awarded: int | None = None
 
 
 class TaskRead(BaseModel):
@@ -84,6 +107,13 @@ class TaskRead(BaseModel):
     reminder_message: str | None
     reminder_minutes_before: int
     time_deposit: int
+    # CHAIN:链中位置(1-based)与总步数,链末步骤享受链末 XP 加成
+    chain_index: int | None = None
+    chain_total: int | None = None
+    estimated_minutes: int | None = None
+    difficulty: int | None = None
+    # COOP 参与者
+    participants: list[TaskParticipantRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
