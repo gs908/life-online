@@ -10,7 +10,8 @@
 - 创建 -> 接取 -> 提交 -> 审核通过 -> 完成 全链路,含 XP 发放与押金退还。
 - 审核驳回:PENDING_REVIEW -> IN_PROGRESS,押金不变,可重新提交。
 - 放弃任务:押金退款 + 连续放弃(当日第 4 次起)60% 惩罚。
-- 过期任务:AVAILABLE 直接过期;IN_PROGRESS 过期全额退押金,不计入放弃惩罚。
+- 过期任务:AVAILABLE 直接过期(不涉及押金);IN_PROGRESS 超时退 50% 押金、
+  其余 TIMEOUT_PENALTY 扣罚,不计入放弃惩罚(细粒度断言见 test_timed_timeout_penalty.py)。
 - 非法状态流转:对每个动作在错误状态下调用,断言 409。
 - 家长/孩子权限边界:孩子不能创建/删除/审核/驳回任务;家长不能接取/提交/放弃任务;
   跨家庭访问一律 403/404,不泄露资源是否存在于别的家庭。
@@ -381,7 +382,8 @@ async def test_expire_overdue_tasks(
     assert in_progress_after.status == TaskStatus.EXPIRED
 
     await db_session.refresh(seeded_family.child)
-    assert seeded_family.child.time_coin_balance == balance_after_start + 10  # 全额退押金
+    # IN_PROGRESS 超时(块 D):退 50% 押金(10 -> 5),其余 TIMEOUT_PENALTY 扣罚
+    assert seeded_family.child.time_coin_balance == balance_after_start + 5
     assert seeded_family.child.daily_abandon_count == 0  # 不计入放弃惩罚
 
 

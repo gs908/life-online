@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.common.exceptions import NotFoundError, PermissionDeniedError, ValidationError
-from app.models.enums import CoinTransactionType
+from app.common.timeutil import today_bj
+from app.config import DepositSection, DepositTypeRange, settings
+from app.models.enums import CoinTransactionType, TaskType
 from app.models.scn_time_coin_log import ScnTimeCoinLog
 from app.models.scn_time_config import ScnTimeConfig
 from app.models.sys_child import SysChild
@@ -81,14 +83,92 @@ async def reset_daily_allowance(db: AsyncSession, child: SysChild, today: date) 
 
 
 def calculate_refund(deposit: int, abandon_count_today: int) -> int:
-    """放弃任务时的退款金额。"""
-    if abandon_count_today >= 3:
-        return int(deposit * 0.6)
+    """放弃任务时的退款金额(连续 abandon_full_refund_limit 次后按比例退)。"""
+    cfg = settings.deposit
+    if abandon_count_today >= cfg.abandon_full_refund_limit:
+        return int(deposit * cfg.abandon_penalty_refund_ratio)
     return deposit
 
 
+def calculate_timeout_refund(deposit: int) -> int:
+    """限时任务已接取(IN_PROGRESS)超时:按 timeout_refund_ratio 退押金,其余为扣罚。"""
+    return int(deposit * settings.deposit.timeout_refund_ratio)
+
+
+def _type_key(task_type: TaskType | str) -> str:
+    return task_type.value if hasattr(task_type, "value") else str(task_type)
+
+
+def _range_for(task_type: TaskType | str, cfg: DepositSection) -> DepositTypeRange:
+    key = _type_key(task_type)
+    rng = cfg.by_type.get(key)
+    if rng is None:
+        raise ValidationError(f"未知任务类型 {key!r},无法解析押金")
+    return rng
+
+
+def deposit_cap(daily_allowance: int, cfg: DepositSection | None = None) -> int:
+    """押金上限:当日配额 × allowance_cap_ratio(避免孩子永远接不了任务)。"""
+    cfg = cfg or settings.deposit
+    return int(daily_allowance * cfg.allowance_cap_ratio)
+
+
+def compute_deposit(
+    *,
+    task_type: TaskType | str,
+    estimated_minutes: int | None = None,
+    explicit_deposit: int | None = None,
+    daily_allowance: int,
+    cfg: DepositSection | None = None,
+) -> int:
+    """押金解析的纯计算部分(不碰 DB,便于单测与预览接口复用)。
+
+    规则见 `DepositSection` docstring:显式值优先 -> 耗时驱动 -> 类型 min/max
+    clamp -> 当日配额比例封顶。难度不在参数里:难度只影响 XP,不影响押金。
+    """
+    cfg = cfg or settings.deposit
+    rng = _range_for(task_type, cfg)
+
+    if explicit_deposit is not None:
+        if explicit_deposit < 0:
+            raise ValidationError("time_deposit 不能为负")
+        value = explicit_deposit
+    else:
+        base = rng.default
+        if estimated_minutes is not None and estimated_minutes > 0:
+            ratio = max(0.5, min(2.0, estimated_minutes / cfg.reference_minutes))
+            value = round(base * ratio)
+        else:
+            value = base
+
+    value = rng.clamp(value)
+    return min(value, deposit_cap(daily_allowance, cfg))
+
+
+async def resolve_deposit(
+    db: AsyncSession,
+    *,
+    family_id: str,
+    task_type: TaskType | str,
+    estimated_minutes: int | None = None,
+    explicit_deposit: int | None = None,
+    day: date | None = None,
+    cfg: DepositSection | None = None,
+) -> int:
+    """创建任务模板/实例时解析押金并落库(替代 `time_deposit or 10` 兜底)。"""
+    day = day or today_bj()
+    allowance = await compute_daily_allowance(db, family_id, day)
+    return compute_deposit(
+        task_type=task_type,
+        estimated_minutes=estimated_minutes,
+        explicit_deposit=explicit_deposit,
+        daily_allowance=allowance,
+        cfg=cfg,
+    )
+
+
 def calculate_deposit_fee(time_deposit: int) -> int:
-    """接取任务时的押金(目前直接等于 time_deposit)。"""
+    """接取任务时的押金(目前直接等于 time_deposit,创建时已由 resolve_deposit 解析落库)。"""
     if time_deposit < 0:
         raise ValidationError("time_deposit 不能为负")
     return time_deposit

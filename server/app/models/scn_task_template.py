@@ -46,7 +46,12 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     required_start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     reminder_message: Mapped[str | None] = mapped_column(String(256), nullable=True)
     reminder_minutes_before: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
+    # 难度 1-5:只影响 XP(见 xp_service.calculate_difficulty_multiplier),不影响押金。
+    # 默认 2(倍率 1.0),存量模板迁移后 XP 行为不变。
+    difficulty: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    # 预计耗时(分钟):押金 = 耗时驱动的输入(见 coin_service.resolve_deposit)
+    estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     time_deposit: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
-    season: Mapped["ScnSeason"] = relationship(back_populates="task_templates", lazy="raise")
+    season: Mapped[ScnSeason] = relationship(back_populates="task_templates", lazy="raise")

@@ -127,3 +127,14 @@ xp:
   timing_penalty: ${env:XP_TIMING_PENALTY:0.8}
   speed_window_minutes: ${env:XP_SPEED_WINDOW_MINUTES:60}
   speed_bonus: ${env:XP_SPEED_BONUS:1.1}
+
+# 任务押金数值(块 C:押金 = 耗时驱动;难度只改 XP 不改押金)。
+# 解析规则:显式值优先 -> clamp(estimated_minutes/reference_minutes, 0.5, 2.0) x 类型默认值
+#           -> clamp 到类型 min/max -> 封顶到 floor(当日配额 x allowance_cap_ratio)。
+# 各类型 (default, min, max) 与难度倍率表为结构化默认,代码内维护(DepositSection/XpSection)。
+deposit:
+  reference_minutes: ${env:DEPOSIT_REFERENCE_MINUTES:30}
+  allowance_cap_ratio: ${env:DEPOSIT_ALLOWANCE_CAP_RATIO:0.5}
+  timeout_refund_ratio: ${env:DEPOSIT_TIMEOUT_REFUND_RATIO:0.5}
+  abandon_full_refund_limit: ${env:DEPOSIT_ABANDON_FULL_REFUND_LIMIT:3}
+  abandon_penalty_refund_ratio: ${env:DEPOSIT_ABANDON_PENALTY_REFUND_RATIO:0.6}

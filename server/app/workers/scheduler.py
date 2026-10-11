@@ -6,8 +6,9 @@
     按家庭 ScnTimeConfig 重置 time_coin_balance 与 daily_abandon_count。
 
 每 5 分钟跑 expire_overdue_tasks:
-    扫描 AVAILABLE/IN_PROGRESS 且已过 expire_at 的任务实例,统一切 EXPIRED,
-    IN_PROGRESS 的任务全额退还押金(详见 app.services.task_service.expire_overdue_tasks)。
+    扫描 AVAILABLE/IN_PROGRESS 且已过 expire_at 的任务实例,统一切 EXPIRED。
+    AVAILABLE 直接过期(不涉及押金);IN_PROGRESS 退 50% 押金、其余 TIMEOUT_PENALTY
+    扣罚并发 TASK_EXPIRED 通知(详见 app.services.task_service.expire_overdue_tasks)。
 """
 from __future__ import annotations
 
@@ -19,9 +20,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 
 from app.common.db.session import AsyncSessionLocal
+from app.common.timeutil import today_bj
 from app.models.sys_child import SysChild
 from app.services import coin_service, task_service
-from app.common.timeutil import today_bj
 
 log = logging.getLogger(__name__)
 
