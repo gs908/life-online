@@ -236,7 +236,7 @@
 **TaskCreate**（POST body；= TaskTemplateCreate + 实例参数）：
 `{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?(50, ≥0), type?(DAILY), target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?(15), time_deposit?(10), is_active?(true), target_user_id?, deadline?, expire_at? }`
 
-**TaskSubmitRequest** `{ proof_object_key: str }` — **不是 base64**：先 `POST /sys/uploads`（purpose=`task_proof`，建议带 `task_id`）拿 `object_key`，再提交。`proof_object_key` 做归属校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`，否则 422（防 local 模式下用任意字符串引用/探测他人对象）。
+**TaskSubmitRequest** `{ proof_object_key: str }` — **不是 base64**：先 `POST /sys/uploads`（purpose=`task_proof`，建议带 `task_id`，DEV-30 起 key 含任务实例标识）拿 `object_key`，再提交。`proof_object_key` 做归属校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`，否则 422（防 local 模式下用任意字符串引用/探测他人对象）；提交时把凭证回填绑定到 `task_instance_id`（已绑定其他任务的凭证拒绝复用）。
 **TaskApproveRequest** `{ rating: int 1–5（必填）, comment?: str }`
 
 ## 7. 动态主题样式 `/scn/theme-styles`
@@ -330,10 +330,16 @@
 |------|------|------|------|
 | POST | `/sys/uploads` | multipart 上传：`file`（必填）+ `purpose`（`avatar|task_proof|season_banner|other`）+ `task_id`（可选，`task_proof` 时建议携带） | 登录 |
 
-**UploadRead** `{ id, family_id, uploader_account_id, storage_provider, object_key, bucket, public_url, content_type, size, purpose, access_url, created_at }`
-> 任务提交用 `object_key`；展示用 `access_url`。（预签名直传 `UploadUrlRequest` 已预留 DTO，暂未启用。）
+**UploadRead** `{ id, family_id, task_instance_id, uploader_account_id, storage_provider, object_key, bucket, public_url, content_type, size, purpose, access_url, created_at }`
+> 任务提交用 `object_key`；展示用 `access_url`。`task_instance_id`（DEV-30，可空）：上传时携带 `task_id` 即回显；否则在任务提交时回填绑定。（预签名直传 `UploadUrlRequest` 已预留 DTO，暂未启用。）
 >
-> **存储路径规范（DEV-20）**：`object_key = {prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`。`prefix`/`bucket` 由 yaml（`storage.minio` / `storage.local`）统一管理；年/月/日按北京时区；任务号 = `task_id`（未携带时以 `purpose` 代替）；文件序号 = 同用户同日同任务维度自增。`task_id` 校验归属本家庭，跨家庭任务返回 404。
+> **存储路径规范（DEV-20 / DEV-30）**：
+> - `task_proof` 携带 `task_id`（DEV-30）：`object_key = {prefix}/{用户}/{任务实例id}/{yyyymmdd}/task_proof-{序号}_{原始文件名安全化}.{扩展名}`。任务实例 id 唯一定位任务；yyyymmdd 按北京时区；文件名安全化 = 保留 unicode 字母数字（中文原样）、其余折叠为 `_`、截断 64 字符、剥路径段。
+> - 其余上传（头像/横幅等，及未携带 `task_id` 的 task_proof）：`object_key = {prefix}/{用户}/{年}/{月}/{日}/{purpose}-{序号}.{扩展名}`（DEV-20 形状不变）。
+>
+> `prefix`/`bucket` 由 yaml（`storage.minio` / `storage.local`）统一管理；序号 = 同 key 前缀维度自增。`task_id` 校验归属本家庭，跨家庭任务返回 404。历史对象不做迁移（开发验证阶段）。
+>
+> **任务关联（DEV-30）**：携带 `task_id` 的上传写 `sys_upload.task_instance_id`（数据库层可按任务检索）；未携带的凭证由 `submit` 回填绑定，已绑定其他任务的凭证拒绝复用（422）。
 >
 > **URL 行为（MinIO / local 双模式）**：`access_url` 始终按 `object_key` 现算——MinIO 模式返回带过期时间的预签名 URL（`public_url` 不落库）；local 模式返回稳定路径 `{public_base_url}/{object_key}`（`public_url` 落库）。前端两种模式下都只消费 `access_url` / `TaskRead.proof_url`，无需感知存储差异。
 >

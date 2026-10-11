@@ -218,6 +218,12 @@ async def submit_task(
     ).scalar_one_or_none()
     if upload is None:
         raise ValidationError("证明文件不存在、不是任务凭证或不属于当前用户")
+    # 任务关联(DEV-30):上传时未带 task_id 的凭证在提交时回填绑定,
+    # 保证 sys_upload 数据库层始终可按任务检索;已绑定其他任务的凭证拒绝复用。
+    if upload.task_instance_id is None:
+        upload.task_instance_id = task.id
+    elif upload.task_instance_id != task.id:
+        raise ValidationError("该证明文件已关联其他任务,请重新上传")
     task.status = TaskStatus.PENDING_REVIEW
     task.proof_object_key = proof_object_key
     task.submitted_at = utcnow()
