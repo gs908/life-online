@@ -165,6 +165,34 @@ async def test_upload_returns_503_when_minio_not_configured(
         get_storage.cache_clear()
 
 
+async def test_upload_returns_503_when_minio_unreachable(
+    api_client: AsyncClient, seeded_family: SeededFamily, monkeypatch
+) -> None:
+    """DEV-28:MinIO 配置齐全但服务未启动 → 503(storage_unavailable)+ 可操作文案,不裸 500。
+
+    127.0.0.1:1 的 loopback 连接是立即拒绝的,不依赖外网、不会挂起;
+    与"未配置"用例的 error_code(service_unavailable)区分开。
+    """
+    get_storage.cache_clear()
+    monkeypatch.setattr(settings.storage, "provider", "minio")
+    monkeypatch.setattr(settings.storage.minio, "endpoint", "127.0.0.1:1")
+    monkeypatch.setattr(settings.storage.minio, "access_key", "minioadmin")
+    monkeypatch.setattr(settings.storage.minio, "secret_key", "minioadmin")
+    try:
+        resp = await api_client.post(
+            "/api/v1/sys/uploads",
+            headers=_auth_headers(seeded_family.child_account),
+            data={"purpose": UploadPurpose.TASK_PROOF.value},
+            files={"file": ("proof.jpg", b"fake-image-bytes", "image/jpeg")},
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["data"]["error_code"] == "storage_unavailable"
+        assert "STORAGE_PROVIDER=local" in body["msg"]
+    finally:
+        get_storage.cache_clear()
+
+
 async def test_ai_endpoints_return_503_when_llm_not_configured(
     api_client: AsyncClient, seeded_family: SeededFamily, monkeypatch
 ) -> None:

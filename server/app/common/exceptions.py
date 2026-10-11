@@ -67,3 +67,14 @@ class ServiceUnavailableError(AppError):
     """
     code = "service_unavailable"
     http_status = 503
+
+
+class StorageUnavailableError(ServiceUnavailableError):
+    """对象存储已配置但不可达(连接失败/服务未启动)。
+
+    DEV-28:与"未配置"(service_unavailable)区分开 —— 配置是对的,是 MinIO
+    没起来或网络不通,属于"启动服务或稍后重试"可解决的问题;同样是 503,
+    前端提示语与 error_code 不同,便于定位。
+    """
+    code = "storage_unavailable"
+    http_status = 503
