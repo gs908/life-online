@@ -21,7 +21,7 @@ class TaskTemplateCreate(BaseModel):
     required_start_time: time | None = None
     reminder_message: str | None = None
     reminder_minutes_before: int = 15
-    time_deposit: int = 10
+    time_deposit: int = Field(default=10, ge=0)
     is_active: bool = True
     # CHAIN 链式字段(仅 CHAIN 类型可用,创建时校验)
     chain_key: str | None = Field(default=None, max_length=64)

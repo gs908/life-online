@@ -1192,3 +1192,90 @@ async def test_coop_abandon_refunds_shares_and_clears_participants(
     assert b_child.time_coin_balance == 100
     assert seeded_family.child.daily_abandon_count == 1
     assert b_child.daily_abandon_count == 0
+
+
+async def test_coop_concurrent_join_preserves_conservation(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """MR #10 审查 🔴 回归:两个孩子并发 join 时,实例行锁把重摊串行化,
+    「已收押金之和 == time_deposit 总额」的金额守恒不被破坏。
+
+    旧实现(无行锁)两个并发 join 都读到 owner 独占全额、都按 n=2 重摊、
+    都给 owner 退差额 → owner 双倍退款、份额之和 > 总额。
+    """
+    import asyncio as _asyncio
+
+    from sqlalchemy import select as sa_select
+
+    from app.models.scn_task_participant import ScnTaskParticipant
+
+    await _top_up(db_session, seeded_family, amount=100)
+    b_account, b_child = await _second_child(db_session, seeded_family)
+    c_account, c_child = await _second_child(db_session, seeded_family)
+    b_child.time_coin_balance = 100
+    c_child.time_coin_balance = 100
+    await db_session.commit()
+
+    parent_headers = _auth_headers(seeded_family.parent)
+    a_headers = _auth_headers(seeded_family.child_account)
+
+    task = await _create_coop_task(api_client, parent_headers, seeded_family)  # 押金总额 20
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=a_headers)
+
+    # B、C 并发 join:两个请求各走独立 DB 事务,靠实例行 FOR UPDATE 串行化重摊
+    join_b = api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/join", headers=_auth_headers(b_account)
+    )
+    join_c = api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/join", headers=_auth_headers(c_account)
+    )
+    resp_b, resp_c = await _asyncio.gather(join_b, join_c)
+    assert resp_b.status_code == 200, resp_b.text
+    assert resp_c.status_code == 200, resp_c.text
+
+    # 金额守恒:三个参与者份额之和恒 == 总额 20,且为 split_evenly(20,3) 的排列
+    shares = list((await db_session.execute(
+        sa_select(ScnTaskParticipant.deposit_share)
+        .where(ScnTaskParticipant.task_instance_id == task["id"])
+    )).scalars().all())
+    assert len(shares) == 3
+    assert sum(shares) == 20
+    assert sorted(shares) == [6, 7, 7]
+
+    # 余额与份额自洽:每人余额 == 100 - 自己的最终份额(A 的差额退款随 join 到账)
+    detail = await api_client.get(
+        f"/api/v1/scn/task-instances/{task['id']}", headers=parent_headers
+    )
+    by_child = {p["child_id"]: p["deposit_share"] for p in detail.json()["data"]["participants"]}
+    await db_session.refresh(seeded_family.child)
+    await db_session.refresh(b_child)
+    await db_session.refresh(c_child)
+    assert seeded_family.child.time_coin_balance == 100 - by_child[seeded_family.child.id]
+    assert b_child.time_coin_balance == 100 - by_child[b_child.id]
+    assert c_child.time_coin_balance == 100 - by_child[c_child.id]
+
+
+async def test_chain_rejects_inconsistent_chain_total(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """MR #10 审查建议 2 回归:同链步骤声明不同 chain_total 拒绝建入。"""
+    parent_headers = _auth_headers(seeded_family.parent)
+    chain_key = f"chain-{uuid4().hex[:8]}"
+    await _create_chain_step(
+        api_client, parent_headers, seeded_family,
+        chain_key=chain_key, order=1, total=3, title="链首", as_instance=True,
+    )
+    resp = await api_client.post(
+        "/api/v1/scn/task-templates",
+        json={
+            "season_id": seeded_family.season.id,
+            "title": "总步数不一致",
+            "type": TaskType.CHAIN.value,
+            "chain_key": chain_key,
+            "chain_order": 2,
+            "chain_total": 4,
+            "target_child_id": seeded_family.child.id,
+        },
+        headers=parent_headers,
+    )
+    assert resp.status_code == 422, resp.text

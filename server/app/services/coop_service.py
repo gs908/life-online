@@ -76,11 +76,20 @@ def wallet_participants(task: ScnTaskInstance) -> list[ScnTaskParticipant]:
     ]
 
 
-async def _get_task_for_join(db: AsyncSession, task_id: str) -> ScnTaskInstance:
+async def _lock_task_for_join(db: AsyncSession, task_id: str) -> ScnTaskInstance:
+    """行锁取任务实例(MR #10 审查 🔴 修复)。
+
+    join 的重摊是"读参与者 → 算份额 → 逐行退款/扣款"的读-改-写:
+    两个孩子并发 join 会都读到 owner 独占全额、都按 n=2 重摊、都给 owner
+    退差额,打破"已收之和 == 总额"的金额守恒。对实例行 FOR UPDATE 后,
+    join 与 settle(approve/abandon/expire,见 task_service.get_task_for_update)
+    在同一把实例行锁上互斥(先例: DEV-20 `family_service._lock_invite_or_raise`)。
+    """
     task = (
         await db.execute(
             select(ScnTaskInstance)
             .where(ScnTaskInstance.id == task_id)
+            .with_for_update()
             .options(
                 selectinload(ScnTaskInstance.template),
                 selectinload(ScnTaskInstance.participants),
@@ -100,7 +109,7 @@ async def join_task(db: AsyncSession, *, task_id: str, user: SysAccount) -> ScnT
     仅 IN_PROGRESS 可加入(主接取人 start 之后、提交之前)。
     """
     role_value = user.role.value if hasattr(user.role, "value") else str(user.role)
-    task = await _get_task_for_join(db, task_id)
+    task = await _lock_task_for_join(db, task_id)
     status_value = task.status.value if hasattr(task.status, "value") else str(task.status)
     if task.family_id != user.family_id:
         raise PermissionDeniedError("只能加入自己家庭的任务")
@@ -142,7 +151,8 @@ async def join_task(db: AsyncSession, *, task_id: str, user: SysAccount) -> ScnT
         raise ConflictError("你已是该任务的参与者")
 
     wallets = wallet_participants(task)
-    shares = per_participant_shares(task.time_deposit or 10, len(wallets) + 1)
+    total_deposit = task.time_deposit if task.time_deposit is not None else 10
+    shares = per_participant_shares(total_deposit, len(wallets) + 1)
     new_share = shares[-1]
 
     if not coin_service.has_sufficient_coins(child, new_share):

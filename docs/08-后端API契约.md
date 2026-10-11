@@ -185,17 +185,19 @@
 
 > `ThemeId` 是**赛季主题枚举**（预设皮肤，前端 `constants/themes.ts` 对应渲染素材）；与第 7 节的动态主题样式 `ThemeStyle` 是两个概念。
 
-## 6. 任务 `/scn/task-instances`
+## 6. 任务 `/scn/task-instances`（路由器前缀 `/scn`，另承载 `/scn/task-templates`）
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
 | GET | `/scn/task-instances?page&page_size&season_id&status&assignee_child_id` | 任务实例分页列表 | 登录 |
 | GET | `/scn/task-instances/{task_id}` | 详情（限本家庭） | 登录 |
-| POST | `/scn/task-instances` | 创建模板并生成初始实例 | 父母 |
+| POST | `/scn/task-instances` | 创建模板并生成初始实例（CHAIN 仅链首步） | 父母 |
+| POST | `/scn/task-templates` | 只建模板不投放实例（CHAIN 第 2..N 步，DEV-36） | 父母 |
 | DELETE | `/scn/task-instances/{task_id}` | 删除实例 | 父母 |
-| POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金） | 登录 |
+| POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金；COOP 记 OWNER 参与者） | 登录 |
+| POST | `/scn/task-instances/{task_id}/join` | 加入 COOP：孩子均摊押金 / 家长亲子参与（DEV-36） | 登录 |
 | POST | `/scn/task-instances/{task_id}/submit` | 孩子提交证明 | 登录 |
-| POST | `/scn/task-instances/{task_id}/approve` | 父母审核（发 XP、退/扣币） | 父母 |
+| POST | `/scn/task-instances/{task_id}/approve` | 父母审核（发 XP、退/扣币；链末 ×1.5、XP 均摊） | 父母 |
 | POST | `/scn/task-instances/{task_id}/abandon` | 孩子放弃（罚币） | 登录 |
 
 **TaskRead**（任务实例唯一形状）：

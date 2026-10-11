@@ -41,6 +41,32 @@ def _enum_value(value) -> str:
     return value.value if hasattr(value, "value") else str(value)
 
 
+def _deposit_of(task: ScnTaskInstance) -> int:
+    """任务押金总额。`or` 会把家长刻意设的 0 押金变成 10,故用显式 None 判断
+    (MR #10 审查建议 3)。"""
+    return task.time_deposit if task.time_deposit is not None else 10
+
+
+async def get_task_for_update(db: AsyncSession, task_id: str) -> ScnTaskInstance:
+    """行锁取任务实例(MR #10 审查 🔴 修复)。
+
+    COOP 的押金重摊/结算都是读-改-写,并发下会破坏"已收之和 == 总额"的
+    金额守恒。settle 路径(approve/abandon/expire)先进本函数拿实例行锁,
+    与 coop_service.join_task 的锁互斥(同一行 FOR UPDATE);
+    顺带消除并发双审批(第二个事务等锁后读到 COMPLETED,409)。
+    先例: DEV-20 `family_service._lock_invite_or_raise`。
+    """
+    t = (await db.execute(
+        select(ScnTaskInstance)
+        .where(ScnTaskInstance.id == task_id)
+        .with_for_update()
+        .options(selectinload(ScnTaskInstance.template))
+    )).scalar_one_or_none()
+    if not t:
+        raise NotFoundError(f"任务 {task_id} 不存在")
+    return t
+
+
 async def _ensure_child(db: AsyncSession, *, family_id: str, child_id: str) -> SysChild:
     child = await db.get(SysChild, child_id)
     if child is None:
@@ -251,9 +277,9 @@ async def start_task(
     if coop_service.is_coop(task):
         # COOP:主接取人先按 n=1 承担全额押金并登记 OWNER 参与者;
         # 后续孩子 join 时会重新均摊并向他退差额(coop_service.join_task)。
-        deposit = coop_service.per_participant_shares(task.time_deposit or 10, 1)[0]
+        deposit = coop_service.per_participant_shares(_deposit_of(task), 1)[0]
     else:
-        deposit = coin_service.calculate_deposit_fee(task.time_deposit or 10)
+        deposit = coin_service.calculate_deposit_fee(_deposit_of(task))
     if not coin_service.has_sufficient_coins(child, deposit):
         raise ValidationError(
             f"时间币不足,需要 {deposit},当前 {child.time_coin_balance}"
@@ -330,8 +356,9 @@ async def submit_task(
 async def approve_task(
     db: AsyncSession, *, task_id: str, family_id: str, rating: int, comment: str | None = None,
 ) -> tuple[ScnTaskInstance, SysChild, dict]:
-    """父母审核:状态切 COMPLETED,发 XP + 退押金。"""
-    task = await get_task(db, task_id)
+    """父母审核:状态切 COMPLETED,发 XP + 退押金。行锁(get_task_for_update)
+    保证与 COOP join / 并发双审批互斥。"""
+    task = await get_task_for_update(db, task_id)
     if task.family_id != family_id:
         raise PermissionDeniedError("只能审核自己家庭的任务")
     if task.status != TaskStatus.PENDING_REVIEW:
@@ -406,7 +433,7 @@ async def approve_task(
         level_info = xp_service.apply_xp_and_level(assignee, final_xp)
         unlocked_privileges = await privilege_service.unlock_for_user(db, assignee)
 
-        deposit = task.time_deposit or 10
+        deposit = _deposit_of(task)
         assignee.time_coin_balance += deposit
         await coin_service.record_transaction(
             db,
@@ -460,9 +487,9 @@ async def reject_task(
 async def abandon_task(
     db: AsyncSession, *, task_id: str, user: SysAccount,
 ) -> tuple[ScnTaskInstance, SysChild, int]:
-    """孩子放弃:按规则退款(连续 3 次后 60% 退款)。"""
+    """孩子放弃:按规则退款(连续 3 次后 60% 退款)。行锁与 COOP join 互斥。"""
     child = await _account_child(db, user)
-    task = await get_task(db, task_id)
+    task = await get_task_for_update(db, task_id)
     if task.family_id != user.family_id:
         raise PermissionDeniedError("只能操作自己家庭的任务")
     if task.assignee_child_id != child.id:
@@ -506,9 +533,9 @@ async def abandon_task(
                 )
         child.daily_abandon_count += 1
         task.participants.clear()
-        task.coin_delta = total_refund - (task.time_deposit or 10)
+        task.coin_delta = total_refund - _deposit_of(task)
     else:
-        deposit = task.time_deposit or 10
+        deposit = _deposit_of(task)
         refund = coin_service.calculate_refund(deposit, child.daily_abandon_count)
         child.time_coin_balance += refund
         await coin_service.record_transaction(
@@ -571,6 +598,8 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
             ScnTaskInstance.expire_at < now,
             ScnTaskInstance.status.in_([TaskStatus.AVAILABLE, TaskStatus.IN_PROGRESS]),
         )
+        # 行锁:COOP 过期结算(按参与者份额退款)与 join 的重摊互斥(MR #10 审查 🔴)
+        .with_for_update(skip_locked=True)
         .options(selectinload(ScnTaskInstance.template))
     )
     tasks = list((await db.execute(stmt)).scalars().all())
@@ -579,7 +608,10 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
     for task in tasks:
         if task.status == TaskStatus.IN_PROGRESS and task.assignee_child_id:
             if coop_service.is_coop(task):
-                # COOP 过期:已确认的钱包参与者各自全额退还份额,不计放弃惩罚
+                # COOP 过期:已确认的钱包参与者各自全额退还份额,不计放弃惩罚。
+                # 注意:与 abandon 不同,这里**不清** participant 行——EXPIRED 目前是
+                # 终态,行保留作审计;若 DEV-35 池将来复用过期实例,必须在复活时
+                # 清行/重置份额,否则按行结算会双退(MR #10 审查备注)。
                 refunded = 0
                 for p in coop_service.wallet_participants(task):
                     p_child = await db.get(SysChild, p.child_id)
@@ -599,7 +631,7 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
             else:
                 child = await db.get(SysChild, task.assignee_child_id)
                 if child is not None:
-                    deposit = task.time_deposit or 10
+                    deposit = _deposit_of(task)
                     child.time_coin_balance += deposit
                     await coin_service.record_transaction(
                         db,

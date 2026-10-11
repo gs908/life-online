@@ -47,7 +47,9 @@ async def validate_chain_template(
     - chain_* 字段只有 CHAIN 类型可用;
     - CHAIN 必须给 chain_key,且 1 <= chain_order <= chain_total,chain_total >= 2
       (单步链恒命中链末加成,没有意义,直接禁止);
-    - 同家庭同链的 chain_order 不允许重复。
+    - 同家庭同链的 chain_order 不允许重复;
+    - 同链所有步骤的 chain_total 必须一致(MR #10 审查建议 2):各步声明不同
+      总步数会让快照取值漂移,链静默提前结束、链末加成永不触发。
     """
     if task_type != TaskType.CHAIN:
         if chain_key is not None:
@@ -60,6 +62,19 @@ async def validate_chain_template(
         raise ValidationError("CHAIN 任务至少两步(chain_total >= 2)")
     if not (1 <= chain_order <= chain_total):
         raise ValidationError("chain_order 必须在 1..chain_total 之间")
+
+    totals_stmt = select(ScnTaskTemplate.chain_total).where(
+        ScnTaskTemplate.family_id == family_id,
+        ScnTaskTemplate.chain_key == chain_key,
+    )
+    if exclude_template_id is not None:
+        totals_stmt = totals_stmt.where(ScnTaskTemplate.id != exclude_template_id)
+    existing_totals = list((await db.execute(totals_stmt.distinct())).scalars().all())
+    if existing_totals and chain_total not in existing_totals:
+        raise ValidationError(
+            f"链 {chain_key} 已有步骤声明 chain_total={existing_totals[0]},"
+            f"同链各步的 chain_total 必须一致(传入 {chain_total})"
+        )
 
     stmt = select(ScnTaskTemplate).where(
         ScnTaskTemplate.family_id == family_id,
@@ -81,7 +96,11 @@ async def spawn_next_chain_step(
     """第 N 步 COMPLETED 后生成第 N+1 步 —— DEV-35 接合点(本函数是唯一接线处)。
 
     幂等:同家庭同链同步序已存在非终态实例(EXPIRED 除外)则不再生成,
-    防止审批重放/并发审批把同一步投放两次。
+    防止审批重放/并发审批把同一步投放两次。并发双审批由 approve_task 的
+    实例行锁(get_task_for_update)串行化:第二个事务等锁后读到 COMPLETED
+    直接 409,到不了这里;事务内 dup 检查兜底脏数据(用 first() 而非
+    scalar_one_or_none,即使出现重复行也不再抛 MultipleResultsFound,
+    MR #10 审查建议 1)。
 
     池合入前的最小语义:
     - 下一实例状态 AVAILABLE,继承家庭/赛季/创建人/目标孩子;
@@ -130,7 +149,7 @@ async def spawn_next_chain_step(
         )
     else:
         dup_stmt = dup_stmt.where(ScnTaskInstance.target_child_id.is_(None))
-    dup = (await db.execute(dup_stmt)).scalar_one_or_none()
+    dup = (await db.execute(dup_stmt)).scalars().first()
     if dup is not None:
         return None
 
