@@ -1,28 +1,144 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
-import type { TaskCreate, TaskType } from '../../services/api';
-import { X, Plus, BrainCircuit, Info } from 'lucide-react';
+import type {
+  TaskCreate,
+  TaskTemplateCreate,
+  TaskTemplateRead,
+  TaskTemplateUpdate,
+  TaskType,
+  TimedMode,
+} from '../../services/api';
+import { X, Plus, BrainCircuit, Info, AlertTriangle } from 'lucide-react';
+import {
+  DURATION_MAX,
+  DURATION_MIN,
+  DURATION_STEP,
+  categoryOf,
+  deadlineEarlierThanGenerate,
+  describeTrigger,
+  draftToTriggerPayload,
+  makeTriggerDraft,
+  triggerToDraft,
+  validateTemplateForm,
+  type TaskTemplateCategoryIntent,
+  type TemplateFormErrors,
+  type TriggerDraft,
+} from '../taskTemplateUtils';
+
+export type AddTaskSubmit =
+  | { mode: 'instance'; task: TaskCreate }
+  | { mode: 'template'; template: TaskTemplateCreate }
+  | { mode: 'update'; templateId: string; patch: TaskTemplateUpdate };
 
 interface AddTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** 提交 TaskCreate（season_id 必填，由 App 注入激活赛季）；失败时 App toast 且弹窗保留 */
-  onAdd: (task: TaskCreate) => void;
+  /** 统一提交出口：一次性→instance（POST /scn/task-instances）；其余→template（POST /scn/task-templates）；编辑→update（PATCH） */
+  onSubmit: (action: AddTaskSubmit) => void;
   narrativeContext: string;
   seasonId: string;
   childLevel: number;
   submitting?: boolean;
+  /** 编辑模式：传入待改模板；提交走 PATCH（triggers 整组替换） */
+  editingTemplate?: TaskTemplateRead | null;
+  /** 新建默认类别：任务板「新建任务」= once（旧行为），模板管理「新建模板」= daily */
+  defaultCategory?: TaskTemplateCategoryIntent;
 }
 
-/** 新建任务（阶段③）：表单产出 TaskCreate，POST /scn/task-instances 由 App 调用（docs/09 A6） */
-const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, narrativeContext, seasonId, childLevel, submitting }) => {
+/** UI 类别 → 模板 type（契约 §6A：一次性走实例路径，不落 type） */
+const CATEGORY_TYPE: Record<Exclude<TaskTemplateCategoryIntent, 'once'>, TaskType> = {
+  daily: 'DAILY',
+  challenge: 'CHALLENGE',
+  timed: 'TIMED',
+};
+
+/** 类别选择器四卡（Miss.D §2：radio group 语义 + 方向键切换） */
+const CATEGORY_CARDS: Array<{
+  key: TaskTemplateCategoryIntent;
+  icon: string;
+  descKey: string;
+  accent: string;
+}> = [
+  { key: 'once', icon: '✨', descKey: 'taskTemplate.catOnceDesc', accent: 'text-violet-700' },
+  { key: 'daily', icon: '🔁', descKey: 'taskTemplate.catDailyDesc', accent: 'text-sky-700' },
+  { key: 'challenge', icon: '🏆', descKey: 'taskTemplate.catChallengeDesc', accent: 'text-amber-700' },
+  { key: 'timed', icon: '⏱', descKey: 'taskTemplate.catTimedDesc', accent: 'text-rose-700' },
+];
+
+/** 分段控件（role=radiogroup，Miss.D §7 键盘可达） */
+const Segmented: React.FC<{
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+  tone?: 'slate' | 'rose';
+}> = ({ label, value, options, onChange, tone = 'slate' }) => {
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    const index = options.findIndex(option => option.value === value);
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      onChange(options[(index + 1) % options.length].value);
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      onChange(options[(index - 1 + options.length) % options.length].value);
+    }
+  };
+  const activeCls = tone === 'rose' ? 'bg-rose-600 text-white border-rose-600' : 'bg-slate-900 text-white border-slate-900';
+  return (
+    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1.5" onKeyDown={handleKeyDown}>
+      {options.map(option => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(option.value)}
+            className={`text-xs px-3 py-1.5 rounded-full border font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
+              active ? activeCls : 'bg-white border-slate-200 text-slate-500 hover:border-slate-400'
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+/** 新建任务 / 编辑模板（DEV-35 块 A，Miss.D 设计规范 §3）：
+ *  四类任务选择器 + 触发规则编辑器 + 时间窗编辑器；一次性走旧实例路径，其余建模板。 */
+const AddTaskModal: React.FC<AddTaskModalProps> = ({
+  isOpen,
+  onClose,
+  onSubmit,
+  narrativeContext,
+  seasonId,
+  childLevel,
+  submitting,
+  editingTemplate,
+  defaultCategory = 'once',
+}) => {
   const { t } = useTranslation();
+  const isEdit = Boolean(editingTemplate);
+
+  const [category, setCategory] = useState<TaskTemplateCategoryIntent>(defaultCategory);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskLore, setNewTaskLore] = useState('');
   const [newTaskXP, setNewTaskXP] = useState(50);
-  const [newTaskType, setNewTaskType] = useState<TaskType>('DAILY');
+  const [difficulty, setDifficulty] = useState(3);
+  const [aiType, setAiType] = useState<TaskType | null>(null);
+
+  const [triggers, setTriggers] = useState<TriggerDraft[]>([makeTriggerDraft()]);
+  const [timedMode, setTimedMode] = useState<TimedMode>('NONE');
+  const [deadlineTime, setDeadlineTime] = useState('20:00');
+  const [startTime, setStartTime] = useState('16:30');
+  const [durationMinutes, setDurationMinutes] = useState(45);
+  const [errors, setErrors] = useState<TemplateFormErrors | null>(null);
 
   // AI State（阶段⑥已切后端 /scn/ai/generate-quest）
   const [aiPrompt, setAiPrompt] = useState('');
@@ -31,17 +147,73 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
 
   // 打开时重置表单（创建失败时 App 保留弹窗与已填内容，成功后关闭并在此处复位）
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return;
+    setErrors(null);
+    setAiPrompt('');
+    setAiError(null);
+    setAiType(null);
+    if (editingTemplate) {
+      setCategory(categoryOf(editingTemplate));
+      setNewTaskTitle(editingTemplate.title);
+      setNewTaskDesc(editingTemplate.description);
+      setNewTaskLore(editingTemplate.lore_snippet ?? '');
+      setNewTaskXP(editingTemplate.xp_reward);
+      setDifficulty(editingTemplate.difficulty ?? 3);
+      setTriggers(
+        editingTemplate.triggers.length > 0
+          ? editingTemplate.triggers.map(triggerToDraft)
+          : [makeTriggerDraft()],
+      );
+      setTimedMode(editingTemplate.timed_mode);
+      setDeadlineTime((editingTemplate.deadline_time ?? '20:00').slice(0, 5));
+      setStartTime((editingTemplate.start_time ?? '16:30').slice(0, 5));
+      setDurationMinutes(editingTemplate.duration_minutes ?? 45);
+    } else {
+      setCategory(defaultCategory);
       setNewTaskTitle('');
       setNewTaskDesc('');
       setNewTaskLore('');
       setNewTaskXP(50);
-      setNewTaskType('DAILY');
-      setAiPrompt('');
+      setDifficulty(3);
+      // Miss.D §2 默认触发：一次性无规则区；日常=DAILY、挑战=WEEKDAYS 周一、限时=DAILY
+      setTriggers([
+        defaultCategory === 'challenge'
+          ? makeTriggerDraft({ kind: 'WEEKDAYS', weekdays: [0], generate_at: '08:00' })
+          : makeTriggerDraft({ generate_at: '08:00' }),
+      ]);
+      // 限时类时间窗必选（Miss.D §2），默认 DEADLINE 20:00
+      setTimedMode(defaultCategory === 'timed' ? 'DEADLINE' : 'NONE');
+      setDeadlineTime('20:00');
+      setStartTime('16:30');
+      setDurationMinutes(45);
     }
-  }, [isOpen]);
+  }, [isOpen, editingTemplate, defaultCategory]);
+
+  // Esc 关闭
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
+  const showSoftWarning = useMemo(
+    () =>
+      deadlineEarlierThanGenerate({
+        timed_mode: timedMode,
+        deadline_time: deadlineTime,
+        triggers,
+      }),
+    [timedMode, deadlineTime, triggers],
+  );
 
   if (!isOpen) return null;
+
+  const patchTrigger = (index: number, patch: Partial<TriggerDraft>) => {
+    setTriggers(prev => prev.map((draft, i) => (i === index ? { ...draft, ...patch } : draft)));
+  };
 
   const handleGenerateQuest = async () => {
     if (!aiPrompt) return;
@@ -58,7 +230,11 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
       setNewTaskDesc(suggestion.description);
       setNewTaskLore(suggestion.lore_snippet ?? '');
       setNewTaskXP(suggestion.xp_reward);
-      setNewTaskType(suggestion.type as TaskType);
+      setAiType(suggestion.type);
+      // AI 给出 CHAIN/COOP 时本轮四类选择器不收录，归入日常
+      if (!isEdit && ['DAILY', 'CHALLENGE', 'TIMED'].includes(suggestion.type)) {
+        setCategory(suggestion.type.toLowerCase() as TaskTemplateCategoryIntent);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
         setAiError(t('addTask.aiNotConfigured'));
@@ -70,29 +246,114 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
     }
   };
 
+  // V3：切回 NONE 时清空三字段（对应后端「三者皆空」校验）
+  const changeTimedMode = (mode: TimedMode) => {
+    setTimedMode(mode);
+    if (mode === 'NONE') {
+      setDeadlineTime('');
+      setStartTime('');
+      setDurationMinutes(0);
+    } else {
+      setDeadlineTime(prev => prev || '20:00');
+      setStartTime(prev => prev || '16:30');
+      setDurationMinutes(prev => (prev > 0 ? prev : 45));
+    }
+  };
+
+  const buildError = (): TemplateFormErrors | null =>
+    validateTemplateForm({
+      title: newTaskTitle,
+      xp: newTaskXP,
+      timed_mode: timedMode,
+      deadline_time: deadlineTime,
+      start_time: startTime,
+      duration_minutes: durationMinutes,
+      triggers: category === 'once' ? [] : triggers,
+    });
+
   const handleSubmit = () => {
-    if (!newTaskTitle.trim() || !seasonId) return;
-    onAdd({
-      season_id: seasonId,
+    if (!seasonId && !isEdit) return;
+    const formErrors = buildError();
+    setErrors(formErrors);
+    if (formErrors) return;
+
+    const timedPayload =
+      timedMode === 'DEADLINE'
+        ? { timed_mode: timedMode, deadline_time: deadlineTime }
+        : timedMode === 'DURATION'
+          ? { timed_mode: timedMode, start_time: startTime, duration_minutes: durationMinutes }
+          : { timed_mode: 'NONE' as const, deadline_time: null, start_time: null, duration_minutes: null };
+
+    if (isEdit && editingTemplate) {
+      const patch: TaskTemplateUpdate = {
+        title: newTaskTitle.trim(),
+        description: newTaskDesc,
+        lore_snippet: newTaskLore || null,
+        xp_reward: Math.max(0, newTaskXP),
+        difficulty,
+        ...timedPayload,
+        // triggers 整组替换（契约 §6A）；一次性类别 = 清空周期规则
+        triggers: category === 'once' ? [] : triggers.map(draftToTriggerPayload),
+      };
+      onSubmit({ mode: 'update', templateId: editingTemplate.id, patch });
+      return;
+    }
+
+    const base = {
       title: newTaskTitle.trim(),
       description: newTaskDesc,
       lore_snippet: newTaskLore || undefined,
       xp_reward: Math.max(0, newTaskXP),
-      type: newTaskType,
       reminder_message: t('addTask.defaultReminder'),
       reminder_minutes_before: 15,
-    });
+    };
+
+    if (category === 'once') {
+      // 一次性：POST /scn/task-instances（旧实例路径，立即出现、不重复生成）
+      const task: TaskCreate = {
+        ...base,
+        season_id: seasonId,
+        type: aiType ?? 'DAILY',
+      };
+      onSubmit({ mode: 'instance', task });
+      return;
+    }
+
+    const template: TaskTemplateCreate = {
+      ...base,
+      season_id: seasonId,
+      type: CATEGORY_TYPE[category],
+      difficulty,
+      ...timedPayload,
+      triggers: triggers.map(draftToTriggerPayload),
+    };
+    onSubmit({ mode: 'template', template });
   };
+
+  const submitLabel = isEdit
+    ? t('taskTemplate.saveChanges')
+    : category === 'once'
+      ? t('addTask.postQuest')
+      : t('taskTemplate.createTemplate');
+
+  const triggerErrorOf = (index: number) => errors?.triggers?.[index];
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+      <div
+        className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isEdit ? t('taskTemplate.editTitle') : t('addTask.title')}
+      >
         <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
-          <h3 className="font-bold text-lg flex items-center gap-2"><Plus size={20} /> {t('addTask.title')}</h3>
-          <button onClick={onClose}><X /></button>
+          <h3 className="font-bold text-lg flex items-center gap-2">
+            <Plus size={20} /> {isEdit ? t('taskTemplate.editTitle') : t('addTask.title')}
+          </h3>
+          <button onClick={onClose} aria-label={t('common.close')}><X /></button>
         </div>
-        <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
-          {/* AI Generator */}
+        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+          {/* AI Generator（保留） */}
           <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
             <label className="text-xs font-bold text-purple-700 uppercase mb-2 block flex items-center gap-1">
               <BrainCircuit size={14} /> {t('addTask.aiGenerator')}
@@ -119,42 +380,378 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onAdd, nar
             )}
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700">{t('addTask.questTitle')}</label>
-            <input className="w-full border p-2 rounded" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} placeholder={t('addTask.questNamePlaceholder')} />
+          {/* 任务类型四卡（Miss.D §2；radio group 语义，方向键切换） */}
+          <div>
+            <div className="text-xs font-bold text-slate-600 mb-1.5">{t('taskTemplate.taskCategory')}</div>
+            <div
+              role="radiogroup"
+              aria-label={t('taskTemplate.taskCategory')}
+              className="grid grid-cols-4 gap-2"
+              onKeyDown={(event) => {
+                const keys = CATEGORY_CARDS.map(card => card.key);
+                const index = keys.indexOf(category);
+                if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  setCategory(keys[(index + 1) % keys.length]);
+                } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  setCategory(keys[(index - 1 + keys.length) % keys.length]);
+                }
+              }}
+            >
+              {CATEGORY_CARDS.map(card => {
+                const active = card.key === category;
+                return (
+                  <button
+                    key={card.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    tabIndex={active ? 0 : -1}
+                    onClick={() => setCategory(card.key)}
+                    className={`rounded-xl px-2 py-2.5 text-center border-[1.5px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
+                      card.key === 'timed'
+                        ? active
+                          ? 'border-rose-500 bg-rose-50 shadow-[0_0_0_3px_rgba(244,63,94,0.15)]'
+                          : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                        : active
+                          ? 'border-slate-800 bg-slate-100 shadow-[0_0_0_3px_rgba(15,23,42,0.1)]'
+                          : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="text-xl leading-none mb-1" aria-hidden>{card.icon}</div>
+                    <div className={`text-xs font-bold ${active ? card.accent : 'text-slate-500'}`}>
+                      {t(`taskTemplate.cat.${card.key}`)}
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">{t(card.descKey)}</div>
+                  </button>
+                );
+              })}
+            </div>
+            {category === 'timed' && (
+              <p className="text-[11px] text-rose-600 mt-1.5" aria-live="polite">
+                {t('taskTemplate.catTimedHint')}
+              </p>
+            )}
           </div>
 
-          <div className="flex gap-4">
-            <div className="space-y-2 flex-1">
-              <label className="text-sm font-bold text-slate-700">{t('addTask.type')}</label>
-              <select className="w-full border p-2 rounded" value={newTaskType} onChange={e => setNewTaskType(e.target.value as TaskType)}>
-                {(['DAILY', 'CHALLENGE', 'CHAIN', 'TIMED', 'COOP'] as TaskType[]).map(type => <option key={type} value={type}>{t(`taskType.${type}`)}</option>)}
-              </select>
+          {/* 标题 / XP / 难度 */}
+          <div className="flex gap-3">
+            <div className="space-y-1.5 flex-1">
+              <label className="text-sm font-bold text-slate-700" htmlFor="add-task-title">{t('addTask.questTitle')}</label>
+              <input
+                id="add-task-title"
+                className={`w-full border p-2 rounded ${errors?.title ? 'border-red-400' : 'border-slate-200'}`}
+                value={newTaskTitle}
+                onChange={e => setNewTaskTitle(e.target.value)}
+                placeholder={t('addTask.questNamePlaceholder')}
+              />
             </div>
-            <div className="space-y-2 w-24">
-              <label className="text-sm font-bold text-slate-700">{t('common.xp')}</label>
-              <input type="number" min={0} className="w-full border p-2 rounded" value={newTaskXP} onChange={e => setNewTaskXP(Number(e.target.value))} />
+            <div className="space-y-1.5 w-20">
+              <label className="text-sm font-bold text-slate-700" htmlFor="add-task-xp">{t('common.xp')}</label>
+              <input
+                id="add-task-xp"
+                type="number"
+                min={0}
+                className={`w-full border p-2 rounded ${errors?.xp ? 'border-red-400' : 'border-slate-200'}`}
+                value={newTaskXP}
+                onChange={e => setNewTaskXP(Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <div className="text-sm font-bold text-slate-700" id="add-task-difficulty-label">{t('taskTemplate.difficulty')}</div>
+              <div role="radiogroup" aria-labelledby="add-task-difficulty-label" className="flex gap-0.5 h-[38px] items-center">
+                {[1, 2, 3, 4, 5].map(star => (
+                  <button
+                    key={star}
+                    type="button"
+                    role="radio"
+                    aria-checked={star === difficulty}
+                    aria-label={t('taskTemplate.difficultyN', { n: star })}
+                    onClick={() => setDifficulty(star)}
+                    className={`w-7 h-7 text-lg leading-none transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 rounded ${
+                      star <= difficulty ? 'text-amber-500' : 'text-slate-200 hover:text-slate-300'
+                    }`}
+                  >
+                    ★
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+          {(errors?.title || errors?.xp) && (
+            <p className="text-xs text-red-600" aria-live="polite">
+              {errors?.title ? t('taskTemplate.errTitleRequired') : t('taskTemplate.errXpInvalid')}
+            </p>
+          )}
 
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label className="text-sm font-bold text-slate-700">{t('addTask.descriptionLore')}</label>
-            <textarea className="w-full border p-2 rounded h-24" value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} placeholder={t('addTask.descriptionPlaceholder')} />
+            <textarea className="w-full border border-slate-200 p-2 rounded h-20" value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} placeholder={t('addTask.descriptionPlaceholder')} />
           </div>
 
-          <div className="p-3 bg-orange-50 rounded border border-orange-100">
-            <div className="flex items-center gap-2 mb-2">
-              <Info size={14} className="text-orange-500" />
-              <span className="text-xs font-bold text-orange-700">{t('addTask.timedSettings')}</span>
+          {/* 一次性：隐藏触发规则区，显示提示条（Miss.D §3） */}
+          {category === 'once' ? (
+            <div className="flex items-center gap-2 p-3 bg-violet-50 border border-violet-100 rounded-lg">
+              <Info size={14} className="text-violet-500 shrink-0" />
+              <span className="text-xs text-violet-700">{t('taskTemplate.onceInstantHint')}</span>
             </div>
-            <div className="text-xs text-slate-500">
-              {t('addTask.timedHint')}
+          ) : (
+            <div className="border border-slate-200 rounded-xl p-3">
+              <div className="flex justify-between items-center mb-2">
+                <div className="text-xs font-bold text-slate-600">
+                  🕘 {t('taskTemplate.triggerSection')} <span className="text-slate-400 font-normal">{t('taskTemplate.triggerSectionSub')}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTriggers(prev => [...prev, makeTriggerDraft({ generate_at: triggers[0]?.generate_at ?? '08:00' })])}
+                  className="text-[11px] font-bold text-sky-700 hover:text-sky-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 rounded px-1"
+                >
+                  ＋ {t('taskTemplate.addRule')}
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {triggers.map((draft, index) => (
+                  <div key={index} className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-2">
+                    <div className="flex justify-between items-center gap-2">
+                      <Segmented
+                        label={t('taskTemplate.triggerKindLabel', { n: index + 1 })}
+                        value={draft.kind}
+                        options={(draft.kind === 'ONCE'
+                          ? [
+                              { value: 'DAILY', label: t('taskTemplate.triggerDaily') },
+                              { value: 'WEEKDAYS', label: t('taskTemplate.triggerWeekdays') },
+                              { value: 'MONTHLY', label: t('taskTemplate.triggerMonthly') },
+                              { value: 'CRON', label: t('taskTemplate.triggerCron') },
+                              { value: 'ONCE', label: t('taskTemplate.triggerOnce') },
+                            ]
+                          : [
+                              { value: 'DAILY', label: t('taskTemplate.triggerDaily') },
+                              { value: 'WEEKDAYS', label: t('taskTemplate.triggerWeekdays') },
+                              { value: 'MONTHLY', label: t('taskTemplate.triggerMonthly') },
+                              { value: 'CRON', label: t('taskTemplate.triggerCron') },
+                            ]
+                        ).filter(option => option.value !== 'ONCE' || draft.kind === 'ONCE')}
+                        onChange={(value) => patchTrigger(index, { kind: value as TriggerDraft['kind'] })}
+                      />
+                      {triggers.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setTriggers(prev => prev.filter((_, i) => i !== index))}
+                          className="text-[11px] text-slate-400 hover:text-red-600 shrink-0"
+                          aria-label={t('taskTemplate.removeRule', { n: index + 1 })}
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {draft.kind === 'WEEKDAYS' && (
+                      <div>
+                        <div className="flex gap-1" role="group" aria-label={t('taskTemplate.triggerWeekdays')}>
+                          {[0, 1, 2, 3, 4, 5, 6].map(weekday => {
+                            const selected = draft.weekdays.includes(weekday);
+                            return (
+                              <button
+                                key={weekday}
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() =>
+                                  patchTrigger(index, {
+                                    weekdays: selected
+                                      ? draft.weekdays.filter(w => w !== weekday)
+                                      : [...draft.weekdays, weekday],
+                                  })
+                                }
+                                className={`w-11 h-11 rounded-lg text-xs font-bold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
+                                  selected ? 'bg-sky-600 text-white' : 'bg-white border border-slate-200 text-slate-500 hover:border-slate-400'
+                                }`}
+                              >
+                                {t(`taskTemplate.weekday.${weekday}`)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {triggerErrorOf(index) === 'V4' && (
+                          <p className="text-[11px] text-red-600 mt-1" aria-live="polite">{t('taskTemplate.errWeekdaysRequired')}</p>
+                        )}
+                      </div>
+                    )}
+
+                    {draft.kind === 'MONTHLY' && (
+                      <div>
+                        <div className="flex items-center gap-2 text-xs text-slate-600">
+                          <span>{t('taskTemplate.dayOfMonthLabel')}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={31}
+                            value={draft.day_of_month}
+                            onChange={e => patchTrigger(index, { day_of_month: Number(e.target.value) })}
+                            className={`w-16 border p-1.5 rounded ${triggerErrorOf(index) === 'V5' ? 'border-red-400' : 'border-slate-200'}`}
+                            aria-label={t('taskTemplate.dayOfMonthLabel')}
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">{t('taskTemplate.dayOfMonthHelper')}</p>
+                        {triggerErrorOf(index) === 'V5' && (
+                          <p className="text-[11px] text-red-600 mt-1" aria-live="polite">{t('taskTemplate.errDayOfMonth')}</p>
+                        )}
+                      </div>
+                    )}
+
+                    {draft.kind === 'CRON' && (
+                      <div>
+                        <input
+                          type="text"
+                          value={draft.cron_expr}
+                          onChange={e => patchTrigger(index, { cron_expr: e.target.value })}
+                          placeholder="0 8 * * 1-5"
+                          className={`w-full border p-2 rounded font-mono text-sm ${triggerErrorOf(index) === 'V6' ? 'border-red-400' : 'border-slate-200'}`}
+                          aria-label={t('taskTemplate.cronLabel')}
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1">{t('taskTemplate.cronHelper')}</p>
+                        {triggerErrorOf(index) === 'V6' && (
+                          <p className="text-[11px] text-red-600 mt-1" aria-live="polite">{t('taskTemplate.errCron')}</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 通用字段：生成时间 + 生效区间（Miss.D §3.1） */}
+                    <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                      <div>
+                        <div className="text-[10px] text-slate-400 mb-0.5">{t('taskTemplate.generateAt')}</div>
+                        <input
+                          type="time"
+                          value={draft.generate_at}
+                          onChange={e => patchTrigger(index, { generate_at: e.target.value })}
+                          className="border border-slate-200 rounded px-2 py-1"
+                          aria-label={t('taskTemplate.generateAt')}
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-slate-400 mb-0.5">{t('taskTemplate.startsOn')}</div>
+                        <input
+                          type="date"
+                          value={draft.starts_on}
+                          onChange={e => patchTrigger(index, { starts_on: e.target.value })}
+                          className="border border-slate-200 rounded px-2 py-1"
+                          aria-label={t('taskTemplate.startsOn')}
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-slate-400 mb-0.5">{t('taskTemplate.endsOn')}</div>
+                        <input
+                          type="date"
+                          value={draft.ends_on}
+                          onChange={e => patchTrigger(index, { ends_on: e.target.value })}
+                          className={`border rounded px-2 py-1 ${errors?.range ? 'border-red-400' : 'border-slate-200'}`}
+                          aria-label={t('taskTemplate.endsOn')}
+                        />
+                      </div>
+                    </div>
+                    {errors?.range && (
+                      <p className="text-[11px] text-red-600" aria-live="polite">{t('taskTemplate.errRange')}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* 人话预览（实时，Miss.D §3.1） */}
+              <p className="text-[11px] text-slate-500 mt-2">
+                📅{' '}
+                {t('taskTemplate.previewLine', {
+                  rules: triggers.map(draft => describeTrigger(draftToTriggerPayload(draft), t)).join(t('taskTemplate.listJoiner')),
+                })}
+                {category === 'timed' ? ' ' + t('taskTemplate.previewTimedSuffix') : ''}
+                {triggers.length > 1 ? ' ' + t('taskTemplate.previewDedupe') : ''}
+              </p>
             </div>
-          </div>
+          )}
+
+          {/* 时间窗编辑器（Miss.D §3.2；限时类选中时 rose 高亮） */}
+          {category !== 'once' && (
+            <div className={`border rounded-xl p-3 ${timedMode !== 'NONE' ? 'border-rose-200 bg-rose-50' : 'border-slate-200 bg-white'}`}>
+              <div className="text-xs font-bold text-slate-600 mb-2">
+                ⏱ {t('taskTemplate.windowSection')} <span className="text-slate-400 font-normal">{t('taskTemplate.windowSectionSub')}</span>
+              </div>
+              <Segmented
+                label={t('taskTemplate.windowSection')}
+                value={timedMode}
+                tone="rose"
+                options={[
+                  { value: 'NONE', label: t('taskTemplate.windowNone') },
+                  { value: 'DEADLINE', label: t('taskTemplate.windowDeadline') },
+                  { value: 'DURATION', label: t('taskTemplate.windowDuration') },
+                ]}
+                onChange={(value) => changeTimedMode(value as TimedMode)}
+              />
+              {timedMode === 'DEADLINE' && (
+                <div className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+                  <span>{t('taskTemplate.windowDeadlinePrefix')}</span>
+                  <input
+                    type="time"
+                    value={deadlineTime}
+                    onChange={e => setDeadlineTime(e.target.value)}
+                    className={`border rounded px-2 py-1 ${errors?.timed === 'V1' ? 'border-red-400' : 'border-rose-200 bg-white'}`}
+                    aria-label={t('taskTemplate.deadlineTimeLabel')}
+                  />
+                  <span>{t('taskTemplate.windowDeadlineSuffix')}</span>
+                </div>
+              )}
+              {timedMode === 'DURATION' && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                  <span>{t('taskTemplate.windowDurationFrom')}</span>
+                  <input
+                    type="time"
+                    value={startTime}
+                    onChange={e => setStartTime(e.target.value)}
+                    className={`border rounded px-2 py-1 ${errors?.timed === 'V2' ? 'border-red-400' : 'border-rose-200 bg-white'}`}
+                    aria-label={t('taskTemplate.startTimeLabel')}
+                  />
+                  <span>{t('taskTemplate.windowDurationFor')}</span>
+                  <input
+                    type="number"
+                    min={DURATION_MIN}
+                    max={DURATION_MAX}
+                    step={DURATION_STEP}
+                    value={durationMinutes}
+                    onChange={e => setDurationMinutes(Number(e.target.value))}
+                    className={`w-20 border rounded px-2 py-1 ${errors?.timed === 'V2' ? 'border-red-400' : 'border-rose-200 bg-white'}`}
+                    aria-label={t('taskTemplate.durationLabel')}
+                  />
+                  <span>{t('taskTemplate.windowDurationMinutes')}</span>
+                </div>
+              )}
+              {errors?.timed && (
+                <p className="text-[11px] text-red-600 mt-1.5" aria-live="polite">
+                  {errors.timed === 'V1' ? t('taskTemplate.errDeadlineRequired') : t('taskTemplate.errDurationInvalid')}
+                </p>
+              )}
+              {showSoftWarning && !errors?.timed && (
+                <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1" aria-live="polite">
+                  <AlertTriangle size={12} /> {t('taskTemplate.warnDeadlineEarly')}
+                </p>
+              )}
+            </div>
+          )}
         </div>
-        <div className="p-4 bg-slate-50 flex justify-end gap-2 border-t">
-          <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded">{t('common.cancel')}</button>
-          <button onClick={handleSubmit} disabled={submitting || !newTaskTitle.trim()} className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md transform active:scale-95 disabled:opacity-50">{submitting ? t('common.loading') : t('addTask.postQuest')}</button>
+
+        {/* 页脚：左侧 helper + 按钮（Miss.D §3） */}
+        <div className="p-4 bg-slate-50 flex justify-between items-center gap-2 border-t">
+          <p className="text-[11px] text-slate-400">
+            {category === 'once' ? t('taskTemplate.footerOnce') : t('taskTemplate.footerTemplate')}
+          </p>
+          <div className="flex gap-2 shrink-0">
+            <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded">{t('common.cancel')}</button>
+            <button
+              onClick={handleSubmit}
+              disabled={submitting || !newTaskTitle.trim() || (!seasonId && !isEdit)}
+              className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md transform active:scale-95 disabled:opacity-50"
+            >
+              {submitting ? t('common.loading') : submitLabel}
+            </button>
+          </div>
         </div>
       </div>
     </div>

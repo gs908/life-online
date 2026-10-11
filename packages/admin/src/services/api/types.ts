@@ -42,6 +42,15 @@ export type TaskStatus =
 
 export type TaskCategory = 'STUDY' | 'CHORE' | 'SPORT' | 'ART' | 'LIFE' | 'OTHER';
 
+/** 模板触发规则类型（契约 §6A，DEV-35 块 A）；weekdays 0=周一..6=周日，cron 同 APScheduler 口径 */
+export type TriggerKind = 'DAILY' | 'WEEKDAYS' | 'MONTHLY' | 'CRON' | 'ONCE';
+
+/** 模板限时模式（契约 §6A）：决定实例 expire_at 的计算方式 */
+export type TimedMode = 'NONE' | 'DEADLINE' | 'DURATION';
+
+/** 实例池策略（契约 §6A，决策 D1） */
+export type PoolPolicy = 'REUSE_UNTIL_CONSUMED' | 'NEW_EACH_PERIOD';
+
 export type ThemeId = 'DEFAULT' | 'FROSTBOUND' | 'INFERNO' | 'SYLVAN' | 'CYBERPUNK';
 
 export type UploadPurpose = 'avatar' | 'task_proof' | 'season_banner' | 'other';
@@ -196,6 +205,8 @@ export interface TaskRead {
   status: TaskStatus;
   deadline: string | null;
   expire_at: string | null;
+  /** 生成器产出实例的逻辑日（契约 §6A）；一次性手工任务为 null */
+  generated_for_date: string | null;
   required_start_time: string | null; // "HH:MM:SS"
   proof_url: string | null; // 展示用
   rating: number | null; // 1-5
@@ -213,8 +224,28 @@ export interface TaskRead {
   updated_at: string;
 }
 
-/** 创建任务 = 建模板 + 初始实例（无独立模板接口，docs/09 A6） */
-export interface TaskCreate {
+// ---- 任务模板 /scn/task-templates（契约 §6A，DEV-35 块 A）----
+
+export interface TaskTriggerCreate {
+  kind: TriggerKind;
+  cron_expr?: string; // CRON 必填：5 段（分 时 日 月 周），day_of_week 0=周一（APScheduler 口径）
+  weekdays?: number[]; // WEEKDAYS 必填：非空，0=周一..6=周日
+  day_of_month?: number; // MONTHLY 必填：1-31，月末不足取当月最后一天
+  generate_at?: string; // "HH:MM"，默认 00:00
+  starts_on?: string; // "YYYY-MM-DD"；ONCE 必填（该日生成一次）
+  ends_on?: string; // 留空 = 长期
+  is_active?: boolean; // 默认 true
+}
+
+export interface TaskTriggerRead extends TaskTriggerCreate {
+  id: string;
+  template_id: string;
+  generate_at: string; // Read 必返
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskTemplateCreate {
   season_id: string;
   library_id?: string;
   category?: TaskCategory;
@@ -229,14 +260,96 @@ export interface TaskCreate {
   reminder_minutes_before?: number; // 默认 15
   time_deposit?: number; // 默认 10
   is_active?: boolean;
-  deadline?: string;
-  expire_at?: string;
+  // ---- 块 A：时间窗（timed_mode 与字段一致性 422，前端 V1-V3 镜像拦截）----
+  timed_mode?: TimedMode; // 默认 NONE；DEADLINE 需 deadline_time；DURATION 需 start_time+duration_minutes；NONE 三者皆空
+  deadline_time?: string; // "HH:MM"
+  start_time?: string; // "HH:MM"
+  duration_minutes?: number; // 15-480，15 的倍数（后端约束 >=1）
+  pool_policy?: PoolPolicy; // 默认 REUSE_UNTIL_CONSUMED
+  estimated_minutes?: number;
+  difficulty?: number; // 1-5
+  /** 缺省时后端按类型补默认规则（DAILY/TIMED→DAILY@00:00，CHALLENGE→每周一 CRON）；一次性不传 */
+  triggers?: TaskTriggerCreate[];
+}
+
+/** PATCH 部分更新；triggers 传则整组替换 */
+export interface TaskTemplateUpdate {
+  title?: string;
+  description?: string;
+  lore_snippet?: string | null;
+  xp_reward?: number;
+  type?: TaskType;
+  category?: TaskCategory | null;
+  target_child_id?: string | null;
+  required_start_time?: string | null;
+  reminder_message?: string | null;
+  reminder_minutes_before?: number;
+  time_deposit?: number;
+  is_active?: boolean;
+  timed_mode?: TimedMode;
+  deadline_time?: string | null;
+  start_time?: string | null;
+  duration_minutes?: number | null;
+  pool_policy?: PoolPolicy;
+  estimated_minutes?: number | null;
+  difficulty?: number | null;
+  triggers?: TaskTriggerCreate[];
+}
+
+export interface TaskTemplateRead {
+  id: string;
+  family_id: string;
+  season_id: string;
+  creator_account_id: string | null;
+  library_id: string | null;
+  target_child_id: string | null;
+  category: TaskCategory | null;
+  title: string;
+  description: string;
+  lore_snippet: string | null;
+  xp_reward: number;
+  type: TaskType;
+  required_start_time: string | null;
+  reminder_message: string | null;
+  reminder_minutes_before: number;
+  time_deposit: number;
+  is_active: boolean;
+  timed_mode: TimedMode;
+  deadline_time: string | null;
+  start_time: string | null;
+  duration_minutes: number | null;
+  pool_policy: PoolPolicy;
+  estimated_minutes: number | null;
+  difficulty: number | null;
+  deprecated_at: string | null;
+  deprecated_reason: string | null;
+  triggers: TaskTriggerRead[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskTemplateListQuery {
+  season_id?: string;
+  is_active?: boolean;
+  type?: TaskType;
+}
+
+export interface TaskTemplateDeprecateRequest {
+  reason?: string; // <=128，前端按必收设计（Miss.D §6）
+}
+
+/** 创建任务 = 建模板 + 初始实例（「一次性」发布走本接口：不传 triggers 即立即生成、不重复） */
+export interface TaskCreate extends TaskTemplateCreate {
+  target_user_id?: string; // ⚠️ 仅兼容字段，新代码不写
+  deadline?: string; // ⚠️ 仅兼容字段，新代码不写
+  expire_at?: string; // ⚠️ 仅兼容字段，新代码不写
 }
 
 export interface TaskListQuery extends PageQuery {
   season_id?: string;
   status?: TaskStatus;
   assignee_child_id?: string;
+  template_id?: string; // DEV-35：模板详情/重新生成确认数未消费实例
 }
 
 /** 提交证明：先 POST /sys/uploads(purpose=task_proof) 拿 object_key（不是 base64） */

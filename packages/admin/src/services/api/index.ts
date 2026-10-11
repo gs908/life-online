@@ -25,12 +25,14 @@ import * as aiApi from './modules/ai';
 import * as coinsApi from './modules/coins';
 import * as seasonsApi from './modules/seasons';
 import * as tasksApi from './modules/tasks';
+import * as taskTemplatesApi from './modules/taskTemplates';
 import * as uploadsApi from './modules/uploads';
 
 export const api = {
   auth: authApi,
   seasons: seasonsApi,
   tasks: tasksApi,
+  taskTemplates: taskTemplatesApi,
   coins: coinsApi,
   uploads: uploadsApi,
   ai: aiApi,
