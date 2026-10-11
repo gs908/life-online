@@ -32,6 +32,7 @@ from app.models.sys_family import SysFamily
 from app.schemas.task import (
     TaskTemplateCreate,
     TaskTemplateUpdate,
+    TaskTriggerCreate,
     validate_timed_mode,
 )
 from app.services import coin_service, task_generator_service
@@ -199,7 +200,12 @@ async def update_template(
 
     triggers_changed = False
     if "triggers" in data:
-        template.triggers = _build_triggers(data["triggers"])
+        # model_dump 后是 dict;重新 model_validate 回对象,顺带补上 PATCH 路径的
+        # 触发规则字段校验(kind 一致性,422),与创建口径一致。
+        trigger_models = [
+            TaskTriggerCreate.model_validate(t) for t in (data["triggers"] or [])
+        ]
+        template.triggers = _build_triggers(trigger_models)
         triggers_changed = True
     await db.commit()
     # updated_at 是 server 端 onupdate,flush 后处于 expired 态;
@@ -208,11 +214,15 @@ async def update_template(
 
     # 改规则后立即补一次生成(与创建同口径)。
     if triggers_changed:
+        template_id = template.id  # 生成兜底的 rollback 会 expire 对象,先取普通值
         instance, action = await task_generator_service.generate_for_template(
             db, template, force=True,
         )
+        # 兜底路径(exists)内部 rollback 会再次 expire 会话对象 —— 这里重新
+        # refresh,保证 API 层 _to_read 同步读属性不再触发隐式重载。
+        await db.refresh(template)
         log.info("template %s triggers updated, generation action=%s instance=%s",
-                 template.id, action, getattr(instance, "id", None))
+                 template_id, action, getattr(instance, "id", None))
     return template
 
 
@@ -239,11 +249,13 @@ async def activate_template(
     template.deprecated_reason = None
     await db.commit()
     await db.refresh(template)  # 同 update_template:server onupdate 列需显式刷新
+    template_id = template.id  # 生成兜底的 rollback 会 expire 对象,先取普通值
     instance, action = await task_generator_service.generate_for_template(
         db, template, force=True,
     )
+    await db.refresh(template)  # 兜底路径(exists)rollback 后恢复可同步读
     log.info("template %s activated, generation action=%s instance=%s",
-             template.id, action, getattr(instance, "id", None))
+             template_id, action, getattr(instance, "id", None))
     return template
 
 
@@ -256,7 +268,7 @@ REGENERATE_TERMINAL_STATUSES = (TaskStatus.AVAILABLE, TaskStatus.IN_PROGRESS)
 
 async def regenerate_template(
     db: AsyncSession, *, family_id: str, template_id: str,
-) -> tuple[ScnTaskTemplate, list[ScnTaskInstance], ScnTaskInstance | None, str]:
+) -> tuple[str, list[str], ScnTaskInstance | None, str]:
     """再生成:终结 AVAILABLE/IN_PROGRESS 实例(状态机语义同过期),随后尝试生成新实例。
 
     - PENDING_REVIEW 不终结(保留审核机会,见 REGENERATE_TERMINAL_STATUSES);
@@ -265,7 +277,9 @@ async def regenerate_template(
     - SELECT 带 with_for_update(Mars #3):防止与孩子接取/提交/家长审核并发时
       双花押金或覆盖状态。
 
-    返回 (template, 终结的实例列表, 新实例或 None, 生成动作)。
+    返回 (template_id, 终结的实例 id 列表, 新实例或 None, 生成动作);
+    id 均为普通字符串 —— 生成兜底的 rollback 会 expire 会话对象,
+    调用方不得在 generate 之后再同步读 ORM 对象属性。
     """
     template = await get_family_template(db, template_id=template_id, family_id=family_id)
     stmt = (
@@ -298,11 +312,12 @@ async def regenerate_template(
         # 释放实例池槽位:partial unique index 以 (template_id, generated_for_date)
         # 兜底同日幂等,终结后若不释放,同日再生成会撞索引回捞到旧 EXPIRED 行。
         instance.generated_for_date = None
+    terminalized_ids = [i.id for i in terminalized]  # rollback 前先取普通值
     await db.commit()
     fresh, action = await task_generator_service.generate_for_template(
         db, template, force=True,
     )
-    return template, terminalized, fresh, action
+    return template_id, terminalized_ids, fresh, action
 
 
 async def delete_template(

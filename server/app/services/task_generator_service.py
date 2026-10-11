@@ -184,14 +184,12 @@ async def _get_instance_for_date(
 
 async def _insert_instance(
     db: AsyncSession, template: ScnTaskTemplate, day: date,
-) -> ScnTaskInstance:
+) -> tuple[ScnTaskInstance, bool]:
     """插入当日实例;撞唯一索引(并发兜底)时回滚并取回既有行。
 
-    注意:
-    - 回滚会丢弃当前事务中未提交的其它改动,调用方须保证
-      在模板改动 commit 之后再进入本函数;
-    - rollback 会 expire 会话内全部对象,故 template_id 等属性必须在
-      插入前先取为普通值,否则兜底路径上的属性访问会触发隐式重载。
+    返回 (实例, 是否新建)。兜底取回既有行时 created=False(可能是并发方
+    刚插入的 AVAILABLE 行,也可能是当日已消费的 COMPLETED/EXPIRED 行),
+    调用方据此返回诚实的动作而非 "created"。
     """
     template_id = template.id
     family_id = template.family_id
@@ -219,15 +217,19 @@ async def _insert_instance(
     try:
         await db.flush()
     except IntegrityError:
-        # 真实并发兜底:另一个生成器/请求已插入同 (template_id, day) 行。
+        # 真实并发/当日已消费兜底:另一行已持有 (template_id, day)。
+        # 注:SAVEPOINT(begin_nested)在 asyncpg 下救不了外层事务(语句失败仍会
+        # PendingRollback),只能整事务 rollback —— 它会 expire 会话内全部对象,
+        # 因此 template_id 等属性必须在插入前先取为普通值;调用方在兜底动作
+        # (exists)返回后如需同步读模板属性,须自行 db.refresh(template)。
         await db.rollback()
         existing = await _get_instance_for_date(db, template_id, day)
         if existing is None:
             raise ConflictError(
                 f"任务实例并发插入冲突且无法取回: template={template_id} day={day}"
             )
-        return existing
-    return instance
+        return existing, False
+    return instance, True
 
 
 async def generate_for_template(
@@ -301,8 +303,12 @@ async def generate_for_template(
     if expire_at is not None and expire_at <= now:
         return None, "skipped_expired"
 
-    instance = await _insert_instance(db, template, today)
+    instance, created = await _insert_instance(db, template, today)
     await db.commit()
+    if not created:
+        # 兜底回捞到当日既有行(并发方的 AVAILABLE,或当日已消费的
+        # COMPLETED/EXPIRED)——如实报告"已存在",不冒充新建。
+        return instance, "exists"
     return instance, "created"
 
 

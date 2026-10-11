@@ -275,7 +275,7 @@
 **regenerate 语义（Mars 审查后产品拍板）**：
 - 终结范围 = 未消费三态中的 `AVAILABLE + IN_PROGRESS`；**PENDING_REVIEW 不终结**（孩子已提交待审核的成果保留审核机会）。IN_PROGRESS 终结时全额退押金（不计放弃惩罚）。
 - 待审核实例仍占实例池槽位（D1），存在时**本轮不新建**：响应 `action="kept"`、`new_instance=null`；审核完结（COMPLETED/驳回后完成）后下个触发周期恢复生成。
-- 响应 `data = { template_id, terminalized_instance_ids: string[], action: "created"|"kept"|"not_due"|"skipped_expired", new_instance: {id, generated_for_date, status} | null }`；`new_instance` 仅在 `action="created"` 时非空。
+- 响应 `data = { template_id, terminalized_instance_ids: string[], action: "created"|"exists"|"kept"|"not_due"|"skipped_expired", new_instance: {id, generated_for_date, status} | null }`；`new_instance` 仅在 `action="created"` 时非空（其余值一律按"未生成新实例"处理）。`exists` 亦会出现在强生成撞当日既有行的路径（如当日实例已消费后 PATCH triggers/activate）。
 - 前端"事前 N"= `GET /scn/task-instances?template_id=X` 按 `AVAILABLE + IN_PROGRESS` 两态 total 求和。
 
 **已知项**：生成器跳过"生成即过期"的当日生成（限时任务在截止时刻过后才到期/创建时不产出注定被过期 job 判死的实例，`action="skipped_expired"`）；`ends_on` 窗口结束后的非限时未消费实例不再顺延也不过期（REUSE_UNTIL_CONSUMED 语义自洽，如需清理属后续产品决策）。

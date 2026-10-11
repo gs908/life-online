@@ -166,14 +166,17 @@ async def activate_task_template(
 async def regenerate_task_template(
     template_id: str, _body: TaskTemplateRegenerate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[dict]:
-    template, terminalized, fresh, action = await task_template_service.regenerate_template(
-        db, family_id=user.family_id, template_id=template_id,
+    template_id, terminalized_ids, fresh, action = (
+        await task_template_service.regenerate_template(
+            db, family_id=user.family_id, template_id=template_id,
+        )
     )
     return ok({
-        "template_id": template.id,
-        "terminalized_instance_ids": [i.id for i in terminalized],
+        "template_id": template_id,
+        "terminalized_instance_ids": terminalized_ids,
         # action: created=已生成新实例;kept=存在待审核实例(不终结不新增,见 §6A);
-        # not_due/skipped_expired=当日无有效生成。new_instance 仅在 created 时非空。
+        # exists=当日已有实例(含强生成撞当日已消费行);not_due/skipped_expired=
+        # 当日无有效生成。new_instance 仅在 created 时非空。
         "action": action,
         "new_instance": {
             "id": fresh.id,

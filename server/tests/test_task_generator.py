@@ -103,10 +103,13 @@ async def _count_instances(db: AsyncSession, template_id: str) -> int:
 @pytest_asyncio.fixture
 async def seeded(db_session: AsyncSession) -> SeededFamily:
     seeded = await seed_basic_family(db_session, suffix="gen")
+    # family.id 提前取普通值:生成器并发兜底的 db.rollback() 会 expire 会话内
+    # 全部对象,teardown 时再读 seeded.family.id 会触发隐式重载(MissingGreenlet)。
+    family_id = seeded.family.id
     try:
         yield seeded
     finally:
-        await cleanup_family(db_session, seeded.family.id)
+        await cleanup_family(db_session, family_id)
 
 
 # ---- 1. 同触发日跑两次 = 1 条(幂等) ----
@@ -306,7 +309,8 @@ async def test_concurrent_insert_real_integrity_error_fallback(db_session, seede
         # 删除 B 会话对该行的身份映射,保证下面 flush 走 INSERT 而非复用,
         # 从而真实撞上数据库唯一索引。
         session_b.expire_all()
-        loser = await task_generator_service._insert_instance(session_b, template, TODAY)
+        loser, created = await task_generator_service._insert_instance(session_b, template, TODAY)
+        assert created is False  # 兜底回捞,非新建
         assert loser.id == winner.id  # 撞库回捞:A 的行被返回
     assert await _count_instances(db_session, template.id) == 1
 
@@ -342,10 +346,11 @@ async def test_regenerate_terminalizes_and_creates_fresh(db_session, seeded):
         db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
     )
     old = await _make_instance(db_session, template, day=TODAY)
-    _tpl, terminalized, fresh, action = await task_template_service.regenerate_template(
+    tpl_id, terminalized_ids, fresh, action = await task_template_service.regenerate_template(
         db_session, family_id=seeded.family.id, template_id=template.id,
     )
-    assert [i.id for i in terminalized] == [old.id]
+    assert tpl_id == template.id
+    assert terminalized_ids == [old.id]
     await db_session.refresh(old)
     assert old.status == TaskStatus.EXPIRED
     assert old.generated_for_date is None  # 池槽位已释放
@@ -371,7 +376,7 @@ async def test_regenerate_preserves_pending_review(db_session, seeded):
     _tpl, terminalized, fresh, action = await task_template_service.regenerate_template(
         db_session, family_id=seeded.family.id, template_id=template.id,
     )
-    assert [i.id for i in terminalized] == [available.id]  # 只终结 AVAILABLE
+    assert terminalized == [available.id]  # 只终结 AVAILABLE
     await db_session.refresh(reviewing)
     assert reviewing.status == TaskStatus.PENDING_REVIEW  # 待审核不动
     assert reviewing.generated_for_date == YESTERDAY
@@ -423,6 +428,46 @@ async def test_patch_target_child_id_applies_and_clears(api_client, db_session, 
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["target_child_id"] == seeded.child.id  # 改回生效
+
+
+async def test_patch_triggers_after_today_completed(api_client, db_session, seeded):
+    """Mars 复核遗留项:孩子当日已完成 → 家长同日 PATCH triggers,强生成撞
+    当日已消费行;savepoint 兜底不得 expire 会话对象(否则 MissingGreenlet 500),
+    且动作须诚实(exists,而非 created + COMPLETED 冒充新实例)。"""
+    headers = _auth_headers(seeded.parent)
+    body = {
+        "season_id": seeded.season.id,
+        "title": "当日完成后改规则",
+        "triggers": [{"kind": "DAILY", "generate_at": "00:00"}],
+    }
+    resp = await api_client.post("/api/v1/scn/task-templates", json=body, headers=headers)
+    assert resp.status_code == 200, resp.text
+    template_id = resp.json()["data"]["id"]
+
+    # 把当日生成的实例标记为已完成(模拟孩子做完今日任务)。
+    today_instance = (
+        await db_session.execute(
+            select(ScnTaskInstance).where(ScnTaskInstance.template_id == template_id)
+        )
+    ).scalar_one()
+    today_instance.status = TaskStatus.COMPLETED
+    await db_session.commit()
+
+    template = await db_session.get(ScnTaskTemplate, template_id)
+    _inst, action = await task_generator_service.generate_for_template(
+        db_session, template, force=True,
+    )
+    assert action == "exists"  # 回捞当日已消费行,如实报告
+    assert _inst.id == today_instance.id and _inst.status == TaskStatus.COMPLETED
+
+    # API 全链路:PATCH triggers 走同一生成路径,不得 500。
+    resp = await api_client.patch(
+        f"/api/v1/scn/task-templates/{template_id}",
+        json={"triggers": [{"kind": "WEEKDAYS", "weekdays": [0]}]}, headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["triggers"][0]["kind"] == "WEEKDAYS"
+    assert await _count_instances(db_session, template_id) == 1  # 未重复生成
 
 
 async def test_delete_refused_with_history(db_session, seeded):
