@@ -80,6 +80,9 @@ MINIO_SECRET_KEY=minioadmin
 
 - **bucket 自动创建**:应用启动时与每次上传前都会执行 `ensure_bucket`
   (`bucket_exists` → 不存在则 `make_bucket`),无需手动建 `life-online` bucket。
+- **可选 `MINIO_REGION`**(如 `us-east-1`):设置后签名(预签名 URL)前不再向 MinIO
+  查询 bucket 位置,少一次网络往返;留空沿用 SDK 默认。依赖版本约束 `minio>=7.2.8,<8`
+  (7.x 的 `expires` 要求 `timedelta`,代码已按此适配并锁定大版本)。
 - **MinIO 可以在应用之后启动**:每次上传都会重试连通性,MinIO 起来后自动恢复,
   应用无需重启;启动期间上传返回明确的 503(见下文降级规则),不会裸 500。
 - MinIO 完全不想跑时,`STORAGE_PROVIDER=local` 即为降级方案(无需任何 MinIO 配置)。
