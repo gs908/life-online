@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import pytest
 
 from app.common.exceptions import NotFoundError
@@ -163,7 +165,9 @@ async def test_save_upload_follows_path_spec_and_increments_seq(
     expected = f"{user_id}/{task_id}/{today:%Y%m%d}/task_proof-1_整理书桌_证明.jpg"
     assert first.object_key == expected
     assert first.task_instance_id == task_id
-    assert first.public_url == f"/api/v1/files/{expected}"
+    # public_url 经 LocalFileStorage.presign_get 输出,非 ASCII(中文文件名)按
+    # quote(key, safe="/") 百分号编码 —— 与 object_key 本身(未编码)不同口径
+    assert first.public_url == f"/api/v1/files/{quote(expected, safe='/')}"
     assert (tmp_path / expected).read_bytes() == b"a"
 
     second = await upload_service.save_upload(
