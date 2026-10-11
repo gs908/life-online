@@ -59,7 +59,15 @@ DATABASE_NAME=postgres
 DATABASE_SSLMODE=require
 ```
 
-MinIO 可按本地环境单独启动(DEV-28 补充说明):
+MinIO 可按本地环境单独启动。本地 PostgreSQL + MinIO 可用仓库根 `docker-compose.yml`
+统一启动(延迟测量、连接模式对比与推荐配置见 `docs/11-数据库连接调优.md`):
+
+```bash
+docker compose up -d                      # 仅 PostgreSQL
+docker compose --profile storage up -d    # 连同 MinIO(替代下面的手动 docker run)
+```
+
+不想用 compose 时,MinIO 也可单独 `docker run`(DEV-28 补充说明):
 
 ```bash
 docker run -d --name life-online-minio \
@@ -162,10 +170,16 @@ uv run python scripts/diff_pg_schema.py
 
 ### 4.2 Supabase pooler(事务模式)注意事项
 
-`.env` 指向 6543 端口(Supabase 事务模式 pgbouncer)时,asyncpg 的预编译语句会报
-`prepared statement "..." already exists`。引擎已按 SQLAlchemy 官方适配方案处理
+`.env` 指向 6543 端口(Supabase 事务模式 pooler)时,asyncpg 的预编译语句会报
+`prepared statement "..." already exists`。引擎按 SQLAlchemy 官方适配方案处理
 (`statement_cache_size=0` + `NullPool`,见 `app/common/db/engine.py`)。
-若改用 5432 会话模式 pooler 或直连,可恢复连接池与语句缓存以提升性能。
+
+连接池策略已配置化:`config.yaml` 的 `database.pool.mode`(环境变量
+`DATABASE_POOL_MODE`),默认 `auto` —— 6543 自动按事务模式适配(行为与配置化
+之前完全一致),其余端口(本地 Docker / 直连 / 会话模式 pooler 5432)自动恢复
+默认连接池 + 语句缓存,无需改代码。也可显式指定 `transaction_pooler` / `default`。
+延迟量化数据、三种连接模式对比与推荐配置见 `docs/11-数据库连接调优.md`
+(DEV-29)。
 
 ### 4.3 字符集与连接串约定
 

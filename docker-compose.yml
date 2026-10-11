@@ -1,0 +1,59 @@
+# 本地开发基础设施(DEV-29):PostgreSQL 16 + 可选 MinIO。
+# 数据库连接调优与三种连接模式对比见 docs/11-数据库连接调优.md。
+#
+# 基本用法(仅起 PostgreSQL):
+#   docker compose up -d
+#
+# 连同 MinIO 一起起(对象存储联调):
+#   docker compose --profile storage up -d
+#
+# 本地库连接参数(对应 server/.env):
+#   DATABASE_HOST=127.0.0.1
+#   DATABASE_PORT=5432
+#   DATABASE_USER=postgres
+#   DATABASE_PASSWORD=postgres
+#   DATABASE_NAME=life_online
+#   DATABASE_SSLMODE=disable
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: life-online-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: life_online
+      # 与生产(Supabase,UTF8)保持一致,避免本地/联调编码差异
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - life_online_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d life_online"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 可选:MinIO 对象存储(--profile storage 才会启动)
+  minio:
+    image: minio/minio:latest
+    container_name: life-online-minio
+    profiles: ["storage"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API(server/.env 的 MINIO_ENDPOINT)
+      - "9001:9001"   # 控制台
+    volumes:
+      - life_online_miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  life_online_pgdata:
+  life_online_miniodata:
