@@ -92,8 +92,9 @@
 
 - 凭据存 `sys_channel_password` 渠道表（与 `sys_channel_wechat` 并列），一账号至多一条；密码 scrypt 哈希（N=2^15, r=8, p=1，标准库实现，无明文）。微信注册的已有账号可经 `PUT /sys/auth/password/me` 补设密码（首次设置需带 `username`），多渠道并存互不影响。
 - `username` 全表唯一、统一小写存储（登录大小写不敏感）；`POST /password/register` 与小程序侧 `/sys/families/join` 同语义：消费一张邀请码创建账号并直接返回 `TokenPair`（邀请码无效/已用/过期 → 404/409，与 join 一致）。
-- 登录失败统一 401 `unauthorized`「用户名或密码错误」，不区分用户不存在与密码错误（防用户名枚举）；同一用户名在窗口期内（默认 15 分钟）失败超过 `AUTH_LOGIN_MAX_ATTEMPTS`（默认 5）次后返回 429 `rate_limited`。限流为进程内计数（重启清零、多 worker 各自计数），Redis 接入后可升级为全局精确计数。
-- 通道开关：`AUTH_PASSWORD_LOGIN_ENABLED`（默认 `true`，生产可用）；关闭时 login/register 返回 503 `service_unavailable`。与 `DEV_LOGIN_ENABLED`（默认 `false`，仅开发环境）互不相关。
+- 登录失败统一 401 `unauthorized`「用户名或密码错误」，不区分用户不存在与密码错误（防用户名枚举）；用户不存在时服务端也对固定 dummy 哈希做一次等参数 scrypt 校验，消除与密码错误路径（约 100ms）的可测时间差（DEV-26）。同一用户名在窗口期内（默认 15 分钟）失败超过 `AUTH_LOGIN_MAX_ATTEMPTS`（默认 5）次后返回 429 `rate_limited`。限流为进程内计数（重启清零、多 worker 各自计数；计数字典设容量上限 10000，满时先清扫窗口外条目、仍满则丢弃兜底，防不存在用户名喷射撑爆内存），Redis 接入后可升级为全局精确计数。
+- 通道开关：`AUTH_PASSWORD_LOGIN_ENABLED`（默认 `true`，生产可用）；关闭时 login/register 返回 503 `service_unavailable`。**`PUT /sys/auth/password/me` 同受此门禁**（DEV-26 口径）：该端点内含 `old_password` 在线校验（爆破面），且首次设置会写入登录 username（注册语义），关闭密码通道即整体冻结密码凭据面，不留下"能设密码却不能登录"的半开状态（已登录用户在通道关闭时调用亦得 503）。与 `DEV_LOGIN_ENABLED`（默认 `false`，仅开发环境）互不相关。
+- scrypt 校验内存上限（maxmem）按存储串中的 N·r 动态计算（需求约 128·N·r，取 2 倍余量），并对 N（2^14–2^20，须为 2 的幂）、r（1–32）、p（1–8）做合理性校验：未来把哈希参数 N 提到 2^17 时存量哈希验证不受影响，同时防存储串被篡改后触发巨型分配（DEV-26）。
 - 返回标准 `TokenPair`（复用 `auth_service.issue_token_pair`），refresh / 鉴权链路与微信登录完全一致。
 
 **dev-login 语义**（实现唯一事实来源：`server/app/api/v1/auth.py`、`server/app/dev/login.py`、`server/app/schemas/token.py::DevLoginRequest`）：

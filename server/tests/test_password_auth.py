@@ -8,6 +8,8 @@
 - 用户名大小写不敏感;重复用户名注册 409(邀请码不被消费);弱密码/非法用户名 422
 - 修改密码:旧密码校验、改密后新旧密码生效性、首次设置必须带 username
 - 通道开关关闭时 503(dev-login 的 DEV_LOGIN_ENABLED 门禁不受影响,见 test_dev_login_smoke.py)
+- DEV-26 加固:scrypt maxmem 动态化(更高参数哈希可验证、被篡改参数被拒)、
+  限流字典容量上限、改密端点受通道开关门禁
 
 需要数据库的用例标 `@pytest.mark.db` + `db_ready`;参数校验/开关类用例不依赖数据库,
 任何环境都会执行。测试数据经 family_service 正常链路创建,结束用 cleanup_family
@@ -30,6 +32,7 @@ from app.main import app
 from app.models.enums import InviteRole, UserRole
 from app.models.sys_account import SysAccount
 from app.services import family_service, password_service
+from app.common.security import password as password_security
 
 
 def _fake_settings(
@@ -118,6 +121,63 @@ async def test_register_unavailable_when_disabled(
         json={"code": "ANYCODE", "username": "alice", "password": "good-password"},
     )
     assert resp.status_code == 503
+
+
+# ---- DEV-26 加固(不依赖数据库,始终执行) ----
+
+
+def test_verify_accepts_larger_scrypt_params() -> None:
+    """maxmem 动态化:N=2^16/r=8 内存需求约 64MB+,旧的 64MB 常量会超限误杀。"""
+    import hashlib
+
+    n, r, p, salt = 2 ** 16, 8, 1, bytes.fromhex("00" * 16)
+    digest = hashlib.scrypt(
+        b"good-password", salt=salt, n=n, r=r, p=p, dklen=32,
+        maxmem=password_security._scrypt_maxmem(n, r, p),
+    )
+    stored = "$".join(["scrypt", str(n), str(r), str(p), salt.hex(), digest.hex()])
+    assert password_security.verify_password("good-password", stored) is True
+    assert password_security.verify_password("wrong-password", stored) is False
+
+
+def test_verify_rejects_tampered_scrypt_params() -> None:
+    """参数越界/非 2 的幂直接拒绝,不触发巨型分配。"""
+    def stored_with(n: int, r: int, p: int) -> str:
+        return "$".join(["scrypt", str(n), str(r), str(p), "00" * 16, "ab" * 32])
+
+    assert password_security.verify_password("x" * 8, stored_with(2 ** 24, 8, 1)) is False
+    assert password_security.verify_password("x" * 8, stored_with(2 ** 15 + 1, 8, 1)) is False
+    assert password_security.verify_password("x" * 8, stored_with(2 ** 15, 64, 1)) is False
+    assert password_security.verify_password("x" * 8, stored_with(2 ** 13, 8, 1)) is False
+
+
+def test_throttle_dict_is_bounded() -> None:
+    """海量不存在用户名喷射时,key 数量不超过 MAX_KEYS。"""
+    throttle = password_service._LoginThrottle()
+    throttle.MAX_KEYS = 5
+    for i in range(50):
+        throttle.record_failure(f"login:spray_{i}", window_s=900)
+    assert len(throttle._failures) <= 5
+    # 既有 key 仍正常计数(容量兜底不影响限流判断本身)
+    throttle.record_failure("login:spray_49", window_s=900)
+    with pytest.raises(Exception):
+        throttle.check("login:spray_49", max_attempts=2, window_s=900)
+
+
+def test_timing_equalizer_hash_is_valid_scrypt() -> None:
+    """dummy 哈希惰性生成且可被 verify 正常校验(时序等化路径的可用性)。"""
+    dummy = password_service._timing_equalizer_hash()
+    assert dummy.startswith("scrypt$")
+    assert password_security.verify_password("timing-equalizer-dummy", dummy) is True
+
+
+async def test_change_password_unavailable_when_disabled_no_auth(api_client: AsyncClient, password_login_disabled: None) -> None:
+    """未登录先得 401(鉴权在门禁之前,不向匿名流量暴露通道状态)。"""
+    resp = await api_client.put(
+        "/api/v1/sys/auth/password/me",
+        json={"new_password": "good-password"},
+    )
+    assert resp.status_code == 401
 
 
 # ---- 完整链路(需要数据库) ----
@@ -300,5 +360,33 @@ async def test_wechat_account_can_set_first_password(
         json={"username": username, "password": "brand-new-pw-1"},
     )
     assert login.status_code == 200
+
+    await cleanup_family(db_session, family_id)
+
+
+@pytest.mark.db
+async def test_change_password_gated_by_channel_switch(
+    api_client: AsyncClient, db_session: AsyncSession, db_ready: bool
+) -> None:
+    """DEV-26 口径:已登录用户在通道关闭时改密/补设也得 503(冻结整个密码凭据面)。"""
+    family_id, _ = await _new_family_with_invite(db_session)
+    from app.models.sys_family import SysFamily
+    from app.services import auth_service
+
+    family = await db_session.get(SysFamily, family_id)
+    owner = await db_session.get(SysAccount, family.owner_id)
+    auth_header = {"Authorization": f"Bearer {auth_service.issue_token_pair(owner).access_token}"}
+
+    app.dependency_overrides[get_settings] = lambda: _fake_settings(enabled=False)
+    try:
+        resp = await api_client.put(
+            "/api/v1/sys/auth/password/me",
+            json={"new_password": "good-password"},
+            headers=auth_header,
+        )
+        assert resp.status_code == 503
+        assert resp.json()["data"]["error_code"] == "service_unavailable"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
 
     await cleanup_family(db_session, family_id)

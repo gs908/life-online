@@ -32,7 +32,16 @@ def normalize_username(username: str) -> str:
 
 
 class _LoginThrottle:
-    """进程内滑动窗口失败计数器(username -> 最近失败时刻列表)。"""
+    """进程内滑动窗口失败计数器(username -> 最近失败时刻列表)。
+
+    字典容量上限(DEV-26):历史上 key 仅在该用户名登录成功时清除,海量不存在
+    用户名喷射会让 key 数量无界增长。达到上限后先清扫窗口外条目,仍满则丢弃
+    任意一个条目兜底——攻击者顶多让计数变稀疏(限流偏松),不会撑爆内存。
+    接入 Redis 全局限流后本类整体退役。
+    """
+
+    # 进程内计数的合理上限:1 万个用户名 × 每个一串时间戳,内存不过几百 KB。
+    MAX_KEYS = 10_000
 
     def __init__(self) -> None:
         self._failures: dict[str, deque[float]] = {}
@@ -43,6 +52,11 @@ class _LoginThrottle:
         while dq and dq[0] <= now - window_s:
             dq.popleft()
         return dq
+
+    def _sweep(self, window_s: float, now: float) -> None:
+        """清掉所有窗口外(空)条目。窗口取当前调用的 window_s——实践中全局统一,够用。"""
+        for key in [k for k, dq in self._failures.items() if not self._prune(k, window_s, now)]:
+            del self._failures[key]
 
     def check(self, key: str, *, max_attempts: int, window_s: float) -> None:
         """超限即抛 429;通过不产生任何副作用。"""
@@ -55,7 +69,12 @@ class _LoginThrottle:
 
     def record_failure(self, key: str, *, window_s: float) -> None:
         with self._lock:
-            self._prune(key, window_s, time.monotonic()).append(time.monotonic())
+            now = time.monotonic()
+            if key not in self._failures and len(self._failures) >= self.MAX_KEYS:
+                self._sweep(window_s, now)
+                if len(self._failures) >= self.MAX_KEYS:
+                    self._failures.popitem()
+            self._prune(key, window_s, now).append(now)
 
     def reset(self, key: str) -> None:
         with self._lock:
@@ -63,6 +82,18 @@ class _LoginThrottle:
 
 
 _throttle = _LoginThrottle()
+
+# 时序防枚举(DEV-26):用户不存在时也对固定 dummy 哈希做一次等参数 scrypt verify,
+# 使该路径与"密码错误"路径(约 100ms)无可测时间差。惰性生成避免拖慢模块 import;
+# 值只会被写入一次,并发下重复计算是良性的。
+_dummy_hash: str | None = None
+
+
+def _timing_equalizer_hash() -> str:
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = hash_password("timing-equalizer-dummy")
+    return _dummy_hash
 
 
 async def _find_channel_with_account(
@@ -89,7 +120,12 @@ async def login(
     _throttle.check(key, max_attempts=max_attempts, window_s=window_minutes * 60)
 
     channel = await _find_channel_with_account(db, normalize_username(username))
-    if channel is None or not verify_password(password, channel.password_hash):
+    if channel is None:
+        # 用户不存在也要走一次等参数 scrypt(约 100ms),消除与密码错误路径的时间差
+        verify_password(password, _timing_equalizer_hash())
+        _throttle.record_failure(key, window_s=window_minutes * 60)
+        raise UnauthorizedError("用户名或密码错误")
+    if not verify_password(password, channel.password_hash):
         _throttle.record_failure(key, window_s=window_minutes * 60)
         raise UnauthorizedError("用户名或密码错误")
 

@@ -124,6 +124,11 @@ async def password_register(
 async def change_password(
     body: PasswordChangeRequest, db: DBSession, user: CurrentUser, settings: SettingsDep
 ) -> ApiResponse[dict]:
+    # 与 login/register 同一门禁(DEV-26 口径):该端点内含 old_password 在线校验
+    # (爆破面),且首次设置会写入登录 username(注册语义)——关闭密码通道即整体
+    # 冻结密码凭据面,不留下"能设密码却不能登录"的半开状态。
+    if not settings.auth.password_login_enabled:
+        raise ServiceUnavailableError("账号密码登录未启用(AUTH_PASSWORD_LOGIN_ENABLED=false)")
     await password_service.change_password(
         db,
         account=user,
