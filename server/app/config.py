@@ -64,6 +64,15 @@ class AppSection(BaseModel):
 
 
 class DatabasePoolSection(BaseModel):
+    """连接池策略(见 docs/11-数据库连接调优.md §连接模式)。
+
+    - ``auto``(默认):端口 6543(Supabase 事务模式 pooler)按事务模式处理
+      (NullPool + 关闭预编译语句缓存),其余端口恢复默认连接池 + 语句缓存;
+    - ``transaction_pooler``:强制按事务模式 pooler 处理;
+    - ``default``:强制使用默认连接池(AsyncAdaptedQueuePool)。
+    """
+
+    mode: str = "auto"
     pool_pre_ping: bool = True
     pool_recycle: int = 3600
 

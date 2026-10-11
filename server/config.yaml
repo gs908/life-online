@@ -27,6 +27,10 @@ database:
   query:
     application_name: ${env:DATABASE_APPLICATION_NAME:life-online}
   pool:
+    # 连接池策略:auto(默认,按端口判定)/ transaction_pooler / default
+    # 6543(事务模式 pooler)→ NullPool + 关闭预编译语句;其余 → 默认连接池。
+    # 详见 docs/11-数据库连接调优.md
+    mode: ${env:DATABASE_POOL_MODE:auto}
     pool_pre_ping: true
     pool_recycle: 3600
 
