@@ -240,7 +240,7 @@ async def generate_for_template(
 ) -> tuple[ScnTaskInstance | None, str]:
     """对单个模板执行一次生成;返回 (实例, 动作)。
 
-    动作: created / rolled_forward / kept / exists / not_due。
+    动作: created / rolled_forward / kept / exists / not_due / skipped_expired。
     force=True 跳过 generate_at 时刻检查(模板创建/改规则/激活后立即补一次生成),
     仍要求有规则命中 today 且在生效区间。
     """
@@ -277,10 +277,29 @@ async def generate_for_template(
             expire_at = compute_expire_at(template, today)
             existing.expire_at = expire_at
             existing.deadline = expire_at
-            await db.commit()
+            template_id = template.id  # rollback 会 expire 对象,先取普通值
+            try:
+                await db.commit()
+            except IntegrityError:
+                # 与 _insert_instance 同级兜底(Mars #5):当前调用链下不可达
+                # (旧实例路径不写 generated_for_date;regenerate 先释放槽位),
+                # 防未来路径(NEW_EACH_PERIOD/数据回填)在同模板已有当日行时裸撞索引。
+                await db.rollback()
+                winner = await _get_instance_for_date(db, template_id, today)
+                if winner is None:
+                    raise ConflictError(
+                        f"roll_forward 并发冲突且无法取回: template={template_id} day={today}"
+                    )
+                return winner, "exists"
             return existing, "rolled_forward"
         # IN_PROGRESS / PENDING_REVIEW:孩子手里,保持不动;NEW_EACH_PERIOD 本轮不默认。
         return existing, "kept"
+
+    # 限时任务"生成即过期"守卫:生成时刻已过今日截止(如 21:00 创建 DEADLINE 20:00
+    # 的模板后立即补生成),产物会在 5 分钟内被过期 job 判死,直接跳过当日生成。
+    expire_at = compute_expire_at(template, today)
+    if expire_at is not None and expire_at <= now:
+        return None, "skipped_expired"
 
     instance = await _insert_instance(db, template, today)
     await db.commit()
@@ -292,7 +311,10 @@ async def run_generation(
 ) -> dict[str, int]:
     """全量跑一轮生成(定时任务 00:10 / 手动触发)。返回各动作计数。"""
     today = today or today_bj()
-    stats = {"created": 0, "rolled_forward": 0, "kept": 0, "exists": 0, "not_due": 0, "errors": 0}
+    stats = {
+        "created": 0, "rolled_forward": 0, "kept": 0, "exists": 0,
+        "not_due": 0, "skipped_expired": 0, "errors": 0,
+    }
     templates = await due_templates(db, today=today, now=now)
     for template in templates:
         try:

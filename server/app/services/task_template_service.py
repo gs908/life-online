@@ -162,6 +162,7 @@ async def create_template(
 
 _TEMPLATE_UPDATABLE_FIELDS = (
     "category", "title", "description", "lore_snippet", "xp_reward", "type",
+    "target_child_id",  # Mars #1:此前列在 PATCH 中被校验却从不生效(静默丢弃);置 None = 清空指派
     "required_start_time", "reminder_message", "reminder_minutes_before",
     "time_deposit", "is_active", "timed_mode", "deadline_time", "start_time",
     "duration_minutes", "pool_policy", "estimated_minutes", "difficulty",
@@ -201,6 +202,9 @@ async def update_template(
         template.triggers = _build_triggers(data["triggers"])
         triggers_changed = True
     await db.commit()
+    # updated_at 是 server 端 onupdate,flush 后处于 expired 态;
+    # 不 refresh 的话 _to_read 同步读属性会触发隐式重载(MissingGreenlet)。
+    await db.refresh(template)
 
     # 改规则后立即补一次生成(与创建同口径)。
     if triggers_changed:
@@ -221,6 +225,7 @@ async def deprecate_template(
     template.deprecated_at = utcnow()
     template.deprecated_reason = reason
     await db.commit()
+    await db.refresh(template)  # 同 update_template:server onupdate 列需显式刷新
     return template
 
 
@@ -233,6 +238,7 @@ async def activate_template(
     template.deprecated_at = None
     template.deprecated_reason = None
     await db.commit()
+    await db.refresh(template)  # 同 update_template:server onupdate 列需显式刷新
     instance, action = await task_generator_service.generate_for_template(
         db, template, force=True,
     )
@@ -241,22 +247,38 @@ async def activate_template(
     return template
 
 
+# regenerate 的终结范围(Mars #2 / 产品拍板):只终结 AVAILABLE + IN_PROGRESS。
+# PENDING_REVIEW 是孩子已提交待审核的成果,必须保留审核机会(仍可 approve/reject);
+# 代价是待审核实例仍占用实例池槽位,存在时 generate 会返回 kept,本轮不新建实例
+# (与 D1"同模板最多 1 条未消费"一致,审核完结后下个触发周期恢复生成)。
+REGENERATE_TERMINAL_STATUSES = (TaskStatus.AVAILABLE, TaskStatus.IN_PROGRESS)
+
+
 async def regenerate_template(
     db: AsyncSession, *, family_id: str, template_id: str,
-) -> tuple[ScnTaskTemplate, list[ScnTaskInstance], ScnTaskInstance | None]:
-    """再生成:终结全部未消费实例(状态机语义同过期),随后立即生成新实例。
+) -> tuple[ScnTaskTemplate, list[ScnTaskInstance], ScnTaskInstance | None, str]:
+    """再生成:终结 AVAILABLE/IN_PROGRESS 实例(状态机语义同过期),随后尝试生成新实例。
 
-    IN_PROGRESS 未消费实例按"任务过期"退全额押金(非孩子主动放弃,不计惩罚),
-    与 task_service.expire_overdue_tasks 的口径一致。
+    - PENDING_REVIEW 不终结(保留审核机会,见 REGENERATE_TERMINAL_STATUSES);
+    - IN_PROGRESS 按"任务过期"退全额押金(非孩子主动放弃,不计惩罚),
+      与 task_service.expire_overdue_tasks 口径一致;
+    - SELECT 带 with_for_update(Mars #3):防止与孩子接取/提交/家长审核并发时
+      双花押金或覆盖状态。
+
+    返回 (template, 终结的实例列表, 新实例或 None, 生成动作)。
     """
     template = await get_family_template(db, template_id=template_id, family_id=family_id)
-    stmt = select(ScnTaskInstance).where(
-        ScnTaskInstance.template_id == template.id,
-        ScnTaskInstance.status.in_(task_generator_service.UNCONSUMED_STATUSES),
+    stmt = (
+        select(ScnTaskInstance)
+        .where(
+            ScnTaskInstance.template_id == template.id,
+            ScnTaskInstance.status.in_(REGENERATE_TERMINAL_STATUSES),
+        )
+        .with_for_update()
     )
-    unconsumed = list((await db.execute(stmt)).scalars().all())
+    terminalized = list((await db.execute(stmt)).scalars().all())
     now = utcnow()
-    for instance in unconsumed:
+    for instance in terminalized:
         if instance.status == TaskStatus.IN_PROGRESS and instance.assignee_child_id:
             child = await db.get(SysChild, instance.assignee_child_id)
             if child is not None:
@@ -277,22 +299,33 @@ async def regenerate_template(
         # 兜底同日幂等,终结后若不释放,同日再生成会撞索引回捞到旧 EXPIRED 行。
         instance.generated_for_date = None
     await db.commit()
-    fresh, _action = await task_generator_service.generate_for_template(
+    fresh, action = await task_generator_service.generate_for_template(
         db, template, force=True,
     )
-    return template, unconsumed, fresh
+    return template, terminalized, fresh, action
 
 
 async def delete_template(
     db: AsyncSession, *, family_id: str, template_id: str,
 ) -> None:
-    """硬删:先删该模板全部实例与触发规则,再删模板行(同一事务)。"""
+    """硬删:先删该模板全部实例与触发规则,再删模板行(同一事务)。
+
+    Mars #4 / 产品拍板:存在 COMPLETED/EXPIRED 历史实例时拒绝(422),
+    成长记录(含 proof/审核结论)是产品资产,不可硬删——引导走 deprecate。
+    硬删仅在"无历史实例"时可用。
+    """
     template = await get_family_template(db, template_id=template_id, family_id=family_id)
     instances = list(
         (await db.execute(
             select(ScnTaskInstance).where(ScnTaskInstance.template_id == template.id)
         )).scalars().all()
     )
+    historical = [i for i in instances if i.status in (TaskStatus.COMPLETED, TaskStatus.EXPIRED)]
+    if historical:
+        raise ValidationError(
+            f"该模板已有 {len(historical)} 条已完成/已过期实例(孩子的成长记录),"
+            "不可硬删;如需停用请走 deprecate"
+        )
     for instance in instances:
         await db.delete(instance)
     await db.delete(template)
@@ -372,12 +405,16 @@ async def toggle_favorite(
 ) -> bool:
     """收藏/取消收藏开关;返回切换后的收藏状态。"""
     entry = await get_library_entry(db, entry_id)
+    # limit(1)(Mars #6):无唯一索引时快速双击可能插入重复收藏行,
+    # 取一行而非 scalar_one,避免 MultipleResultsFound 500;唯一索引待后续迁移。
     existing = (
         await db.execute(
-            select(ScnTaskTemplateLibrary).where(
+            select(ScnTaskTemplateLibrary)
+            .where(
                 ScnTaskTemplateLibrary.family_id == family_id,
                 ScnTaskTemplateLibrary.meta.op("->>")(_FAVORITE_OF_KEY) == entry.id,
             )
+            .limit(1)
         )
     ).scalar_one_or_none()
     if existing is not None:

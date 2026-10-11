@@ -342,15 +342,134 @@ async def test_regenerate_terminalizes_and_creates_fresh(db_session, seeded):
         db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
     )
     old = await _make_instance(db_session, template, day=TODAY)
-    _tpl, terminalized, fresh = await task_template_service.regenerate_template(
+    _tpl, terminalized, fresh, action = await task_template_service.regenerate_template(
         db_session, family_id=seeded.family.id, template_id=template.id,
     )
     assert [i.id for i in terminalized] == [old.id]
     await db_session.refresh(old)
     assert old.status == TaskStatus.EXPIRED
     assert old.generated_for_date is None  # 池槽位已释放
+    assert action == "created"
     assert fresh is not None and fresh.id != old.id
     assert fresh.status == TaskStatus.AVAILABLE and fresh.generated_for_date is not None
+
+
+async def test_regenerate_preserves_pending_review(db_session, seeded):
+    """Mars #2(产品拍板):PENDING_REVIEW 不终结,保留审核机会。
+
+    待审核实例仍占实例池槽位(D1),因此本轮不新建:
+    - 待审核归属今日 -> action="exists"(同日按日期去重);
+    - 待审核归属过去 -> action="kept"(槽位被占,不新增)。
+    """
+    template = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+    )
+    available = await _make_instance(db_session, template, day=YESTERDAY - timedelta(days=1))
+    reviewing = await _make_instance(
+        db_session, template, day=YESTERDAY, status=TaskStatus.PENDING_REVIEW,
+    )
+    _tpl, terminalized, fresh, action = await task_template_service.regenerate_template(
+        db_session, family_id=seeded.family.id, template_id=template.id,
+    )
+    assert [i.id for i in terminalized] == [available.id]  # 只终结 AVAILABLE
+    await db_session.refresh(reviewing)
+    assert reviewing.status == TaskStatus.PENDING_REVIEW  # 待审核不动
+    assert reviewing.generated_for_date == YESTERDAY
+    assert action == "kept"  # 槽位被待审核占用,不新建
+    assert fresh is not None and fresh.id == reviewing.id
+    assert await _count_instances(db_session, template.id) == 2
+
+    # 待审核归属"今天"(真实时钟)时为 exists 路径:同样不终结、不新建。
+    template2 = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+    )
+    reviewing_today = await _make_instance(
+        db_session, template2, day=TODAY, status=TaskStatus.PENDING_REVIEW,
+    )
+    _tpl, terminalized2, fresh2, action2 = await task_template_service.regenerate_template(
+        db_session, family_id=seeded.family.id, template_id=template2.id,
+    )
+    assert terminalized2 == []
+    assert action2 in ("exists", "kept")
+    assert fresh2 is not None and fresh2.id == reviewing_today.id
+    await db_session.refresh(reviewing_today)
+    assert reviewing_today.status == TaskStatus.PENDING_REVIEW
+
+
+async def test_patch_target_child_id_applies_and_clears(api_client, db_session, seeded):
+    """Mars #1(blocker):PATCH target_child_id 必须生效,置 null = 清空指派。"""
+    headers = _auth_headers(seeded.parent)
+    body = {
+        "season_id": seeded.season.id,
+        "title": "改派测试",
+        "target_child_id": seeded.child.id,
+        "triggers": [{"kind": "DAILY", "generate_at": "00:00"}],
+    }
+    resp = await api_client.post("/api/v1/scn/task-templates", json=body, headers=headers)
+    assert resp.status_code == 200, resp.text
+    template_id = resp.json()["data"]["id"]
+    assert resp.json()["data"]["target_child_id"] == seeded.child.id
+
+    resp = await api_client.patch(
+        f"/api/v1/scn/task-templates/{template_id}",
+        json={"target_child_id": None}, headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["target_child_id"] is None  # 置 null 清空
+
+    resp = await api_client.patch(
+        f"/api/v1/scn/task-templates/{template_id}",
+        json={"target_child_id": seeded.child.id}, headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["target_child_id"] == seeded.child.id  # 改回生效
+
+
+async def test_delete_refused_with_history(db_session, seeded):
+    """Mars #4(产品拍板):存在 COMPLETED/EXPIRED 实例时拒绝硬删(422)。"""
+    from app.common.exceptions import ValidationError
+
+    template = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+    )
+    await _make_instance(db_session, template, day=YESTERDAY, status=TaskStatus.COMPLETED)
+    with pytest.raises(ValidationError):
+        await task_template_service.delete_template(
+            db_session, family_id=seeded.family.id, template_id=template.id,
+        )
+
+    # 无历史实例(仅可用态)时硬删成功。
+    template2 = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+    )
+    await _make_instance(db_session, template2, day=TODAY, status=TaskStatus.AVAILABLE)
+    await task_template_service.delete_template(
+        db_session, family_id=seeded.family.id, template_id=template2.id,
+    )
+    assert await _count_instances(db_session, template2.id) == 0
+    assert await db_session.get(ScnTaskTemplate, template2.id) is None
+
+
+async def test_generation_skips_already_expired_window(db_session, seeded):
+    """nit:生成时刻已过今日截止(生成即过期)时跳过当日生成。"""
+    template = await _make_template(
+        db_session, seeded,
+        triggers=[_trigger(TriggerKind.DAILY)],
+        timed_mode=TimedMode.DEADLINE,
+        deadline_time=time(0, 5),
+    )
+    noon = datetime(2026, 10, 12, 12, 0, tzinfo=BJ_TZ)
+    _none, action = await task_generator_service.generate_for_template(
+        db_session, template, today=TODAY, now=noon,
+    )
+    assert action == "skipped_expired"
+    assert await _count_instances(db_session, template.id) == 0
+
+    early = datetime(2026, 10, 12, 0, 1, tzinfo=BJ_TZ)  # 截止前生成正常
+    instance, action = await task_generator_service.generate_for_template(
+        db_session, template, today=TODAY, now=early,
+    )
+    assert action == "created" and instance.expire_at is not None
 
 
 # ---- 8. timed_mode / 触发规则校验 422(API 层) ----

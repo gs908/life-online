@@ -161,22 +161,25 @@ async def activate_task_template(
 @router.post(
     "/{template_id}/regenerate",
     response_model=ApiResponse[dict],
-    summary="再生成(父母/管理端):终结未消费实例并立即生成新实例",
+    summary="再生成(父母/管理端):终结可用/进行中实例并尝试生成新实例",
 )
 async def regenerate_task_template(
     template_id: str, _body: TaskTemplateRegenerate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[dict]:
-    template, terminalized, fresh = await task_template_service.regenerate_template(
+    template, terminalized, fresh, action = await task_template_service.regenerate_template(
         db, family_id=user.family_id, template_id=template_id,
     )
     return ok({
         "template_id": template.id,
         "terminalized_instance_ids": [i.id for i in terminalized],
+        # action: created=已生成新实例;kept=存在待审核实例(不终结不新增,见 §6A);
+        # not_due/skipped_expired=当日无有效生成。new_instance 仅在 created 时非空。
+        "action": action,
         "new_instance": {
             "id": fresh.id,
             "generated_for_date": str(fresh.generated_for_date),
             "status": fresh.status,
-        } if fresh is not None else None,
+        } if (fresh is not None and action == "created") else None,
     })
 
 

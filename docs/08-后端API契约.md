@@ -249,11 +249,11 @@
 | GET | `/scn/task-templates?season_id&is_active&type` | 模板列表（含 triggers，不分页） | 登录 |
 | POST | `/scn/task-templates` | 创建模板+触发规则并即时生成 | 父母 |
 | GET | `/scn/task-templates/{id}` | 模板详情 | 登录（限本家庭） |
-| PATCH | `/scn/task-templates/{id}` | 部分更新（triggers 整组替换） | 父母 |
+| PATCH | `/scn/task-templates/{id}` | 部分更新（triggers 整组替换；`target_child_id` 可改，置 null 清空指派） | 父母 |
 | POST | `/scn/task-templates/{id}/deprecate` | 废弃（停用+审计，既有实例不动） | 父母 |
 | POST | `/scn/task-templates/{id}/activate` | 重新启用并立即补生成 | 父母/管理端 |
-| POST | `/scn/task-templates/{id}/regenerate` | 终结未消费实例并立即生成 | 父母/管理端 |
-| DELETE | `/scn/task-templates/{id}` | 硬删（连同实例与规则） | 管理端（家庭 owner） |
+| POST | `/scn/task-templates/{id}/regenerate` | 终结可用/进行中实例并尝试生成 | 父母/管理端 |
+| DELETE | `/scn/task-templates/{id}` | 硬删（**仅无 COMPLETED/EXPIRED 历史实例时可用**，否则 422 引导走 deprecate） | 管理端（家庭 owner） |
 | GET | `/scn/template-library?category&keyword&favorites_only` | 模板库列表（系统预置+家庭自建） | 登录 |
 | GET | `/scn/template-library/{id}` | 库条目详情 | 登录 |
 | POST | `/scn/template-library/{id}/favorite` | 收藏开关（返回切换后状态） | 父母 |
@@ -271,6 +271,14 @@
 **TaskTemplateRead** = TaskTemplateCreate 字段（去 season_id 语义不变）+ `{ id, family_id, season_id, creator_account_id, deprecated_at, deprecated_reason, triggers: [TaskTriggerRead], created_at, updated_at }`。
 **TaskTemplateDeprecate** `{ reason?: str(≤128) }`；**TaskTemplateRegenerate** `{}`（占位）。
 **TemplateLibraryApplyRequest** `{ season_id, target_child_id? }`。
+
+**regenerate 语义（Mars 审查后产品拍板）**：
+- 终结范围 = 未消费三态中的 `AVAILABLE + IN_PROGRESS`；**PENDING_REVIEW 不终结**（孩子已提交待审核的成果保留审核机会）。IN_PROGRESS 终结时全额退押金（不计放弃惩罚）。
+- 待审核实例仍占实例池槽位（D1），存在时**本轮不新建**：响应 `action="kept"`、`new_instance=null`；审核完结（COMPLETED/驳回后完成）后下个触发周期恢复生成。
+- 响应 `data = { template_id, terminalized_instance_ids: string[], action: "created"|"kept"|"not_due"|"skipped_expired", new_instance: {id, generated_for_date, status} | null }`；`new_instance` 仅在 `action="created"` 时非空。
+- 前端"事前 N"= `GET /scn/task-instances?template_id=X` 按 `AVAILABLE + IN_PROGRESS` 两态 total 求和。
+
+**已知项**：生成器跳过"生成即过期"的当日生成（限时任务在截止时刻过后才到期/创建时不产出注定被过期 job 判死的实例，`action="skipped_expired"`）；`ends_on` 窗口结束后的非限时未消费实例不再顺延也不过期（REUSE_UNTIL_CONSUMED 语义自洽，如需清理属后续产品决策）。
 
 > **收藏实现**：收藏行是本家庭名下一条例外克隆（`meta.favorite_of` 指向原条目），不新增表；`favorites_only=true` 返回收藏行自身，列表项带 `is_favorite` / `favorite_of`。
 
