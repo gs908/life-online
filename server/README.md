@@ -64,8 +64,36 @@ MinIO 可按本地环境单独启动。本地 PostgreSQL + MinIO 可用仓库根
 
 ```bash
 docker compose up -d                      # 仅 PostgreSQL
-docker compose --profile storage up -d    # 连同 MinIO
+docker compose --profile storage up -d    # 连同 MinIO(替代下面的手动 docker run)
 ```
+
+不想用 compose 时,MinIO 也可单独 `docker run`(DEV-28 补充说明):
+
+```bash
+docker run -d --name life-online-minio \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  -v life-online-minio-data:/data \
+  minio/minio server /data --console-address ":9001"
+```
+
+对应 `.env`(与 `config.yaml` 的 `storage.minio.*` 占位一致):
+
+```ini
+STORAGE_PROVIDER=minio
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+```
+
+- **bucket 自动创建**:应用启动时与每次上传前都会执行 `ensure_bucket`
+  (`bucket_exists` → 不存在则 `make_bucket`),无需手动建 `life-online` bucket。
+- **可选 `MINIO_REGION`**(如 `us-east-1`):设置后签名(预签名 URL)前不再向 MinIO
+  查询 bucket 位置,少一次网络往返;留空沿用 SDK 默认。依赖版本约束 `minio>=7.2.8,<8`
+  (7.x 的 `expires` 要求 `timedelta`,代码已按此适配并锁定大版本)。
+- **MinIO 可以在应用之后启动**:每次上传都会重试连通性,MinIO 起来后自动恢复,
+  应用无需重启;启动期间上传返回明确的 503(见下文降级规则),不会裸 500。
+- MinIO 完全不想跑时,`STORAGE_PROVIDER=local` 即为降级方案(无需任何 MinIO 配置)。
 
 ## 4. 数据库初始化 / 迁移
 
@@ -365,6 +393,11 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
   `MINIO_SECRET_KEY`)同理:`app/common/storage/factory.get_storage()` 在
   `settings.storage.minio.is_configured` 为假时直接抛 `ServiceUnavailableError`(503),不会把空
   字符串传给 MinIO SDK 产生难以理解的底层报错。
+- **MinIO 配置了但不可达**(服务未启动 / 网络不通,DEV-28):`MinIOStorage` 把 urllib3 连接类
+  异常(`MaxRetryError` 等)统一翻译成 `StorageUnavailableError`(503,`error_code` =
+  `storage_unavailable`,文案:"对象存储不可用,请检查 MinIO 服务或切换 STORAGE_PROVIDER=local"),
+  不会裸 500;应用启动时有可达性预检,连不上只告警不阻断,日志给出可操作修复提示;每次上传前都会
+  重试 `ensure_bucket`,MinIO 后启动无需重启应用即自动恢复。
 - **降级路径**:把 `STORAGE_PROVIDER` 切成 `local`(`config.yaml` 的 `storage.provider`),上传接口
   即可在完全不配置 MinIO 的情况下工作,返回的 `UploadRead.access_url` 指向本地静态文件挂载路径,
   字段形状与 MinIO 模式一致,前端无需区分。AI 功能目前没有"降级实现",未配置 LLM 时就是明确的
@@ -380,8 +413,9 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
   删除占位行,不留"库有引用、存储无对象"的孤儿(commit 在 upload 之前,反向孤儿也不存在)。
   任务提交的 `proof_object_key` 做归属校验(存在 + 上传者=当前用户 + purpose=task_proof),
   读取端对存量 minio 行忽略已过期的 `public_url`、一律按 `object_key` 现算。
-- 二者共用同一套错误语义:`ServiceUnavailableError`(503,"根本没配置")与已有的
-  `ExternalServiceError`(502,"配置了但这次调用失败,比如 LLM 限流/微信接口报错")是两类不同的
+- 二者共用同一套错误语义:`ServiceUnavailableError`(503,"根本没配置")、
+  `StorageUnavailableError`(503,`storage_unavailable`,"配置了但服务连不上",DEV-28)与已有的
+  `ExternalServiceError`(502,"配置了但这次调用失败,比如 LLM 限流/微信接口报错")是三类不同的
   错误,前端可以按 `error_code` 区分展示文案。
 
 ## 7.4 网页端账号密码登录(H5/浏览器生产通道,DEV-22)

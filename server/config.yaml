@@ -43,6 +43,7 @@ storage:
     secure: ${env:MINIO_SECURE:false}
     bucket: ${env:MINIO_BUCKET:life-online}
     prefix: ${env:MINIO_PREFIX:}
+    region: ${env:MINIO_REGION:}
   local:
     root_path: ${env:LOCAL_STORAGE_ROOT:./uploads}
     public_base_url: ${env:LOCAL_STORAGE_PUBLIC_BASE_URL:/api/v1/files}

@@ -146,6 +146,10 @@ class StorageMinioSection(BaseModel):
     bucket: str = "life-online"
     #: 对象 key 前缀(多环境/多业务共用同一 bucket 时区分),拼在 bucket 之后、业务路径之前
     prefix: str = ""
+    #: bucket 所在 region。设置后 SDK 跳过每次签名前的
+    #: `GET /<bucket>?location=` 探测(少一次网络往返);空 = SDK 默认行为
+    #(首次签名时向 MinIO 查询 bucket region)。
+    region: str = ""
 
     @property
     def is_configured(self) -> bool:
