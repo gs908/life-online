@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
 import type { TaskTemplateRead, TaskTemplateRegenerateResult } from '../services/api';
@@ -65,6 +65,8 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
   const [deleting, setDeleting] = useState<TaskTemplateRead | null>(null);
   const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const [detailId, setDetailId] = useState<string | null>(null);
+  /** regenerate 计数竞态守卫：resolve 时只回写仍属于当前弹窗模板的计数（Mars nit） */
+  const regenerateIdRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,6 +86,20 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
   useEffect(() => {
     load();
   }, [load, refreshSignal]);
+
+  // 三个确认弹窗 Esc 关闭（Miss.D §7，对齐 AddTaskModal / 详情抽屉的既有模式）
+  useEffect(() => {
+    if (!deprecating && !regenerating && !deleting) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setDeprecating(null);
+      setRegenerating(null);
+      setDeleting(null);
+      setDeleteStep(1);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [deprecating, regenerating, deleting]);
 
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -134,6 +150,7 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
 
   const openRegenerate = async (template: TaskTemplateRead) => {
     setRegenerating(template);
+    regenerateIdRef.current = template.id;
     setUnconsumedCount(null);
     try {
       // 事前 N（契约 §6A，e278c3e）：AVAILABLE + IN_PROGRESS 两态 total 求和；
@@ -142,22 +159,23 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
         api.tasks.listTasks({ template_id: template.id, status: 'AVAILABLE', page_size: 1 }),
         api.tasks.listTasks({ template_id: template.id, status: 'IN_PROGRESS', page_size: 1 }),
       ]);
-      setUnconsumedCount(available.total + inProgress.total);
+      const total = available.total + inProgress.total;
+      if (regenerateIdRef.current === template.id) setUnconsumedCount(total);
     } catch {
-      setUnconsumedCount(null); // 数不出来就不写死数字，文案给通用版
+      if (regenerateIdRef.current === template.id) setUnconsumedCount(null); // 数不出来就不写死数字，文案给通用版
     }
   };
 
   /** regenerate 响应按 action 分支 toast（契约 §6A / Gin 注记）；
-   *  kept/exists/not_due/skipped_expired 均属「本轮无新建」的变体，契约外值兜底处理 */
+   *  契约外值兜底处理。任务板重拉不看 action：后端先无条件终结 AVAILABLE+IN_PROGRESS
+   *  再生成，因此只要 terminalized_instance_ids 非空（含 exists/skipped_expired 分支）板就已过期 */
   const regenerateToast = (result: TaskTemplateRegenerateResult) => {
+    if (result.terminalized_instance_ids.length > 0) onInstancesChanged?.();
     if (result.action === 'created') {
       onToast(t('toast.templateRegeneratedTitle'),
         t('toast.templateRegeneratedMsg', { count: result.terminalized_instance_ids.length }));
-      onInstancesChanged?.();
     } else if (result.action === 'kept') {
       onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateKeptMsg'));
-      onInstancesChanged?.(); // 旧实例已被终结，任务板需重拉
     } else if (result.action === 'exists') {
       onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateExistsMsg'));
     } else {

@@ -200,15 +200,18 @@ const App: React.FC = () => {
 
   // --- HANDLERS（全部走后端；押金/罚币/XP 由后端处理，变更后重拉列表与用户） ---
 
-  const handleAddTask = async (payload: TaskCreate) => {
+  /** @returns 是否创建成功（失败已 toast，弹窗保留） */
+  const handleAddTask = async (payload: TaskCreate): Promise<boolean> => {
     try {
       await api.tasks.createTask(payload);
       setIsAddModalOpen(false);
       toast(t('toast.taskCreatedTitle'), t('toast.taskCreatedMsg'));
       await loadBoard();
+      return true;
     } catch (error) {
       // 422 validation_error 等：表单保留，toast 提示后端字段错误
       showApiError(error, t('toast.taskCreateFailedTitle'));
+      return false;
     }
   };
 
@@ -217,9 +220,9 @@ const App: React.FC = () => {
     setTemplateActionBusy(true);
     try {
       if (action.mode === 'instance') {
-        await handleAddTask(action.task);
-        // task-instances 路径同样会落一条模板，管理视图列表需要重拉
-        setTemplatesRefreshSignal(signal => signal + 1);
+        const ok = await handleAddTask(action.task);
+        // task-instances 路径同样会落一条模板，仅在创建成功时让管理视图列表重拉
+        if (ok) setTemplatesRefreshSignal(signal => signal + 1);
         return;
       }
       if (action.mode === 'template') {

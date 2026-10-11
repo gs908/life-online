@@ -130,7 +130,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskLore, setNewTaskLore] = useState('');
   const [newTaskXP, setNewTaskXP] = useState(50);
-  const [difficulty, setDifficulty] = useState(3);
+  /** null = 未评星（契约 difficulty 可空）；编辑态保留原值，避免 PATCH 把 null 静默写成 3 */
+  const [difficulty, setDifficulty] = useState<number | null>(3);
   const [aiType, setAiType] = useState<TaskType | null>(null);
 
   const [triggers, setTriggers] = useState<TriggerDraft[]>([makeTriggerDraft()]);
@@ -158,7 +159,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       setNewTaskDesc(editingTemplate.description);
       setNewTaskLore(editingTemplate.lore_snippet ?? '');
       setNewTaskXP(editingTemplate.xp_reward);
-      setDifficulty(editingTemplate.difficulty ?? 3);
+      setDifficulty(editingTemplate.difficulty); // null 保留 null（Mars S2）
       // 编辑预填：规则为空（如一次性走实例路径产生的模板）保持为空，
       // 不注入默认草稿——否则保存时会静默给模板追加一条 DAILY 触发器
       setTriggers(editingTemplate.triggers.map(triggerToDraft));
@@ -288,6 +289,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
         description: newTaskDesc,
         lore_snippet: newTaskLore || null,
         xp_reward: Math.max(0, newTaskXP),
+        // 显式传 null = 保持「未评星」，与 PATCH「未提供的字段不变」语义对齐（Mars S2）
         difficulty,
         ...timedPayload,
         // triggers 整组替换（契约 §6A）；一次性类别 = 清空周期规则
@@ -321,7 +323,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       ...base,
       season_id: seasonId,
       type: CATEGORY_TYPE[category],
-      difficulty,
+      // 未评星不写字段（新建时 difficulty 可空，避免把 null 固化成默认值）
+      ...(difficulty !== null ? { difficulty } : {}),
       ...timedPayload,
       triggers: triggers.map(draftToTriggerPayload),
     };
@@ -459,21 +462,26 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
             <div className="space-y-1.5">
               <div className="text-sm font-bold text-slate-700" id="add-task-difficulty-label">{t('taskTemplate.difficulty')}</div>
               <div role="radiogroup" aria-labelledby="add-task-difficulty-label" className="flex gap-0.5 h-[38px] items-center">
-                {[1, 2, 3, 4, 5].map(star => (
-                  <button
-                    key={star}
-                    type="button"
-                    role="radio"
-                    aria-checked={star === difficulty}
-                    aria-label={t('taskTemplate.difficultyN', { n: star })}
-                    onClick={() => setDifficulty(star)}
-                    className={`w-7 h-7 text-lg leading-none transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 rounded ${
-                      star <= difficulty ? 'text-amber-500' : 'text-slate-200 hover:text-slate-300'
-                    }`}
-                  >
-                    ★
-                  </button>
-                ))}
+                {[1, 2, 3, 4, 5].map(star => {
+                  const active = difficulty !== null && star <= difficulty;
+                  return (
+                    <button
+                      key={star}
+                      type="button"
+                      role="radio"
+                      aria-checked={difficulty !== null && star === difficulty}
+                      tabIndex={difficulty === null ? (star === 3 ? 0 : -1) : (star === difficulty ? 0 : -1)}
+                      aria-label={t('taskTemplate.difficultyN', { n: star })}
+                      // 再点当前值取消评星（回 null）
+                      onClick={() => setDifficulty(prev => (prev === star ? null : star))}
+                      className={`w-7 h-7 text-lg leading-none transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 rounded ${
+                        active ? 'text-amber-500' : 'text-slate-200 hover:text-slate-300'
+                      }`}
+                    >
+                      ★
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
