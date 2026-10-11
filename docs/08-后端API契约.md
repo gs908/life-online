@@ -189,7 +189,7 @@
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
-| GET | `/scn/task-instances?page&page_size&season_id&status&assignee_child_id` | 任务实例分页列表 | 登录 |
+| GET | `/scn/task-instances?page&page_size&season_id&status&template_id&assignee_child_id` | 任务实例分页列表（`template_id` 供模板详情/重新生成确认数未消费实例，DEV-35） | 登录 |
 | GET | `/scn/task-instances/{task_id}` | 详情（限本家庭） | 登录 |
 | POST | `/scn/task-instances` | 创建模板并生成初始实例 | 父母 |
 | DELETE | `/scn/task-instances/{task_id}` | 删除实例 | 父母 |

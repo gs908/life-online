@@ -77,6 +77,7 @@ async def list_tasks(
     page_size: int = Query(default=20, ge=1, le=200),
     season_id: str | None = Query(default=None),
     status: TaskStatus | None = Query(default=None),
+    template_id: str | None = Query(default=None),
     assignee_child_id: str | None = Query(default=None),
     assignee_id: str | None = Query(default=None),
 ) -> ApiResponse[PageResult[TaskRead]]:
@@ -84,6 +85,7 @@ async def list_tasks(
     items, total = await task_service.list_tasks(
         db, family_id=user.family_id,
         season_id=season_id, status=status, assignee_id=assignee_child_id or assignee_id,
+        template_id=template_id,
         offset=query.offset, limit=query.page_size,
     )
     return ok(PageResult(
