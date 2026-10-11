@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, UserRole, RedemptionRecord, SeasonTheme } from '../../types';
-import type { TaskRead, SeasonRead } from '../../services/api';
+import { User, UserRole, SeasonTheme } from '../../types';
+import type { TaskRead, SeasonRead, PrivilegeRead, RedemptionRead } from '../../services/api';
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
@@ -13,7 +13,11 @@ interface ParentDashboardProps {
   activeQuest: TaskRead | undefined;
   availableTasks: TaskRead[];
   pendingTasks: TaskRead[];
-  redemptionHistory: RedemptionRecord[];
+  /** 特权使用记录（GET /scn/privilege-uses，阶段④-b 后端化，替代 redemptionHistory Mock） */
+  privilegeUses: RedemptionRead[];
+  privilegeTemplates: PrivilegeRead[];
+  unlockedTemplateIds: string[];
+  privilegesLoading: boolean;
   /** 当前激活赛季；null = 家庭尚未创建/激活赛季（引导创建） */
   activeSeason: SeasonRead | null;
   currentTheme: SeasonTheme;
@@ -22,7 +26,7 @@ interface ParentDashboardProps {
   onOpenSeasonConfig: () => void;
   onViewHistory: () => void;
   onOpenAddModal: () => void;
-  onRecordUsage: (title: string) => void;
+  onRecordUsage: (privilege: PrivilegeRead) => void;
   onReviewTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
   onOpenTimeConfig: () => void;
@@ -35,7 +39,10 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   activeQuest,
   availableTasks,
   pendingTasks,
-  redemptionHistory,
+  privilegeUses,
+  privilegeTemplates,
+  unlockedTemplateIds,
+  privilegesLoading,
   activeSeason,
   currentTheme,
   seasonError,
@@ -141,14 +148,14 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
               <History className="text-purple-500" />
               {t('parent.consumptionHistory')}
             </h3>
-            {redemptionHistory.length === 0 ? (
+            {privilegeUses.length === 0 ? (
               <p className="text-sm text-slate-400 italic text-center py-4">{t('parent.noPrivilegesUsed')}</p>
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto">
-                {redemptionHistory.map(r => (
+                {privilegeUses.map(r => (
                   <div key={r.id} className="text-xs bg-slate-50 p-2 rounded flex justify-between items-center">
-                    <span className="font-bold text-slate-700">{r.privilegeTitle}</span>
-                    <span className="text-slate-400">{new Date(r.date).toLocaleDateString()}</span>
+                    <span className="font-bold text-slate-700">{r.privilege_title}</span>
+                    <span className="text-slate-400">{new Date(r.used_at).toLocaleDateString()}</span>
                   </div>
                 ))}
               </div>
@@ -156,7 +163,10 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
           </div>
 
           <PrivilegeTree
+            templates={privilegeTemplates}
+            unlockedTemplateIds={unlockedTemplateIds}
             currentLevel={childUser.level}
+            loading={privilegesLoading}
             isAdmin={true}
             onRecordUsage={onRecordUsage}
           />

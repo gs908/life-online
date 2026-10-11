@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, UserRole, SeasonTheme } from '../../types';
-import type { TaskRead } from '../../services/api';
+import type { TaskRead, PrivilegeRead } from '../../services/api';
 import XPBar from '../XPBar';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
@@ -16,6 +16,10 @@ interface ChildDashboardProps {
   availableTasks: TaskRead[];
   completedTasks: TaskRead[];
   pendingTasks: TaskRead[];
+  /** 特权树（阶段④-b 后端化：模板 + 已解锁集合） */
+  privilegeTemplates: PrivilegeRead[];
+  unlockedTemplateIds: string[];
+  privilegesLoading: boolean;
   onAcceptAttempt: (id: string) => void;
   onSubmit: (id: string) => void;
   onAbandonCurrent: (id: string) => void;
@@ -28,6 +32,9 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
   availableTasks,
   completedTasks,
   pendingTasks,
+  privilegeTemplates,
+  unlockedTemplateIds,
+  privilegesLoading,
   onAcceptAttempt,
   onSubmit,
   onAbandonCurrent
@@ -147,7 +154,12 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
           </div>
           
           <div className="bg-white/90 backdrop-blur-sm rounded-xl overflow-hidden shadow-lg">
-             <PrivilegeTree currentLevel={childUser.level} />
+             <PrivilegeTree
+                templates={privilegeTemplates}
+                unlockedTemplateIds={unlockedTemplateIds}
+                currentLevel={childUser.level}
+                loading={privilegesLoading}
+             />
           </div>
         </div>
 

@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { UserRole, TaskType, TaskStatus, RedemptionRecord } from './types';
+import { UserRole, TaskType, TaskStatus } from './types';
 import { THEMES } from './constants/themes';
 import { Bell } from 'lucide-react';
 
 // API Client（阶段②赛季 + 阶段③任务链路均已接入后端）
 import { api, ApiError } from './services/api';
-import type { TaskCreate, TaskRead, SeasonRead } from './services/api';
+import type { TaskCreate, TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserPrivilegeRead } from './services/api';
 
 // Auth（阶段①：登录态与家庭上下文）
 import { useAuth } from './auth/AuthContext';
@@ -73,7 +73,12 @@ const App: React.FC = () => {
   // 任务链路（阶段③）：请求 + 响应驱动，本地任务状态机已退役
   const [tasks, setTasks] = useState<TaskRead[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
-  const [redemptionHistory, setRedemptionHistory] = useState<RedemptionRecord[]>([]);
+
+  // 特权链路（阶段④-b，契约 §9/§10）：模板树 + 已解锁 + 使用记录，全部后端（redemptionHistory Mock 已退役）
+  const [privilegeTemplates, setPrivilegeTemplates] = useState<PrivilegeRead[]>([]);
+  const [privilegeUnlocks, setPrivilegeUnlocks] = useState<UserPrivilegeRead[]>([]);
+  const [privilegeUses, setPrivilegeUses] = useState<RedemptionRead[]>([]);
+  const [privilegesLoading, setPrivilegesLoading] = useState(true);
 
   // UI State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -128,6 +133,32 @@ const App: React.FC = () => {
       loadBoard();
     }
   }, [status, loadSeasons, loadBoard]);
+
+  // 特权数据（阶段④-b）：模板 + 已解锁 + 使用记录；解锁集合随冒险者档案变化，故依赖 childId
+  const loadPrivileges = useCallback(async () => {
+    setPrivilegesLoading(true);
+    try {
+      const childId = childUser?.childId ?? undefined;
+      const [templates, unlocks, uses] = await Promise.all([
+        api.coins.listPrivilegeTemplates(),
+        api.coins.listPrivilegeUnlocks(childId),
+        api.coins.listPrivilegeUses({ child_id: childId, page_size: 20 }),
+      ]);
+      setPrivilegeTemplates(templates);
+      setPrivilegeUnlocks(unlocks);
+      setPrivilegeUses(uses.items);
+    } catch (error) {
+      showApiError(error, t('toast.loadFailedTitle'));
+    } finally {
+      setPrivilegesLoading(false);
+    }
+  }, [childUser?.childId, showApiError, t]);
+
+  useEffect(() => {
+    if (status === 'authenticated' && childUser) {
+      loadPrivileges();
+    }
+  }, [status, childUser, loadPrivileges]);
 
   // --- EFFECT: TIMED TASK ALERTS（数据源改 TaskRead；本地倍率/押金逻辑已删） ---
   useEffect(() => {
@@ -263,15 +294,19 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRecordUsage = (privilegeTitle: string) => {
-    const record: RedemptionRecord = {
-      id: Math.random().toString(36).substr(2, 9),
-      privilegeTitle,
-      date: new Date().toISOString(),
-      user: childUser?.name ?? ''
-    };
-    setRedemptionHistory(prev => [record, ...prev]);
-    toast(t('toast.usageRecordedTitle'), t('toast.usageRecordedMsg', { title: privilegeTitle }), 3000);
+  /** 记录一次特权使用（POST /scn/privileges/uses，返回使用记录）；成功后余额/流水一律 refetch，禁止本地加减 */
+  const handleRecordUsage = async (privilege: PrivilegeRead) => {
+    try {
+      const record = await api.coins.usePrivilege({
+        privilege_template_id: privilege.id,
+        child_id: childUser?.childId ?? undefined,
+      });
+      toast(t('toast.usageRecordedTitle'), t('toast.usageRecordedMsg', { title: record.privilege_title }), 3000);
+      await Promise.all([loadPrivileges(), refreshUser()]);
+    } catch (error) {
+      // 403（孩子越权）/ 422（未解锁等）：后端人话文案直接透出（docs/10 §2.4）
+      showApiError(error, t('toast.privilegeUseFailedTitle'));
+    }
   };
 
   const handleDeleteTask = async (id: string) => {
@@ -356,6 +391,9 @@ const App: React.FC = () => {
                 availableTasks={availableTasks}
                 completedTasks={completedTasks}
                 pendingTasks={pendingTasks}
+                privilegeTemplates={privilegeTemplates}
+                unlockedTemplateIds={privilegeUnlocks.map(u => u.privilege_template_id)}
+                privilegesLoading={privilegesLoading}
                 onAcceptAttempt={handleAcceptAttempt}
                 onSubmit={(id) => { setSelectedTaskId(id); setIsSubmitModalOpen(true); }}
                 onAbandonCurrent={handleAbandonCurrent}
@@ -375,7 +413,10 @@ const App: React.FC = () => {
                         activeQuest={activeQuest}
                         availableTasks={availableTasks}
                         pendingTasks={pendingTasks}
-                        redemptionHistory={redemptionHistory}
+                        privilegeUses={privilegeUses}
+                        privilegeTemplates={privilegeTemplates}
+                        unlockedTemplateIds={privilegeUnlocks.map(u => u.privilege_template_id)}
+                        privilegesLoading={privilegesLoading}
                         activeSeason={activeSeason}
                         currentTheme={currentSeasonTheme}
                         seasonError={seasonError}

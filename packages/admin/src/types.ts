@@ -36,20 +36,8 @@ export enum TaskStatus {
   EXPIRED = 'EXPIRED'
 }
 
-export interface Privilege {
-  levelRequired: number;
-  title: string;
-  description: string;
-  icon: string;
-}
-
-export interface RedemptionRecord {
-  id: string;
-  privilegeTitle: string;
-  date: string; // ISO String
-  cost?: string; // Optional context like "Monthly Use"
-  user?: string;
-}
+// Privilege / RedemptionRecord 本地视图类型已随阶段④-b 接入下线（docs/09 V1/V2、R1-R3：后端为准），
+// 统一使用 services/api 的 PrivilegeRead / UserPrivilegeRead / RedemptionRead。
 
 export interface User {
   id: string;
