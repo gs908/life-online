@@ -92,6 +92,14 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
         </div>
       </div>
 
+      {/* 凭证缩略图（阶段⑤）：proof_url 由后端按 object_key 现算 ——
+          MinIO 模式为带签名的临时 URL，local 模式为稳定路径，前端无需区分 */}
+      {task.proof_url && (task.status === TaskStatus.PENDING_REVIEW || task.status === TaskStatus.COMPLETED) && (
+        <a href={task.proof_url} target="_blank" rel="noreferrer" className="mt-2 block">
+          <img src={task.proof_url} alt={t('reviewTask.proofAlt')} className="h-20 object-cover rounded-lg border border-slate-200 hover:opacity-80 transition-opacity" />
+        </a>
+      )}
+
       {/* Action Buttons */}
       <div className="mt-2 flex gap-2 justify-end items-center">
 

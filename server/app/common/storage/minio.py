@@ -17,19 +17,21 @@ from app.common.storage.base import ObjectInfo, StorageClient
 
 class MinIOStorage(StorageClient):
     def __init__(self, endpoint: str, access_key: str, secret_key: str,
-                 bucket: str, *, secure: bool = False) -> None:
+                 bucket: str, *, secure: bool = False, prefix: str = "") -> None:
         self._client = Minio(
             endpoint=endpoint,
             access_key=access_key,
             secret_key=secret_key,
             secure=secure,
         )
-        self._bucket = bucket
+        self.bucket = bucket
+        self.key_prefix = prefix.strip("/")
+        self.provider_name = "minio"
 
     async def ensure_bucket(self) -> None:
         def _ensure() -> None:
-            if not self._client.bucket_exists(self._bucket):
-                self._client.make_bucket(self._bucket)
+            if not self._client.bucket_exists(self.bucket):
+                self._client.make_bucket(self.bucket)
         await asyncio.to_thread(_ensure)
 
     async def upload(
@@ -43,7 +45,7 @@ class MinIOStorage(StorageClient):
 
         def _put() -> tuple[str, str]:
             result = self._client.put_object(
-                self._bucket,
+                self.bucket,
                 key,
                 BytesIO(data),
                 length=len(data),
@@ -53,7 +55,7 @@ class MinIOStorage(StorageClient):
 
         etag, _ = await asyncio.to_thread(_put)
         return ObjectInfo(
-            bucket=self._bucket,
+            bucket=self.bucket,
             key=key,
             size=len(data),
             content_type=content_type,
@@ -62,7 +64,7 @@ class MinIOStorage(StorageClient):
 
     async def delete(self, key: str) -> None:
         try:
-            await asyncio.to_thread(partial(self._client.remove_object, self._bucket, key))
+            await asyncio.to_thread(partial(self._client.remove_object, self.bucket, key))
         except S3Error as e:
             if e.code in ("NoSuchKey", "NoSuchObject"):
                 return
@@ -70,5 +72,5 @@ class MinIOStorage(StorageClient):
 
     def presign_get(self, key: str, *, expires_seconds: int = 3600) -> str:
         return self._client.presigned_get_object(
-            self._bucket, key, expires=expires_seconds,
+            self.bucket, key, expires=expires_seconds,
         )

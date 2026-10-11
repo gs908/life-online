@@ -30,6 +30,7 @@ def get_storage() -> StorageClient:
             secret_key=m.secret_key,
             bucket=m.bucket,
             secure=m.secure,
+            prefix=m.prefix,
         )
     if provider in {"local", "filestorage", "file"}:
         local = settings.storage.local
@@ -37,5 +38,6 @@ def get_storage() -> StorageClient:
             root_path=local.root_path,
             bucket=local.bucket,
             public_base_url=local.public_base_url,
+            prefix=local.prefix,
         )
     raise ValueError(f"不支持的 storage provider: {settings.storage.provider}")

@@ -38,10 +38,12 @@ storage:
     secret_key: ${env:MINIO_SECRET_KEY:}
     secure: ${env:MINIO_SECURE:false}
     bucket: ${env:MINIO_BUCKET:life-online}
+    prefix: ${env:MINIO_PREFIX:}
   local:
     root_path: ${env:LOCAL_STORAGE_ROOT:./uploads}
     public_base_url: ${env:LOCAL_STORAGE_PUBLIC_BASE_URL:/api/v1/files}
     bucket: ${env:LOCAL_STORAGE_BUCKET:local}
+    prefix: ${env:LOCAL_STORAGE_PREFIX:}
 
 # AI 能力配置:按能力三分(llm / image / video),各自独立指定 provider、模型与默认参数。
 # - API key 一律经环境变量引用,yaml 不落明文(见 .env.example 的 AI_* 占位)。

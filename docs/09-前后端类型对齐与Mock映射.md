@@ -113,7 +113,7 @@
 | `INITIAL_TASKS` / `tasks` | `GET /scn/task-instances`（分页+过滤） | ✅ 已有；**已接入（DEV-18 阶段③），本地任务状态机已删除，视图组件统一消费 `TaskRead`** |
 | 新建任务（AddTaskModal） | `POST /scn/task-instances` | ✅ 已有；**已接入（DEV-18），表单产出 `TaskCreate`（docs/09 A6）** |
 | 接取任务 | `POST /scn/task-instances/{id}/start` | ✅ 已有；**已接入（DEV-18），押金由后端扣除，余额变更后 refetch `UserRead.time_coins`** |
-| 提交证明（SubmitTaskModal，base64） | `POST /sys/uploads` + `POST /scn/task-instances/{id}/submit` | ✅ 已有（需改造为上传流，A2）；**已接入（DEV-18，按 docs/10 §4 ③→⑤ 交替约定先打通上传流；上传细节打磨仍属阶段⑤）** |
+| 提交证明（SubmitTaskModal，base64） | `POST /sys/uploads` + `POST /scn/task-instances/{id}/submit` | ✅ 已有；**已接入（DEV-18 按 docs/10 §4 ③→⑤ 交替约定打通上传流；DEV-20 阶段⑤收尾：multipart 透传 `task_id` 落存储路径规范 `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{序号}.{扩展名}`，base64 方案与 Mock 已删除，QuestCard/ReviewTaskModal 经 `proof_url` 展示凭证）** |
 | 审核打分（ReviewTaskModal） | `POST /scn/task-instances/{id}/approve` | ✅ 已有；**已接入（DEV-18），本地 XP 倍率/升级计算已删除（后端 `approve` 结算 `xp_awarded`）；AI 辅助评分留待阶段⑥** |
 | 放弃任务（AbandonQuestModal） | `POST /scn/task-instances/{id}/abandon` | ✅ 已有；**已接入（DEV-18），罚币/退款由后端处理** |
 | `handleDeleteTask`（本地 filter） | `DELETE /scn/task-instances/{id}` | ✅ 已有；**已接入（DEV-18），含确认交互** |

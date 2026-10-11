@@ -7,15 +7,27 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.common.exceptions import ConflictError, NotFoundError, PermissionDeniedError, ValidationError
-from app.models.enums import CoinTransactionType, TaskStatus, TaskType, UserRole
+from app.common.exceptions import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
+from app.common.timeutil import utcnow
+from app.models.enums import (
+    CoinTransactionType,
+    TaskStatus,
+    TaskType,
+    UploadPurpose,
+    UserRole,
+)
 from app.models.scn_season import ScnSeason
 from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_template import ScnTaskTemplate
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
+from app.models.sys_upload import SysUpload
 from app.services import coin_service, privilege_service, xp_service
-from app.common.timeutil import utcnow
 
 # 驳回时若原 expire_at 已过(孩子在截止前提交,但家长审核拖到截止后才驳回),
 # 补一个重新提交窗口,避免下一轮过期批处理(expire_overdue_tasks)把它当成
@@ -193,6 +205,19 @@ async def submit_task(
         raise PermissionDeniedError("你不是该任务的接取人")
     if task.status != TaskStatus.IN_PROGRESS:
         raise ConflictError(f"当前状态 {_enum_value(task.status)},无法提交")
+    # 归属校验(Mars 审查 🟡):证明 key 必须是当前用户本人上传的 task_proof 凭证。
+    # 不校验时,local 模式下 key 直接映射静态文件路径,提交任意字符串即可引用/探测他人对象。
+    upload = (
+        await db.execute(
+            select(SysUpload).where(
+                SysUpload.object_key == proof_object_key,
+                SysUpload.uploader_account_id == user.id,
+                SysUpload.purpose == UploadPurpose.TASK_PROOF,
+            )
+        )
+    ).scalar_one_or_none()
+    if upload is None:
+        raise ValidationError("证明文件不存在、不是任务凭证或不属于当前用户")
     task.status = TaskStatus.PENDING_REVIEW
     task.proof_object_key = proof_object_key
     task.submitted_at = utcnow()
