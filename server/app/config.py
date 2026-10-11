@@ -16,7 +16,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote_plus, urlencode
 
 import yaml
@@ -70,9 +70,12 @@ class DatabasePoolSection(BaseModel):
       (NullPool + 关闭预编译语句缓存),其余端口恢复默认连接池 + 语句缓存;
     - ``transaction_pooler``:强制按事务模式 pooler 处理;
     - ``default``:强制使用默认连接池(AsyncAdaptedQueuePool)。
+
+    取值收敛为 Literal,typo(如 ``transaction-pooler``)在配置加载时即报错,
+    不会静默回落到 auto 的端口判定。
     """
 
-    mode: str = "auto"
+    mode: Literal["auto", "transaction_pooler", "default"] = "auto"
     pool_pre_ping: bool = True
     pool_recycle: int = 3600
 
