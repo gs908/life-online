@@ -470,6 +470,25 @@ async def test_patch_triggers_after_today_completed(api_client, db_session, seed
     assert await _count_instances(db_session, template_id) == 1  # 未重复生成
 
 
+async def test_run_generation_survives_today_completed_template(db_session, seeded):
+    """Fabio 冒烟 P1-1:库中存在当日已 COMPLETED 实例的模板时,run_generation
+    不被生成兜底的 rollback 污染打挂 —— errors==0,后续 due 模板正常生成。"""
+    done_tpl = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+    )
+    await _make_instance(db_session, done_tpl, day=TODAY, status=TaskStatus.COMPLETED)
+    fresh_tpl = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+    )
+
+    stats = await task_generator_service.run_generation(db_session, today=TODAY, now=NOW)
+    assert stats["errors"] == 0
+    assert stats["exists"] == 1  # 已消费模板:撞索引回捞,如实 exists
+    assert stats["created"] == 1  # 后续 due 模板不受污染,正常生成
+    assert await _count_instances(db_session, done_tpl.id) == 1  # 未重复生成
+    assert await _count_instances(db_session, fresh_tpl.id) == 1
+
+
 async def test_delete_refused_with_history(db_session, seeded):
     """Mars #4(产品拍板):存在 COMPLETED/EXPIRED 实例时拒绝硬删(422)。"""
     from app.common.exceptions import ValidationError

@@ -315,21 +315,39 @@ async def generate_for_template(
 async def run_generation(
     db: AsyncSession, *, today: date | None = None, now: datetime | None = None,
 ) -> dict[str, int]:
-    """全量跑一轮生成(定时任务 00:10 / 手动触发)。返回各动作计数。"""
+    """全量跑一轮生成(定时任务 00:10 / 手动触发)。返回各动作计数。
+
+    逐模板隔离(Fabio 冒烟 P1-1):单模板的生成兜底会整事务 rollback 并
+    expire 会话内全部对象(如当日已 COMPLETED 模板撞索引回捞的 exists 路径),
+    直接复用循环外的 ORM 对象会让下一模板的同步属性访问触发隐式重载
+    (MissingGreenlet)并中断整轮 —— 当天任务板空窗。因此:
+    - id 在循环前预取为普通值,日志只用预取值;
+    - 每个模板进循环后重新 SELECT(带 selectin triggers),不依赖可能已被
+      expire 的对象;单模板异常 rollback 后 continue,计入 stats.errors。
+    """
     today = today or today_bj()
     stats = {
         "created": 0, "rolled_forward": 0, "kept": 0, "exists": 0,
         "not_due": 0, "skipped_expired": 0, "errors": 0,
     }
-    templates = await due_templates(db, today=today, now=now)
-    for template in templates:
+    due = await due_templates(db, today=today, now=now)
+    plan = [t.id for t in due]  # 预取普通值:后续 rollback 会使 ORM 对象失效
+    for template_id in plan:
         try:
+            stmt = (
+                select(ScnTaskTemplate)
+                .where(ScnTaskTemplate.id == template_id)
+                .options(selectinload(ScnTaskTemplate.triggers))
+            )
+            template = (await db.execute(stmt)).scalar_one_or_none()
+            if template is None:
+                continue
             _instance, action = await generate_for_template(db, template, today=today, now=now)
             stats[action] = stats.get(action, 0) + 1
         except Exception:
             # 单模板失败不阻断整轮;生产由日志告警跟进。
             stats["errors"] += 1
-            log.exception("generate_for_template failed, template=%s", template.id)
+            log.exception("generate_for_template failed, template=%s", template_id)
             await db.rollback()
     return stats
 
