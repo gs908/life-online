@@ -1,0 +1,424 @@
+"""任务模板服务:模板 CRUD / 生命周期 / 再生成,及模板库列表-收藏-套用(docs/12 块 A)。
+
+与 task_service(实例状态机)分界:本模块只管模板与生成编排,
+实例状态流转(押金/审核/过期)复用 task_service 的语义。
+"""
+from __future__ import annotations
+
+import logging
+from datetime import time
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.common.exceptions import NotFoundError, PermissionDeniedError, ValidationError
+from app.common.timeutil import utcnow
+from app.models.enums import (
+    CoinTransactionType,
+    PoolPolicy,
+    TaskStatus,
+    TaskType,
+    TimedMode,
+    TriggerKind,
+)
+from app.models.scn_season import ScnSeason
+from app.models.scn_task_instance import ScnTaskInstance
+from app.models.scn_task_template import ScnTaskTemplate
+from app.models.scn_task_template_library import ScnTaskTemplateLibrary
+from app.models.scn_task_template_trigger import ScnTaskTemplateTrigger
+from app.models.sys_child import SysChild
+from app.models.sys_family import SysFamily
+from app.schemas.task import (
+    TaskTemplateCreate,
+    TaskTemplateUpdate,
+    validate_timed_mode,
+)
+from app.services import coin_service, task_generator_service
+
+log = logging.getLogger(__name__)
+
+# 收藏行在 scn_task_template_library 上的标记:家庭级收藏指向原始条目。
+_FAVORITE_OF_KEY = "favorite_of"
+
+
+def _enum_value(value) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+
+async def _ensure_season(db: AsyncSession, *, family_id: str, season_id: str) -> ScnSeason:
+    season = await db.get(ScnSeason, season_id)
+    if not season:
+        raise NotFoundError(f"赛季 {season_id} 不存在")
+    if season.family_id != family_id:
+        raise PermissionDeniedError("只能在自己家庭的赛季中创建任务模板")
+    return season
+
+
+async def get_template(db: AsyncSession, template_id: str) -> ScnTaskTemplate:
+    template = (
+        await db.execute(
+            select(ScnTaskTemplate)
+            .where(ScnTaskTemplate.id == template_id)
+            .options(selectinload(ScnTaskTemplate.triggers))
+        )
+    ).scalar_one_or_none()
+    if not template:
+        raise NotFoundError(f"任务模板 {template_id} 不存在")
+    return template
+
+
+async def get_family_template(
+    db: AsyncSession, *, template_id: str, family_id: str,
+) -> ScnTaskTemplate:
+    template = await get_template(db, template_id)
+    if template.family_id != family_id:
+        raise PermissionDeniedError("只能操作自己家庭的任务模板")
+    return template
+
+
+async def is_family_owner(db: AsyncSession, *, family_id: str, account_id: str) -> bool:
+    """管理端权限的当前口径:家庭 owner(创建家庭的家长)。"""
+    family = await db.get(SysFamily, family_id)
+    return family is not None and family.owner_id == account_id
+
+
+def default_triggers_for_type(template_type) -> list[ScnTaskTemplateTrigger]:
+    """类型默认触发规则(docs/12 块 A):未显式给 triggers 时按类型补一条。
+
+    - DAILY / TIMED -> 每天 00:00(TIMED 的"何时截止"由时间窗管,触发只管何时生成);
+    - CHALLENGE     -> 每周一 00:00(cron 表达);
+    - 一次性(ONCE)/ CHAIN / COOP -> 无默认,必须显式给规则。
+    """
+    type_value = _enum_value(template_type)
+    if type_value in (TaskType.DAILY.value, TaskType.TIMED.value):
+        return [ScnTaskTemplateTrigger(kind=TriggerKind.DAILY, generate_at=time(0, 0))]
+    if type_value == TaskType.CHALLENGE.value:
+        return [ScnTaskTemplateTrigger(kind=TriggerKind.CRON, cron_expr="0 0 * * 1")]
+    return []
+
+
+def _build_triggers(payload_triggers) -> list[ScnTaskTemplateTrigger]:
+    return [
+        ScnTaskTemplateTrigger(
+            kind=t.kind,
+            cron_expr=t.cron_expr,
+            weekdays=t.weekdays,
+            day_of_month=t.day_of_month,
+            generate_at=t.generate_at,
+            starts_on=t.starts_on,
+            ends_on=t.ends_on,
+            is_active=t.is_active,
+        )
+        for t in payload_triggers
+    ]
+
+
+async def create_template(
+    db: AsyncSession, *, family_id: str, creator_id: str, payload: TaskTemplateCreate,
+) -> ScnTaskTemplate:
+    """创建模板 + 触发规则(不强制建实例),随后立即对该模板跑一次生成。"""
+    await _ensure_season(db, family_id=family_id, season_id=payload.season_id)
+
+    template = ScnTaskTemplate(
+        family_id=family_id,
+        season_id=payload.season_id,
+        creator_account_id=creator_id,
+        library_id=payload.library_id,
+        target_child_id=payload.target_child_id,
+        category=payload.category,
+        title=payload.title,
+        description=payload.description,
+        lore_snippet=payload.lore_snippet,
+        xp_reward=payload.xp_reward,
+        type=payload.type,
+        required_start_time=payload.required_start_time,
+        reminder_message=payload.reminder_message,
+        reminder_minutes_before=payload.reminder_minutes_before,
+        time_deposit=payload.time_deposit,
+        is_active=payload.is_active,
+        timed_mode=payload.timed_mode,
+        deadline_time=payload.deadline_time,
+        start_time=payload.start_time,
+        duration_minutes=payload.duration_minutes,
+        pool_policy=payload.pool_policy,
+        estimated_minutes=payload.estimated_minutes,
+        difficulty=payload.difficulty,
+    )
+    triggers = _build_triggers(payload.triggers) or default_triggers_for_type(payload.type)
+    template.triggers = triggers
+    db.add(template)
+    await db.commit()
+
+    # 模板创建后立即补一次生成(force:generate_at 未到也先生成当日实例,
+    # 规则未命中 today 时自然返回 not_due)。
+    instance, action = await task_generator_service.generate_for_template(
+        db, template, force=True,
+    )
+    log.info("template %s created, initial generation action=%s instance=%s",
+             template.id, action, getattr(instance, "id", None))
+    return template
+
+
+_TEMPLATE_UPDATABLE_FIELDS = (
+    "category", "title", "description", "lore_snippet", "xp_reward", "type",
+    "required_start_time", "reminder_message", "reminder_minutes_before",
+    "time_deposit", "is_active", "timed_mode", "deadline_time", "start_time",
+    "duration_minutes", "pool_policy", "estimated_minutes", "difficulty",
+)
+
+
+async def update_template(
+    db: AsyncSession, *, family_id: str, template_id: str, payload: TaskTemplateUpdate,
+) -> ScnTaskTemplate:
+    """PATCH:部分更新;timed_mode 一致性对合并后的完整模板复验(422)。"""
+    template = await get_family_template(db, template_id=template_id, family_id=family_id)
+
+    data = payload.model_dump(exclude_unset=True)
+    if "target_child_id" in data and data["target_child_id"] is not None:
+        from app.services.task_service import _ensure_child
+
+        await _ensure_child(db, family_id=family_id, child_id=data["target_child_id"])
+
+    for field in _TEMPLATE_UPDATABLE_FIELDS:
+        if field in data:
+            setattr(template, field, data[field])
+
+    # 对合并结果复验 timed_mode 一致性,防止 PATCH 分两步绕过创建期校验。
+    try:
+        validate_timed_mode(
+            template.timed_mode,
+            template.deadline_time,
+            template.start_time,
+            template.duration_minutes,
+        )
+    except ValueError as exc:
+        await db.rollback()
+        raise ValidationError(str(exc)) from exc
+
+    triggers_changed = False
+    if "triggers" in data:
+        template.triggers = _build_triggers(data["triggers"])
+        triggers_changed = True
+    await db.commit()
+
+    # 改规则后立即补一次生成(与创建同口径)。
+    if triggers_changed:
+        instance, action = await task_generator_service.generate_for_template(
+            db, template, force=True,
+        )
+        log.info("template %s triggers updated, generation action=%s instance=%s",
+                 template.id, action, getattr(instance, "id", None))
+    return template
+
+
+async def deprecate_template(
+    db: AsyncSession, *, family_id: str, template_id: str, reason: str | None,
+) -> ScnTaskTemplate:
+    """废弃:停用 + 审计;既有实例不动,生成器此后跳过该模板。"""
+    template = await get_family_template(db, template_id=template_id, family_id=family_id)
+    template.is_active = False
+    template.deprecated_at = utcnow()
+    template.deprecated_reason = reason
+    await db.commit()
+    return template
+
+
+async def activate_template(
+    db: AsyncSession, *, family_id: str, template_id: str,
+) -> ScnTaskTemplate:
+    """重新启用:清废弃标记,并立即补一次生成。"""
+    template = await get_family_template(db, template_id=template_id, family_id=family_id)
+    template.is_active = True
+    template.deprecated_at = None
+    template.deprecated_reason = None
+    await db.commit()
+    instance, action = await task_generator_service.generate_for_template(
+        db, template, force=True,
+    )
+    log.info("template %s activated, generation action=%s instance=%s",
+             template.id, action, getattr(instance, "id", None))
+    return template
+
+
+async def regenerate_template(
+    db: AsyncSession, *, family_id: str, template_id: str,
+) -> tuple[ScnTaskTemplate, list[ScnTaskInstance], ScnTaskInstance | None]:
+    """再生成:终结全部未消费实例(状态机语义同过期),随后立即生成新实例。
+
+    IN_PROGRESS 未消费实例按"任务过期"退全额押金(非孩子主动放弃,不计惩罚),
+    与 task_service.expire_overdue_tasks 的口径一致。
+    """
+    template = await get_family_template(db, template_id=template_id, family_id=family_id)
+    stmt = select(ScnTaskInstance).where(
+        ScnTaskInstance.template_id == template.id,
+        ScnTaskInstance.status.in_(task_generator_service.UNCONSUMED_STATUSES),
+    )
+    unconsumed = list((await db.execute(stmt)).scalars().all())
+    now = utcnow()
+    for instance in unconsumed:
+        if instance.status == TaskStatus.IN_PROGRESS and instance.assignee_child_id:
+            child = await db.get(SysChild, instance.assignee_child_id)
+            if child is not None:
+                deposit = instance.time_deposit or 10
+                child.time_coin_balance += deposit
+                await coin_service.record_transaction(
+                    db,
+                    child=child,
+                    type=CoinTransactionType.TASK_REFUND,
+                    amount=deposit,
+                    task_instance_id=instance.id,
+                    note="模板再生成终结任务退还押金",
+                )
+                instance.coin_delta = 0
+        instance.status = TaskStatus.EXPIRED
+        instance.expire_at = instance.expire_at or now
+        # 释放实例池槽位:partial unique index 以 (template_id, generated_for_date)
+        # 兜底同日幂等,终结后若不释放,同日再生成会撞索引回捞到旧 EXPIRED 行。
+        instance.generated_for_date = None
+    await db.commit()
+    fresh, _action = await task_generator_service.generate_for_template(
+        db, template, force=True,
+    )
+    return template, unconsumed, fresh
+
+
+async def delete_template(
+    db: AsyncSession, *, family_id: str, template_id: str,
+) -> None:
+    """硬删:先删该模板全部实例与触发规则,再删模板行(同一事务)。"""
+    template = await get_family_template(db, template_id=template_id, family_id=family_id)
+    instances = list(
+        (await db.execute(
+            select(ScnTaskInstance).where(ScnTaskInstance.template_id == template.id)
+        )).scalars().all()
+    )
+    for instance in instances:
+        await db.delete(instance)
+    await db.delete(template)
+    await db.commit()
+
+
+async def list_templates(
+    db: AsyncSession, *, family_id: str, season_id: str | None = None,
+    is_active: bool | None = None, template_type: str | None = None,
+) -> list[ScnTaskTemplate]:
+    stmt = (
+        select(ScnTaskTemplate)
+        .where(ScnTaskTemplate.family_id == family_id)
+        .options(selectinload(ScnTaskTemplate.triggers))
+        .order_by(ScnTaskTemplate.created_at.desc())
+    )
+    if season_id is not None:
+        stmt = stmt.where(ScnTaskTemplate.season_id == season_id)
+    if is_active is not None:
+        stmt = stmt.where(ScnTaskTemplate.is_active.is_(is_active))
+    if template_type is not None:
+        stmt = stmt.where(ScnTaskTemplate.type == template_type)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+# ---- 模板库(docs/06 §2) ----
+
+
+async def list_library(
+    db: AsyncSession, *, family_id: str, category: str | None = None,
+    keyword: str | None = None, favorites_only: bool = False,
+) -> tuple[list[ScnTaskTemplateLibrary], set[str]]:
+    """系统库条目 + 本家庭自建条目(不含收藏克隆行);返回 (条目, 本家庭收藏的原始 id 集)。
+
+    收藏实现:收藏行是本家庭名下的一条库克隆(meta.favorite_of 指向原条目),
+    不新增表;favorites_only 时直接返回收藏行自身。
+    """
+    favorites = list(
+        (await db.execute(
+            select(ScnTaskTemplateLibrary).where(
+                ScnTaskTemplateLibrary.family_id == family_id,
+                ScnTaskTemplateLibrary.meta.op("->>")(_FAVORITE_OF_KEY).is_not(None),
+            )
+        )).scalars().all()
+    )
+    favorite_of_ids = {f.meta[_FAVORITE_OF_KEY] for f in favorites}
+
+    if favorites_only:
+        return favorites, favorite_of_ids
+
+    stmt = select(ScnTaskTemplateLibrary).where(
+        ScnTaskTemplateLibrary.is_active.is_(True),
+        ScnTaskTemplateLibrary.meta.op("->>")(_FAVORITE_OF_KEY).is_(None),
+    ).order_by(ScnTaskTemplateLibrary.created_at.desc())
+    rows = list((await db.execute(stmt)).scalars().all())
+    # 家庭可见范围:系统预置(family_id IS NULL)+ 本家庭自建。
+    rows = [r for r in rows if r.family_id is None or r.family_id == family_id]
+    if category is not None:
+        rows = [r for r in rows if _enum_value(r.category) == category]
+    if keyword:
+        kw = keyword.strip()
+        rows = [r for r in rows if kw in r.title or kw in r.description]
+    return rows, favorite_of_ids
+
+
+async def get_library_entry(
+    db: AsyncSession, entry_id: str,
+) -> ScnTaskTemplateLibrary:
+    entry = await db.get(ScnTaskTemplateLibrary, entry_id)
+    if not entry or not entry.is_active:
+        raise NotFoundError(f"模板库条目 {entry_id} 不存在")
+    return entry
+
+
+async def toggle_favorite(
+    db: AsyncSession, *, family_id: str, entry_id: str,
+) -> bool:
+    """收藏/取消收藏开关;返回切换后的收藏状态。"""
+    entry = await get_library_entry(db, entry_id)
+    existing = (
+        await db.execute(
+            select(ScnTaskTemplateLibrary).where(
+                ScnTaskTemplateLibrary.family_id == family_id,
+                ScnTaskTemplateLibrary.meta.op("->>")(_FAVORITE_OF_KEY) == entry.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        await db.delete(existing)
+        await db.commit()
+        return False
+    favorite = ScnTaskTemplateLibrary(
+        family_id=family_id,
+        category=entry.category,
+        tags=entry.tags,
+        title=entry.title,
+        description=entry.description,
+        suggested_xp=entry.suggested_xp,
+        suggested_time_deposit=entry.suggested_time_deposit,
+        suggested_type=entry.suggested_type,
+        meta={_FAVORITE_OF_KEY: entry.id},
+        is_active=True,
+    )
+    db.add(favorite)
+    await db.commit()
+    return True
+
+
+async def apply_library_entry(
+    db: AsyncSession, *, family_id: str, creator_id: str,
+    entry_id: str, season_id: str, target_child_id: str | None,
+) -> ScnTaskTemplate:
+    """套用:用 suggested_* 播种一个新模板(挂默认触发规则),并立即跑一次生成。"""
+    await _ensure_season(db, family_id=family_id, season_id=season_id)
+    entry = await get_library_entry(db, entry_id)
+    payload = TaskTemplateCreate(
+        season_id=season_id,
+        library_id=entry.id,
+        category=entry.category,
+        title=entry.title,
+        description=entry.description,
+        xp_reward=entry.suggested_xp,
+        type=entry.suggested_type,
+        target_child_id=target_child_id,
+        time_deposit=entry.suggested_time_deposit,
+        timed_mode=TimedMode.NONE,
+        pool_policy=PoolPolicy.REUSE_UNTIL_CONSUMED,
+    )
+    return await create_template(db, family_id=family_id, creator_id=creator_id, payload=payload)

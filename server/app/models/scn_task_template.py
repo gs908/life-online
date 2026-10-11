@@ -1,21 +1,21 @@
-"""
-任务模板:父母/系统定义的可实例化任务规则。
+"""任务模板:父母/系统定义的可实例化任务规则。
 
 实例化后的执行状态放在 scn_task_instance。
 """
 from __future__ import annotations
 
-from datetime import time
+from datetime import datetime, time
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, Time
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import TaskCategory, TaskType
+from app.models.enums import PoolPolicy, TaskCategory, TaskType, TimedMode
 
 if TYPE_CHECKING:
     from app.models.scn_season import ScnSeason
+    from app.models.scn_task_template_trigger import ScnTaskTemplateTrigger
 
 
 class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
@@ -49,4 +49,31 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     time_deposit: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
+    # ---- docs/12 块 A:限时时间窗 / 实例池 / 废弃审计 ----
+    # timed_mode 与字段的完整性由 schema 层校验(创建/更新 422):
+    # DEADLINE 需 deadline_time;DURATION 需 start_time + duration_minutes;NONE 三者皆空。
+    timed_mode: Mapped[TimedMode] = mapped_column(
+        String(16), nullable=False, default=TimedMode.NONE
+    )
+    deadline_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pool_policy: Mapped[PoolPolicy] = mapped_column(
+        String(24), nullable=False, default=PoolPolicy.REUSE_UNTIL_CONSUMED
+    )
+    # ---- 押金/XP 输入(docs/12 块 C 预留,块 A 一并建列) ----
+    estimated_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    difficulty: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="难度 1-5")
+    # ---- 废弃审计:deprecated_at 非空表示已停用,生成器跳过 ----
+    deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deprecated_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     season: Mapped["ScnSeason"] = relationship(back_populates="task_templates", lazy="raise")
+    # 模板读接口恒带触发规则,selectin 避免 lazy="raise" 踩雷。
+    triggers: Mapped[list["ScnTaskTemplateTrigger"]] = relationship(
+        back_populates="template",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+        order_by="ScnTaskTemplateTrigger.created_at",
+    )

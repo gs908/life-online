@@ -14,6 +14,21 @@ from app.common.logging import get_logger
 log = get_logger("app.error")
 
 
+def _json_safe(errors: list) -> list:
+    """exc.errors() 里的 ctx 可能带 ValueError 等异常对象(model_validator 抛出),
+    JSONResponse 无法序列化,统一降级为其字符串表示。"""
+    def clean(value):
+        if isinstance(value, Exception):
+            return str(value)
+        if isinstance(value, dict):
+            return {k: clean(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [clean(v) for v in value]
+        return value
+
+    return [clean(e) for e in errors]
+
+
 def install_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, exc: AppError) -> JSONResponse:
@@ -26,14 +41,14 @@ def install_exception_handlers(app: FastAPI) -> None:
     async def _req_validation(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content={"code": 1, "data": exc.errors(), "msg": "请求参数校验失败"},
+            content={"code": 1, "data": _json_safe(exc.errors()), "msg": "请求参数校验失败"},
         )
 
     @app.exception_handler(PydanticValidationError)
     async def _pyd_validation(_: Request, exc: PydanticValidationError) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content={"code": 1, "data": exc.errors(), "msg": "数据校验失败"},
+            content={"code": 1, "data": _json_safe(exc.errors()), "msg": "数据校验失败"},
         )
 
     @app.exception_handler(Exception)

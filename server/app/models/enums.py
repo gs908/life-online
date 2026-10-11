@@ -27,6 +27,31 @@ class TaskStatus(str, Enum):
     EXPIRED = "EXPIRED"
 
 
+class TriggerKind(str, Enum):
+    """模板触发规则类型(docs/12 块 A):一个模板可挂多条规则,任一命中即到期。"""
+
+    DAILY = "DAILY"          # 每天
+    WEEKDAYS = "WEEKDAYS"    # 指定星期(0=周一..6=周日)
+    MONTHLY = "MONTHLY"      # 每月某日(月末不足取当月最后一天)
+    CRON = "CRON"            # 5 段 cron 表达式,家庭本地时区
+    ONCE = "ONCE"            # 一次性,在 starts_on 当天生成
+
+
+class TimedMode(str, Enum):
+    """模板限时模式:决定实例 expire_at 的计算方式。"""
+
+    NONE = "NONE"            # 非限时,expire_at 为 NULL
+    DEADLINE = "DEADLINE"    # 当日截止时刻 deadline_time
+    DURATION = "DURATION"    # 从 start_time 起持续 duration_minutes
+
+
+class PoolPolicy(str, Enum):
+    """实例池策略(docs/12 块 A,决策 D1)。"""
+
+    REUSE_UNTIL_CONSUMED = "REUSE_UNTIL_CONSUMED"  # 默认:未消费实例跨天顺延
+    NEW_EACH_PERIOD = "NEW_EACH_PERIOD"            # 备选:每周期新开(本轮不默认)
+
+
 class ThemeId(str, Enum):
     DEFAULT = "DEFAULT"
     FROSTBOUND = "FROSTBOUND"

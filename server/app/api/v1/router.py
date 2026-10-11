@@ -13,6 +13,8 @@ from app.api.v1 import (
     redemptions,
     seasons,
     tasks,
+    task_templates,
+    template_library,
     themes,
     time_config,
     uploads,
@@ -30,6 +32,8 @@ api_router.include_router(users.router, tags=["users"])
 api_router.include_router(families.router, tags=["families"])
 api_router.include_router(seasons.router, tags=["seasons"])
 api_router.include_router(tasks.router, tags=["tasks"])
+api_router.include_router(task_templates.router, tags=["task-templates"])
+api_router.include_router(template_library.router, tags=["template-library"])
 api_router.include_router(themes.router, tags=["themes"])
 api_router.include_router(coins.router, tags=["coins"])
 api_router.include_router(privileges.router, tags=["privileges"])

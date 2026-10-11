@@ -48,6 +48,7 @@ def _to_read(t) -> TaskRead:
         status=t.status,
         deadline=t.deadline,
         expire_at=t.expire_at,
+        generated_for_date=t.generated_for_date,
         required_start_time=_template_value(t, "required_start_time"),
         proof_url=proof_url,
         rating=t.rating,
