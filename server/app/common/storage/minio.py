@@ -9,6 +9,7 @@ MinIO 客户端实现(兼容 S3 协议)。
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from functools import partial
 
 from minio import Minio
@@ -28,13 +29,17 @@ _CONN_ERRORS = (Urllib3HTTPError, OSError)
 
 class MinIOStorage(StorageClient):
     def __init__(self, endpoint: str, access_key: str, secret_key: str,
-                 bucket: str, *, secure: bool = False, prefix: str = "") -> None:
+                 bucket: str, *, secure: bool = False, prefix: str = "",
+                 region: str = "") -> None:
         self._endpoint = endpoint
+        # region 显式传入时 SDK 跳过签名前的 `GET /<bucket>?location=` 探测;
+        # 不传(None)则保持 SDK 默认:首次签名时向 MinIO 查询(需要 MinIO 可达)。
         self._client = Minio(
             endpoint=endpoint,
             access_key=access_key,
             secret_key=secret_key,
             secure=secure,
+            region=region or None,
         )
         self.bucket = bucket
         self.key_prefix = prefix.strip("/")
@@ -101,6 +106,13 @@ class MinIOStorage(StorageClient):
             raise self._translate(e, f"remove {key}") from e
 
     def presign_get(self, key: str, *, expires_seconds: int = 3600) -> str:
-        return self._client.presigned_get_object(
-            self.bucket, key, expires=expires_seconds,
-        )
+        # minio-py 7.x 的 expires 形参要求 timedelta(内部 expires.total_seconds()
+        # 校验区间),传 int 会 AttributeError(DEV-28 缺陷③)。对外抽象仍用秒。
+        # 未配置 region 时 SDK 签名前会先向 MinIO 查询 bucket region(网络请求),
+        # MinIO 不可达同样翻译成 503,与 ensure_bucket/upload 行为一致。
+        try:
+            return self._client.presigned_get_object(
+                self.bucket, key, expires=timedelta(seconds=expires_seconds),
+            )
+        except Exception as e:
+            raise self._translate(e, f"presign {key}") from e

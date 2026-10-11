@@ -238,3 +238,53 @@ async def test_minio_s3_error_not_translated(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(S3Error) as exc_info:
         await storage.ensure_bucket()
     assert not isinstance(exc_info.value, StorageUnavailableError)
+
+
+def test_minio_presign_get_passes_timedelta_to_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DEV-28 缺陷③:minio-py 7.x 的 expires 要求 timedelta(内部 total_seconds() 校验),
+    传 int 会 AttributeError。mock SDK 断言实际传入的是 timedelta 且秒数正确。"""
+    from datetime import timedelta
+
+    from app.common.storage.minio import MinIOStorage
+
+    storage = MinIOStorage(
+        endpoint="localhost:9000", access_key="a", secret_key="s",
+        bucket="life-online",
+    )
+    captured: dict = {}
+
+    class _StubClient:
+        def presigned_get_object(self, bucket, key, *, expires, **kwargs):
+            captured["bucket"], captured["key"], captured["expires"] = bucket, key, expires
+            return "http://signed-url"
+
+    monkeypatch.setattr(storage, "_client", _StubClient())
+
+    # 默认 3600s
+    assert storage.presign_get("a/b.jpg") == "http://signed-url"
+    assert captured["bucket"] == "life-online"
+    assert captured["key"] == "a/b.jpg"
+    assert captured["expires"] == timedelta(seconds=3600)
+
+    # 自定义秒数
+    storage.presign_get("a/b.jpg", expires_seconds=120)
+    assert captured["expires"] == timedelta(seconds=120)
+
+
+def test_minio_presign_get_real_sdk_succeeds_with_region() -> None:
+    """真实 SDK 冒烟(非 mock):配置 region 后签名是纯本地 SigV4 计算,无需网络。
+
+    若 expires 类型回退成 int,SDK 内部 `expires.total_seconds()` 会立刻
+    AttributeError —— 用例不依赖 MinIO 服务,可稳定复现缺陷③。
+    """
+    from app.common.storage.minio import MinIOStorage
+
+    storage = MinIOStorage(
+        endpoint="localhost:9000", access_key="a", secret_key="s",
+        bucket="life-online", region="us-east-1",
+    )
+    url = storage.presign_get("u1/2026/10/11/task-1.jpg")
+    assert "X-Amz-Signature" in url, "应返回带签名的 GET URL"
+    assert "u1%2F2026%2F10%2F11%2Ftask-1.jpg" in url or "task-1.jpg" in url

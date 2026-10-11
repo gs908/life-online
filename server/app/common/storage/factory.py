@@ -31,6 +31,7 @@ def get_storage() -> StorageClient:
             bucket=m.bucket,
             secure=m.secure,
             prefix=m.prefix,
+            region=m.region,
         )
     if provider in {"local", "filestorage", "file"}:
         local = settings.storage.local
