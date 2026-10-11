@@ -227,10 +227,26 @@ export interface TaskCreate {
   required_start_time?: string; // "HH:MM:SS"
   reminder_message?: string;
   reminder_minutes_before?: number; // 默认 15
-  time_deposit?: number; // 默认 10
+  difficulty?: number; // 默认 2（倍率 1.0）；只影响 XP，不影响押金
+  estimated_minutes?: number; // 预计耗时（分钟），押金耗时驱动的输入；缺省走类型默认
+  time_deposit?: number; // 缺省时后端按耗时/类型解析落库；显式 0 = 免押金
   is_active?: boolean;
   deadline?: string;
   expire_at?: string;
+}
+
+/** 管理端表单实时预览押金（DEV-34 块 C；难度不影响押金，仅为表单完整性透传） */
+export interface TaskDepositPreviewRequest {
+  type: TaskType;
+  estimated_minutes?: number; // 1–1440
+  time_deposit?: number; // 显式押金，0 = 免押
+  difficulty?: number; // 1–5
+}
+
+export interface TaskDepositPreviewResponse {
+  time_deposit: number;
+  daily_allowance: number;
+  capped_by_allowance: boolean;
 }
 
 export interface TaskListQuery extends PageQuery {
