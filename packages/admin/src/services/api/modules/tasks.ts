@@ -10,6 +10,8 @@ import type {
   PageResult,
   TaskApproveRequest,
   TaskCreate,
+  TaskDepositPreviewRequest,
+  TaskDepositPreviewResponse,
   TaskListQuery,
   TaskRead,
   TaskSubmitRequest,
@@ -24,6 +26,13 @@ export const getTask = (taskId: string) =>
 /** 创建 = 建模板 + 初始实例（无独立模板接口，docs/09 A6） */
 export const createTask = (data: TaskCreate) =>
   request<TaskRead>('/scn/task-instances', { method: 'POST', body: data });
+
+/** 管理端表单实时预览押金（父母权限）：押金 = 耗时驱动，难度不影响押金（DEV-34 块 C） */
+export const previewDeposit = (data: TaskDepositPreviewRequest) =>
+  request<TaskDepositPreviewResponse>('/scn/task-templates/preview-deposit', {
+    method: 'POST',
+    body: data,
+  });
 
 export const deleteTask = (taskId: string) =>
   request<null>(`/scn/task-instances/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
