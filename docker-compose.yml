@@ -1,4 +1,5 @@
-# 本地开发基础设施(DEV-29):PostgreSQL 16 + 可选 MinIO。
+# 本地开发基础设施(DEV-29):PostgreSQL 17 + 可选 MinIO。
+# 版本对齐联调环境 Supabase(PostgreSQL 17.x),避免跨环境 dump/迁移差异。
 # 数据库连接调优与三种连接模式对比见 docs/11-数据库连接调优.md。
 #
 # 基本用法(仅起 PostgreSQL):
@@ -16,7 +17,7 @@
 #   DATABASE_SSLMODE=disable
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: life-online-postgres
     environment:
       POSTGRES_USER: postgres

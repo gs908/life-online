@@ -239,6 +239,11 @@
 **TaskSubmitRequest** `{ proof_object_key: str }` — **不是 base64**：先 `POST /sys/uploads`（purpose=`task_proof`，建议带 `task_id`，DEV-30 起 key 含任务实例标识）拿 `object_key`，再提交。`proof_object_key` 做归属校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`，否则 422（防 local 模式下用任意字符串引用/探测他人对象）；提交时把凭证回填绑定到 `task_instance_id`（已绑定其他任务的凭证拒绝复用）。
 **TaskApproveRequest** `{ rating: int 1–5（必填）, comment?: str }`
 
+> ⚠️ **规划中变更(尚未实现,以 [12-任务触发与实例化池方案](./12-任务触发与实例化池方案.md) 为准)**:
+> - `TaskSubmitRequest` 由 `proof_object_key` 扩为 `proof_object_keys: string[]`(多图/多视频);`TaskRead` 增 `proofs[]`、`generated_for_date`。
+> - 新增模板级接口 `/scn/task-templates*`、模板库 `/scn/template-library*`、证据 `/scn/task-instances/{id}/proofs`、`/scn/task-proofs/{id}`。
+> - 上述接口/字段**当前后端尚未实现**,前端在实现合入前不得对接(见 §14.2)。
+
 ## 7. 动态主题样式 `/scn/theme-styles`
 
 > 家庭级自定义主题（AI 生成 tokens/css_vars），区别于赛季 `ThemeId` 预设枚举。
@@ -367,12 +372,23 @@
 
 ## 14. 已规划但**尚未实现**的接口（前端禁止对接）
 
+### 14.1 旧文档 `06` 遗留（后端无代码）
+
 以下接口只存在于旧文档 `06-API设计要点.md`，**后端代码中没有**，前端不得按其开发（需要时先提后端 issue）：
 
 - `GET /scn/levels/curve`
 - `POST /scn/task-instances/preview-xp`
-- `GET /scn/template-library`（及模板库相关 CRUD）
 - 其余以 `06` 文档"新增"名义列出但不在本文档中的接口
+
+### 14.2 本轮定稿方案（见 `12-任务触发与实例化池方案.md`，尚未实现）
+
+以下接口/字段已在 12 定稿，但**后端尚未实现**；实现后回填本文档相应章节，未实现前前端禁止对接：
+
+- `GET/POST /scn/task-templates`、`PATCH /scn/task-templates/{id}`、`POST /{id}/deprecate|activate|regenerate|preview-deposit`
+- `GET /scn/template-library`、`POST /scn/template-library/{id}/favorite|apply`
+- `GET /scn/task-instances/{id}/proofs`、`GET/DELETE /scn/task-proofs/{id}`
+- `POST /scn/evidence/purge(-preview)`
+- `TaskSubmitRequest` 由 `proof_object_key` 扩为 `proof_object_keys: string[]`；`TaskRead` 增 `generated_for_date`、`proofs[]`
 
 ---
 
