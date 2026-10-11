@@ -159,11 +159,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       setNewTaskLore(editingTemplate.lore_snippet ?? '');
       setNewTaskXP(editingTemplate.xp_reward);
       setDifficulty(editingTemplate.difficulty ?? 3);
-      setTriggers(
-        editingTemplate.triggers.length > 0
-          ? editingTemplate.triggers.map(triggerToDraft)
-          : [makeTriggerDraft()],
-      );
+      // 编辑预填：规则为空（如一次性走实例路径产生的模板）保持为空，
+      // 不注入默认草稿——否则保存时会静默给模板追加一条 DAILY 触发器
+      setTriggers(editingTemplate.triggers.map(triggerToDraft));
       setTimedMode(editingTemplate.timed_mode);
       setDeadlineTime((editingTemplate.deadline_time ?? '20:00').slice(0, 5));
       setStartTime((editingTemplate.start_time ?? '16:30').slice(0, 5));
@@ -512,6 +510,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
               </div>
 
               <div className="space-y-3">
+                {triggers.length === 0 && (
+                  <p className="text-[11px] text-slate-400">{t('taskTemplate.noTriggersEdit')}</p>
+                )}
                 {triggers.map((draft, index) => (
                   <div key={index} className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-2">
                     <div className="flex justify-between items-center gap-2">

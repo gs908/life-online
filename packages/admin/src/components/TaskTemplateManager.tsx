@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../services/api';
-import type { TaskRead, TaskStatus, TaskTemplateRead } from '../services/api';
+import type { TaskTemplateRead, TaskTemplateRegenerateResult } from '../services/api';
 import { CalendarClock, Plus, Search, X } from 'lucide-react';
 import {
   categoryOf,
@@ -12,18 +12,18 @@ import {
 } from './taskTemplateUtils';
 import TaskTemplateDetailDrawer from './TaskTemplateDetailDrawer';
 
-/** 类别徽标（Miss.D §2：100 档底 × 700 档字，对比 ≥ 4.5:1；卡片本体保持中性底） */
-const CATEGORY_BADGE: Record<TaskTemplateCategoryIntent | 'deprecated', string> = {
-  once: 'bg-violet-100 text-violet-700', // #ede9fe / #6d28d9 → tailwind 近似档
+/** 类别徽标（Miss.D §2：100 档底 × 700 档字，对比 ≥ 4.5:1；卡片本体保持中性底）。
+ *  补遗 1 §1：列表无「一次性」类，无周期规则模板按 type 归入日常（categoryOf）。 */
+const CATEGORY_BADGE: Record<Exclude<TaskTemplateCategoryIntent, 'once'> | 'deprecated', string> = {
   daily: 'bg-sky-100 text-sky-700',
   challenge: 'bg-amber-100 text-amber-700',
   timed: 'bg-rose-100 text-rose-700',
   deprecated: 'bg-slate-200 text-slate-600',
 };
 
-type FilterKey = 'all' | TaskTemplateCategoryIntent | 'deprecated';
+type FilterKey = 'all' | Exclude<TaskTemplateCategoryIntent, 'once'> | 'deprecated';
 
-const UNCONSUMED: TaskStatus[] = ['AVAILABLE', 'IN_PROGRESS', 'PENDING_REVIEW'];
+const FILTER_KEYS: FilterKey[] = ['all', 'daily', 'challenge', 'timed', 'deprecated'];
 
 interface TaskTemplateManagerProps {
   /** 激活赛季 id；空 = 无激活赛季（新建禁用 + 提示） */
@@ -98,7 +98,6 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
   const counts = useMemo(() => {
     const result: Record<FilterKey, number> = {
       all: templates.length,
-      once: 0,
       daily: 0,
       challenge: 0,
       timed: 0,
@@ -114,14 +113,10 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
     return result;
   }, [templates]);
 
-  const FILTERS: Array<{ key: FilterKey; label: string }> = [
-    { key: 'all', label: t('taskTemplate.filterAll') },
-    { key: 'once', label: t('taskTemplate.filterOnce') },
-    { key: 'daily', label: t('taskTemplate.filterDaily') },
-    { key: 'challenge', label: t('taskTemplate.filterChallenge') },
-    { key: 'timed', label: t('taskTemplate.filterTimed') },
-    { key: 'deprecated', label: t('taskTemplate.filterDeprecated') },
-  ];
+  const FILTERS: Array<{ key: FilterKey; label: string }> = FILTER_KEYS.map(key => ({
+    key,
+    label: t(`taskTemplate.filter.${key}`),
+  }));
 
   const withBusy = async (templateId: string, action: () => Promise<unknown>): Promise<boolean> => {
     setBusyId(templateId);
@@ -141,11 +136,32 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
     setRegenerating(template);
     setUnconsumedCount(null);
     try {
-      // 确认弹窗展示「将终结 N 条未消费实例」（N 来自实例接口，契约 §6 template_id 过滤）
-      const page = await api.tasks.listTasks({ template_id: template.id, page_size: 200 });
-      setUnconsumedCount(page.items.filter(item => UNCONSUMED.includes(item.status)).length);
+      // 事前 N（契约 §6A，e278c3e）：AVAILABLE + IN_PROGRESS 两态 total 求和；
+      // PENDING_REVIEW 不终结（保留审核机会），不计入也不影响确认文案语义
+      const [available, inProgress] = await Promise.all([
+        api.tasks.listTasks({ template_id: template.id, status: 'AVAILABLE', page_size: 1 }),
+        api.tasks.listTasks({ template_id: template.id, status: 'IN_PROGRESS', page_size: 1 }),
+      ]);
+      setUnconsumedCount(available.total + inProgress.total);
     } catch {
       setUnconsumedCount(null); // 数不出来就不写死数字，文案给通用版
+    }
+  };
+
+  /** regenerate 响应按 action 分支 toast（契约 §6A / Gin 注记）；
+   *  kept/exists/not_due/skipped_expired 均属「本轮无新建」的变体，契约外值兜底处理 */
+  const regenerateToast = (result: TaskTemplateRegenerateResult) => {
+    if (result.action === 'created') {
+      onToast(t('toast.templateRegeneratedTitle'),
+        t('toast.templateRegeneratedMsg', { count: result.terminalized_instance_ids.length }));
+      onInstancesChanged?.();
+    } else if (result.action === 'kept') {
+      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateKeptMsg'));
+      onInstancesChanged?.(); // 旧实例已被终结，任务板需重拉
+    } else if (result.action === 'exists') {
+      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateExistsMsg'));
+    } else {
+      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateNoNewMsg'));
     }
   };
 
@@ -392,13 +408,11 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
                 onClick={() => {
                   const target = regenerating;
                   setRegenerating(null);
-                  withBusy(target.id, () => api.taskTemplates.regenerateTemplate(target.id))
-                    .then(ok => {
-                      if (ok) {
-                        onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegeneratedMsg', { title: target.title }));
-                        onInstancesChanged?.();
-                      }
-                    });
+                  const regenerateResult: TaskTemplateRegenerateResult[] = [];
+                  withBusy(target.id, async () => {
+                    regenerateResult.push(await api.taskTemplates.regenerateTemplate(target.id));
+                  })
+                    .then(ok => { if (ok && regenerateResult[0]) regenerateToast(regenerateResult[0]); });
                 }}
                 className="px-4 py-2 bg-red-600 text-white font-bold text-sm rounded hover:bg-red-700 disabled:opacity-50"
               >

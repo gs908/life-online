@@ -11,6 +11,7 @@ import type {
   TaskTemplateDeprecateRequest,
   TaskTemplateListQuery,
   TaskTemplateRead,
+  TaskTemplateRegenerateResult,
   TaskTemplateUpdate,
 } from '../types';
 
@@ -45,12 +46,14 @@ export const activateTemplate = (templateId: string) =>
     method: 'POST',
   });
 
-/** 终结未消费实例并立即生成（父母/管理端）；IN_PROGRESS 押金由后端全额退还 */
+/** 终结未消费实例并立即生成（父母/管理端）。终结范围 AVAILABLE+IN_PROGRESS（PENDING_REVIEW
+ *  保留审核机会、仍占槽位）；押金由后端全额退还。按响应 action 分支提示：
+ *  created=正常成功；kept=待审核实例占用未新建；exists=已有当日实例未重复生成。 */
 export const regenerateTemplate = (templateId: string) =>
-  request<TaskTemplateRead>(`/scn/task-templates/${encodeURIComponent(templateId)}/regenerate`, {
-    method: 'POST',
-    body: {},
-  });
+  request<TaskTemplateRegenerateResult>(
+    `/scn/task-templates/${encodeURIComponent(templateId)}/regenerate`,
+    { method: 'POST', body: {} },
+  );
 
 /** 硬删（连同实例与规则；管理端=家庭 owner），不可恢复 */
 export const deleteTemplate = (templateId: string) =>

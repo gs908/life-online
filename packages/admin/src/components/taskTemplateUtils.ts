@@ -41,10 +41,14 @@ export const makeTriggerDraft = (patch: Partial<TriggerDraft> = {}): TriggerDraf
   ...patch,
 });
 
-/** 列表卡片/筛选 chip 的类别推导：一次性(无周期规则) > 按模板 type */
-export const categoryOf = (template: TaskTemplateRead): TaskTemplateCategoryIntent => {
-  const recurring = template.triggers.filter(tr => tr.kind !== 'ONCE');
-  if (recurring.length === 0) return 'once';
+/**
+ * 列表卡片徽标/筛选的类别推导（Miss.D 补遗 1 §1：模板列表不存在「一次性」类——
+ * type 枚举无该值、一次性走 POST /scn/task-instances，无周期规则模板按 type 归入日常）。
+ * 注意：本函数只用于列表/详情展示与编辑预填；AddTaskModal 新建的四类选择器不受影响。
+ */
+export const categoryOf = (
+  template: TaskTemplateRead,
+): Exclude<TaskTemplateCategoryIntent, 'once'> => {
   if (template.type === 'TIMED') return 'timed';
   if (template.type === 'CHALLENGE') return 'challenge';
   return 'daily';

@@ -338,6 +338,24 @@ export interface TaskTemplateDeprecateRequest {
   reason?: string; // <=128，前端按必收设计（Miss.D §6）
 }
 
+/** regenerate 响应（契约 §6A，e278c3e）：终结范围 AVAILABLE+IN_PROGRESS，PENDING_REVIEW 保留 */
+export type TaskTemplateRegenerateAction =
+  | 'created' // 正常：终结旧实例并生成新实例（new_instance 非空）
+  | 'kept' // 已终结旧实例；有待审核实例占用槽位，本轮不新建
+  | 'exists' // 已有当日实例，未重复生成
+  | 'rolled_forward' // 顺延既有实例（生成器内部路径，regenerate 后不应出现）
+  | 'not_due' // 模板停用/无命中规则，未生成
+  | 'skipped_expired'; // 限时任务"生成即过期"守卫，跳过当日生成
+
+export interface TaskTemplateRegenerateResult {
+  template_id: string;
+  /** 被终结（置 EXPIRED、押金退还）的实例 id 列表；PENDING_REVIEW 不在其中 */
+  terminalized_instance_ids: string[];
+  action: TaskTemplateRegenerateAction;
+  /** 仅 action='created' 时非空 */
+  new_instance: { id: string; generated_for_date: string; status: TaskStatus } | null;
+}
+
 /** 创建任务 = 建模板 + 初始实例（「一次性」发布走本接口：不传 triggers 即立即生成、不重复） */
 export interface TaskCreate extends TaskTemplateCreate {
   target_user_id?: string; // ⚠️ 仅兼容字段，新代码不写
