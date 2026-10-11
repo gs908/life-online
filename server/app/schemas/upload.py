@@ -11,6 +11,7 @@ from app.models.enums import UploadPurpose
 class UploadRead(BaseModel):
     id: str
     family_id: str
+    task_instance_id: str | None = None  # DEV-30: 上传时携带 task_id 或提交任务时回填
     uploader_account_id: str | None = None
     storage_provider: str
     object_key: str

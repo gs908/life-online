@@ -9,7 +9,7 @@ export const uploadFile = (file: File, purpose: UploadPurpose, taskId?: string) 
   const formData = new FormData();
   formData.append('file', file);
   formData.append('purpose', purpose);
-  // 任务证明上传携带任务号,后端按 `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{序号}.{扩展名}` 落存储
+  // 任务证明上传携带任务号(DEV-30):后端按 `{prefix}/{用户}/{任务实例id}/{yyyymmdd}/task_proof-{序号}_{文件名安全化}.{扩展名}` 落存储
   if (taskId) formData.append('task_id', taskId);
   return upload<UploadRead>('/sys/uploads', formData);
 };

@@ -1,12 +1,18 @@
 """上传服务:把文件存到对象存储并写 SysUpload 元数据。
 
-对象存储路径规范(DEV-20,产品评论约定):
-    `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`
+对象存储路径规范:
+- task_proof 携带 task_id(DEV-30,业主诉求"键可辨识归属任务"):
+    `{prefix}/{用户}/{任务实例id}/{yyyymmdd}/task_proof-{序号}_{原始文件名安全化}.{扩展名}`
+  用户 = 上传者账号 id(防跨用户碰撞与枚举);任务实例 id 唯一定位任务;
+  yyyymmdd 按北京时区自然日,便于按天归档;原始文件名安全化后保留可读性。
+- 其余上传(头像/横幅等,以及未携带 task_id 的 task_proof,DEV-20 形状不变):
+    `{prefix}/{用户}/{年}/{月}/{日}/{purpose}-{序号}.{扩展名}`
 - prefix / bucket 由 yaml(`storage.minio.prefix` / `storage.local.prefix` 等)统一管理,
   bucket 由存储实现自持,完整定位 = bucket + key;
-- 用户 = 上传者账号 id;年/月/日按北京时区自然日切分;
-- 任务号 = 关联任务实例 id(`task_id` 表单字段);非任务上传(头像/横幅等)以 purpose 代替;
-- 文件序号 = 同一 用户+日期+任务号 维度下的自增序号。
+- 序号 = 同一 key 前缀(用户+任务/用途+日期)维度下的自增序号。
+
+任务关联(DEV-30):携带 task_id 的上传同时写 `sys_upload.task_instance_id`;
+未携带的行由任务提交(submit_task)回填绑定 —— 数据库层始终可按任务检索文件。
 
 并发与孤儿闭环(Mars 审查 🟡):
 - **先插库占位,后写对象** —— object_key 唯一索引在存储写入前仲裁并发:
@@ -17,6 +23,8 @@
   反向孤儿。
 """
 from __future__ import annotations
+
+import re
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +39,10 @@ from app.models.sys_upload import SysUpload
 
 # 占位撞号时的最大顺延次数(5 次意味着同 key 前缀下 ≥5 个并发同时撞号,超出视为异常冲突)
 _SEQ_MAX_ATTEMPTS = 5
+
+# 安全化后的原始文件名(去扩展名)最大长度;object_key 列上限 512,
+# 需留给 prefix + 上传者uuid + 任务实例uuid + 日期段 + 序号
+_SAFE_STEM_MAX = 64
 
 # 常见 content-type -> 扩展名兜底(文件名无后缀时使用)
 _CONTENT_TYPE_EXT = {
@@ -55,10 +67,33 @@ def _file_ext(filename: str, content_type: str) -> str:
     return _CONTENT_TYPE_EXT.get((content_type or "").split(";")[0].strip().lower(), "bin")
 
 
+def _safe_stem(filename: str) -> str:
+    """原始文件名(去扩展名)安全化为 object key 文件名段(DEV-30)。
+
+    - 取 basename(剥掉两侧路径分隔符),再去掉最后一个扩展名;
+    - 保留 unicode 字母/数字/下划线(中文文件名原样保留,键内可读);
+    - 其余字符(空格/标点/控制符/emoji 等)折叠为单个 `_`,首尾 `._-` 剥掉;
+    - 超长截断到 _SAFE_STEM_MAX,结果为空时兜底 `file`。
+    """
+    name = (filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    cleaned = re.sub(r"[^\w]+", "_", stem, flags=re.UNICODE)
+    cleaned = cleaned.strip("._-")
+    return cleaned[:_SAFE_STEM_MAX] or "file"
+
+
 def _key_head(storage: StorageClient, *, user_id: str, task_no: str) -> str:
-    """序号计数用的 key 前缀(不含序号与扩展名)。日期取北京时区当天。"""
+    """非任务上传(头像/横幅等)的 key 前缀(DEV-20 形状,不含序号与扩展名)。"""
     today = now_bj()
     relative = f"{user_id}/{today.year:04d}/{today.month:02d}/{today.day:02d}/{task_no}-"
+    return storage.full_key(relative)
+
+
+def _task_key_head(storage: StorageClient, *, user_id: str, task_instance_id: str) -> str:
+    """task_proof 携带 task_id 时的 key 前缀(DEV-30,不含序号/文件名/扩展名):
+    `{prefix}/{用户}/{任务实例id}/{yyyymmdd}/task_proof-`。日期取北京时区当天。"""
+    today = now_bj()
+    relative = f"{user_id}/{task_instance_id}/{today:%Y%m%d}/task_proof-"
     return storage.full_key(relative)
 
 
@@ -81,10 +116,12 @@ async def _occupy_key(
     family_id: str, uploader: SysAccount,
     content_type: str, purpose: UploadPurpose,
     bucket: str, storage_provider: str, public_url: str | None,
+    task_instance_id: str | None = None,
 ) -> SysUpload:
     """插入占位行并 commit;object_key 唯一索引在此仲裁并发。"""
     record = SysUpload(
         family_id=family_id,
+        task_instance_id=task_instance_id,
         uploader_account_id=uploader.id,
         storage_provider=storage_provider,
         object_key=key,
@@ -113,29 +150,36 @@ async def save_upload(
     storage = get_storage()
 
     # 任务证明类上传若带 task_id,先校验任务存在且属于本家庭,杜绝跨家庭引用/伪造路径段
-    task_no = purpose.value
+    task_instance_id: str | None = None
     if task_id:
         from app.models.scn_task_instance import ScnTaskInstance
         task = await db.get(ScnTaskInstance, task_id)
         if task is None or task.family_id != family_id:
             raise NotFoundError(f"任务 {task_id} 不存在")
-        task_no = task_id
+        task_instance_id = task_id
 
     await storage.ensure_bucket()
 
     ext = _file_ext(filename, content_type)
-    key_head = _key_head(storage, user_id=uploader.id, task_no=task_no)
+    if task_instance_id:
+        # DEV-30: 键路径加入任务实例标识 + 安全化原始文件名
+        key_head = _task_key_head(storage, user_id=uploader.id, task_instance_id=task_instance_id)
+        stem = _safe_stem(filename)
+    else:
+        key_head = _key_head(storage, user_id=uploader.id, task_no=purpose.value)
+        stem = None
     seq = await _next_seq(db, key_head)
 
     # 1) 先插库占位:并发撞号时唯一索引在这里裁决,败者顺延重试(不重写对象)
     for _attempt in range(_SEQ_MAX_ATTEMPTS):
-        key = f"{key_head}{seq}.{ext}"
+        key = f"{key_head}{seq}_{stem}.{ext}" if stem is not None else f"{key_head}{seq}.{ext}"
         try:
             record = await _occupy_key(
                 db, key=key, size=len(content), family_id=family_id,
                 uploader=uploader, content_type=content_type, purpose=purpose,
                 bucket=storage.bucket, storage_provider=storage.provider_name,
                 public_url=None,  # 占位阶段未知;local 模式写入成功后回填
+                task_instance_id=task_instance_id,
             )
             break
         except IntegrityError:
@@ -177,9 +221,13 @@ async def get_upload(db: AsyncSession, upload_id: str) -> SysUpload:
 
 async def find_uploads(
     db: AsyncSession, *, family_id: str, purpose: UploadPurpose | None = None,
+    task_instance_id: str | None = None,
 ) -> list[SysUpload]:
+    """按家庭检索上传记录;可再按 purpose / 任务实例过滤(DEV-30:数据库层按任务检索)。"""
     stmt = select(SysUpload).where(SysUpload.family_id == family_id)
     if purpose is not None:
         stmt = stmt.where(SysUpload.purpose == purpose)
+    if task_instance_id is not None:
+        stmt = stmt.where(SysUpload.task_instance_id == task_instance_id)
     stmt = stmt.order_by(SysUpload.id.desc())
     return list((await db.execute(stmt)).scalars().all())

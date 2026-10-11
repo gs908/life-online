@@ -31,6 +31,7 @@ def _to_read(u) -> UploadRead:
     return UploadRead(
         id=u.id,
         family_id=u.family_id,
+        task_instance_id=u.task_instance_id,
         uploader_account_id=u.uploader_account_id,
         storage_provider=u.storage_provider,
         object_key=u.object_key,
@@ -53,8 +54,10 @@ async def upload(
 ) -> ApiResponse[UploadRead]:
     """multipart 上传:file + purpose + 可选 task_id。
 
-    task_id(purpose=task_proof 时建议携带)用于对象存储路径规范中的"任务号"段:
-    `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`。
+    task_id(purpose=task_proof 时建议携带)用于对象存储路径规范中的任务标识段
+    (DEV-30):`{prefix}/{用户}/{任务实例id}/{yyyymmdd}/task_proof-{序号}_{文件名安全化}.{扩展名}`,
+    并写入 sys_upload.task_instance_id;未携带时键为 DEV-20 形状,任务关联由
+    提交任务时回填绑定。
     """
     content = await file.read()
     fname = file.filename or "upload.bin"

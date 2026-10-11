@@ -23,6 +23,12 @@ class SysUpload(Base, UUIDPrimaryKeyMixin):
     family_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sys_family.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # DEV-30: 除 object_key 路径段外,数据库层也能按任务检索上传文件。
+    # 上传时携带 task_id 即写入;未携带的存量/旧客户端行由 submit_task 回填绑定。
+    task_instance_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("scn_task_instance.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
     uploader_account_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True, index=True
     )

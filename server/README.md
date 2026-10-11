@@ -402,11 +402,23 @@ total_tasks, completed_tasks, total_xp}`,`total_xp` 是该赛季内所有 `COMPL
   即可在完全不配置 MinIO 的情况下工作,返回的 `UploadRead.access_url` 指向本地静态文件挂载路径,
   字段形状与 MinIO 模式一致,前端无需区分。AI 功能目前没有"降级实现",未配置 LLM 时就是明确的
   503,前端应据此提示"该功能未开放",而不是重试。
-- **对象存储路径规范**(DEV-20):`{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{文件序号}.{扩展名}`。
+- **对象存储路径规范**(DEV-20 / DEV-30):
+  - task_proof 携带 `task_id`(DEV-30,业主诉求"键可辨识归属任务"):
+    `{prefix}/{用户}/{任务实例id}/{yyyymmdd}/task_proof-{序号}_{原始文件名安全化}.{扩展名}`。
+    用户 = 上传者账号 id(防跨用户碰撞与枚举);任务实例 id 唯一定位任务(上传时校验归属本家庭);
+    yyyymmdd 按北京时区;文件名安全化 = 保留 unicode 字母数字(中文原样)、其余字符折叠为
+    `_`、截断 64 字符、剥路径段。示例:
+    `u-8f95.../t-3f21.../20261011/task_proof-1_整理书桌证明.jpg`
+  - 其余上传(头像/横幅等,及未携带 `task_id` 的 task_proof,DEV-20 形状不变):
+    `{prefix}/{用户}/{年}/{月}/{日}/{purpose}-{序号}.{扩展名}`。
   `prefix`(`storage.minio.prefix` / `storage.local.prefix`,默认空)与 `bucket` 均在 yaml 统一管理;
-  年/月/日按北京时区切分;任务号 = 上传时携带的 `task_id`(校验归属本家庭),未携带时以 `purpose`
-  代替;文件序号 = 同用户同日同任务维度自增。两种模式下 `object_key` 生成规则一致,仅 URL 形态
+  序号 = 同 key 前缀(用户+任务/用途+日期)维度自增。两种模式下 `object_key` 生成规则一致,仅 URL 形态
   不同(MinIO = 现算预签名 URL,不落库;local = 稳定路径,落库)。
+  历史对象不做迁移(开发验证阶段)。
+- **任务关联与提交绑定**(DEV-30):携带 `task_id` 的上传同时写 `sys_upload.task_instance_id`
+  (可空列 + 索引,expand 迁移,存量行留 NULL);未携带 `task_id` 的凭证在任务提交时由
+  `submit_task` 回填绑定,数据库层始终可按任务检索文件(`upload_service.find_uploads(task_instance_id=...)`)。
+  已绑定其他任务的凭证拒绝复用(422)。
 - **序号并发与孤儿闭环**(DEV-20 审查收尾):序号取号采用「先插库占位、后写对象」——
   `object_key` 唯一索引在存储写入**前**仲裁并发,两个并发请求撞号时败者撞 `IntegrityError`
   顺延重试,不会出现"双方都写对象、后者覆盖前者"的凭证错乱;占位成功后对象写入失败则

@@ -264,7 +264,8 @@ const App: React.FC = () => {
     if (!selectedTaskId || submitting) return;
     setSubmitting(true);
     try {
-      const uploaded = await api.uploads.uploadFile(file, 'task_proof');
+      // DEV-30: 携带 taskId 使 object_key 含任务实例标识（uploadFile 已预留该参数）
+      const uploaded = await api.uploads.uploadFile(file, 'task_proof', selectedTaskId);
       await api.tasks.submitTask(selectedTaskId, { proof_object_key: uploaded.object_key });
       setIsSubmitModalOpen(false);
       setSelectedTaskId(null);
