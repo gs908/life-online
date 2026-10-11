@@ -13,17 +13,22 @@ from app.common.exceptions import (
     PermissionDeniedError,
     ValidationError,
 )
-from app.common.timeutil import utcnow
+from app.common.timeutil import today_bj, utcnow
 from app.models.enums import (
     CoinTransactionType,
+    NotificationChannel,
+    NotificationStatus,
+    NotificationType,
     TaskStatus,
     TaskType,
     UploadPurpose,
     UserRole,
 )
+from app.models.scn_notification import ScnNotification
 from app.models.scn_season import ScnSeason
 from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_template import ScnTaskTemplate
+from app.models.scn_task_template_library import ScnTaskTemplateLibrary
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.models.sys_upload import SysUpload
@@ -71,7 +76,12 @@ async def _ensure_task_refs(
 
 
 async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kwargs) -> ScnTaskInstance:
-    """兼容旧 create_task API:同时创建模板与一条初始实例。"""
+    """兼容旧 create_task API:同时创建模板与一条初始实例。
+
+    押金在创建时即由 `coin_service.resolve_deposit` 解析落库(显式值优先,
+    否则按预计耗时 × 类型默认值),此后各环节直接用 `time_deposit` 字段,
+    不再有 `or 10` 之类的写死兜底。
+    """
     target_child_id = kwargs.pop("target_child_id", None) or kwargs.pop("target_user_id", None)
     season_id = kwargs["season_id"]
     await _ensure_task_refs(
@@ -81,22 +91,45 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         target_child_id=target_child_id,
     )
 
+    library_id = kwargs.get("library_id")
+    explicit_deposit = kwargs.get("time_deposit")
+    if explicit_deposit is None and library_id:
+        # 模板库套用:用 suggested_time_deposit 播种(显式值,仍受类型范围/配额封顶约束)
+        library = await db.get(ScnTaskTemplateLibrary, library_id)
+        if library is not None and library.family_id not in (None, family_id):
+            raise PermissionDeniedError("只能套用平台或自己家庭的模板库")
+        if library is not None:
+            explicit_deposit = library.suggested_time_deposit
+
+    task_type = kwargs.get("type") or TaskType.DAILY
+    estimated_minutes = kwargs.get("estimated_minutes")
+    deposit = await coin_service.resolve_deposit(
+        db,
+        family_id=family_id,
+        task_type=task_type,
+        estimated_minutes=estimated_minutes,
+        explicit_deposit=explicit_deposit,
+        day=today_bj(),
+    )
+
     template = ScnTaskTemplate(
         family_id=family_id,
         season_id=season_id,
         creator_account_id=creator_id,
-        library_id=kwargs.get("library_id"),
+        library_id=library_id,
         target_child_id=target_child_id,
         category=kwargs.get("category"),
         title=kwargs["title"],
         description=kwargs.get("description", ""),
         lore_snippet=kwargs.get("lore_snippet"),
         xp_reward=kwargs.get("xp_reward", 50),
-        type=kwargs.get("type"),
+        type=task_type,
         required_start_time=kwargs.get("required_start_time"),
         reminder_message=kwargs.get("reminder_message"),
         reminder_minutes_before=kwargs.get("reminder_minutes_before", 15),
-        time_deposit=kwargs.get("time_deposit", 10),
+        difficulty=kwargs.get("difficulty") or 2,
+        estimated_minutes=estimated_minutes,
+        time_deposit=deposit,
         is_active=True,
     )
     db.add(template)
@@ -170,7 +203,7 @@ async def start_task(
     if task.target_child_id and task.target_child_id != child.id:
         raise PermissionDeniedError("该任务指定了其他接取人")
 
-    deposit = coin_service.calculate_deposit_fee(task.time_deposit or 10)
+    deposit = coin_service.calculate_deposit_fee(task.time_deposit)
     if not coin_service.has_sufficient_coins(child, deposit):
         raise ValidationError(
             f"时间币不足,需要 {deposit},当前 {child.time_coin_balance}"
@@ -248,9 +281,11 @@ async def approve_task(
     assignee = await _ensure_child(db, family_id=family_id, child_id=task.assignee_child_id)
     required_start_time = task.template.required_start_time if task.template else None
     is_challenge = bool(task.template and task.template.type == TaskType.CHALLENGE)
+    difficulty = task.template.difficulty if task.template is not None else None
     final_xp = xp_service.calculate_xp(
         task.xp_reward,
         rating=rating,
+        difficulty=difficulty,
         started_at=task.started_at,
         submitted_at=task.submitted_at,
         required_start_time=required_start_time,
@@ -259,7 +294,7 @@ async def approve_task(
     level_info = xp_service.apply_xp_and_level(assignee, final_xp)
     unlocked_privileges = await privilege_service.unlock_for_user(db, assignee)
 
-    deposit = task.time_deposit or 10
+    deposit = task.time_deposit
     assignee.time_coin_balance += deposit
     await coin_service.record_transaction(
         db,
@@ -324,7 +359,7 @@ async def abandon_task(
     if task.status != TaskStatus.IN_PROGRESS:
         raise ConflictError(f"当前状态 {_enum_value(task.status)},无法放弃")
 
-    deposit = task.time_deposit or 10
+    deposit = task.time_deposit
     refund = coin_service.calculate_refund(deposit, child.daily_abandon_count)
     child.time_coin_balance += refund
     await coin_service.record_transaction(
@@ -366,15 +401,35 @@ async def delete_task(db: AsyncSession, *, task_id: str, family_id: str | None =
     await db.commit()
 
 
+async def _notify_task_expired(db: AsyncSession, *, task: ScnTaskInstance, child: SysChild | None) -> None:
+    """任务过期站内通知(INAPP 直写即达,记 SENT;无独立投递器,微信通道暂不涉及)。"""
+    recipient_account_id = child.account_id if child is not None else task.creator_account_id
+    if recipient_account_id is None:
+        return
+    db.add(ScnNotification(
+        family_id=task.family_id,
+        recipient_account_id=recipient_account_id,
+        channel=NotificationChannel.INAPP,
+        type=NotificationType.TASK_EXPIRED,
+        title="任务已过期",
+        body=f"任务「{task.title}」已超过截止时间,系统已将其标记为过期。",
+        payload={"task_instance_id": task.id, "status": TaskStatus.EXPIRED.value},
+        status=NotificationStatus.SENT,
+        sent_at=utcnow(),
+    ))
+
+
 async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None) -> int:
     """过期任务处理:AVAILABLE/IN_PROGRESS 且 expire_at 已过的任务统一切 EXPIRED。
 
-    - AVAILABLE(未接取):直接过期,不涉及押金。
-    - IN_PROGRESS(已接取未提交):非孩子主动放弃,全额退还押金,不计入
-      连续放弃惩罚(`daily_abandon_count` 不变),避免"截止时间到了"和
-      "孩子自己放弃"共用同一条惩罚路径。
+    - AVAILABLE(未接取):直接过期,不涉及押金(未扣押金,无退还/扣罚)。
+    - IN_PROGRESS(已接取未提交):退押金 `timeout_refund_ratio`(默认 50%),
+      其余作为 `TIMEOUT_PENALTY` 扣罚;不计入连续放弃惩罚
+      (`daily_abandon_count` 不变),避免"截止时间到了"和"孩子自己放弃"
+      共用同一条惩罚路径;并发 `TASK_EXPIRED` 通知。
     - PENDING_REVIEW/COMPLETED/EXPIRED 不受影响:已提交等待审核的任务由家长
       决定审核或驳回,不应被系统静默判过期。
+    - 非限时任务(`expire_at IS NULL`)不参与过期(走顺延逻辑)。
 
     供定时任务(`app.workers.scheduler`)调用,亦可在测试/运维中手动触发。
     返回本次处理的任务数量。
@@ -393,21 +448,34 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
 
     processed = 0
     for task in tasks:
+        child: SysChild | None = None
         if task.status == TaskStatus.IN_PROGRESS and task.assignee_child_id:
             child = await db.get(SysChild, task.assignee_child_id)
             if child is not None:
-                deposit = task.time_deposit or 10
-                child.time_coin_balance += deposit
+                deposit = task.time_deposit
+                refund = coin_service.calculate_timeout_refund(deposit)
+                child.time_coin_balance += refund
                 await coin_service.record_transaction(
                     db,
                     child=child,
                     type=CoinTransactionType.TASK_REFUND,
-                    amount=deposit,
+                    amount=refund,
                     task_instance_id=task.id,
-                    note="任务过期退还押金",
+                    note="任务超时退还部分押金",
                 )
-                task.coin_delta = 0
+                penalty = deposit - refund
+                if penalty > 0:
+                    await coin_service.record_transaction(
+                        db,
+                        child=child,
+                        type=CoinTransactionType.TIMEOUT_PENALTY,
+                        amount=-penalty,
+                        task_instance_id=task.id,
+                        note="任务超时未提交扣罚",
+                    )
+                task.coin_delta = refund - deposit
         task.status = TaskStatus.EXPIRED
+        await _notify_task_expired(db, task=task, child=child)
         processed += 1
 
     if processed:

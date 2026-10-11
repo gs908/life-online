@@ -260,10 +260,12 @@ Body: { scene_prompt, name?, activate? }
 ```
 status: AVAILABLE
   → IN_PROGRESS         (孩子接取,扣押金)
-  → EXPIRED             (限时任务超时,worker 触发,扣 50% 押金)
+  → EXPIRED             (未接取超时,worker 触发;未扣押金,不涉及押金动作)
 status: IN_PROGRESS
   → PENDING_REVIEW      (孩子提交,附 proof)
   → AVAILABLE           (孩子放弃,按规则退押金)
+  → EXPIRED             (已接取超时,worker 触发;退 50% 押金,其余 50% TIMEOUT_PENALTY 扣罚,
+                         不计入连续放弃;发 TASK_EXPIRED 通知)
 status: PENDING_REVIEW
   → COMPLETED           (Parent 通过,发 XP,退押金)
   → IN_PROGRESS         (Parent 驳回,孩子重新提交)

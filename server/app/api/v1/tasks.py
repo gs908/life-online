@@ -9,14 +9,17 @@ from app.schemas.common import ApiResponse, PageQuery, PageResult, ok
 from app.schemas.task import (
     TaskApproveRequest,
     TaskCreate,
+    TaskDepositPreviewRequest,
+    TaskDepositPreviewResponse,
     TaskRead,
     TaskRejectRequest,
     TaskSubmitRequest,
 )
-from app.services import task_service
+from app.services import coin_service, task_service
 from app.services.upload_service import build_access_url
 
 router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
+templates_router = APIRouter(prefix="/scn/task-templates", tags=["scn-task-templates"])
 
 
 def _template_value(t, name: str, default=None):
@@ -49,6 +52,8 @@ def _to_read(t) -> TaskRead:
         deadline=t.deadline,
         expire_at=t.expire_at,
         required_start_time=_template_value(t, "required_start_time"),
+        difficulty=_template_value(t, "difficulty", 2),
+        estimated_minutes=_template_value(t, "estimated_minutes"),
         proof_url=proof_url,
         rating=t.rating,
         review_comment=t.review_comment,
@@ -163,3 +168,26 @@ async def abandon_task(
 ) -> ApiResponse[TaskRead]:
     t, _u, _refund = await task_service.abandon_task(db, task_id=task_id, user=user)
     return ok(_to_read(t))
+
+
+@templates_router.post(
+    "/preview-deposit",
+    response_model=ApiResponse[TaskDepositPreviewResponse],
+    summary="预览押金(父母创建表单实时显示;难度不影响押金)",
+)
+async def preview_deposit(
+    body: TaskDepositPreviewRequest, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[TaskDepositPreviewResponse]:
+    allowance = await coin_service.compute_daily_allowance(db, user.family_id, coin_service.today_bj())
+    time_deposit, capped = coin_service.compute_deposit_detail(
+        task_type=body.type,
+        estimated_minutes=body.estimated_minutes,
+        explicit_deposit=body.time_deposit,
+        daily_allowance=allowance,
+    )
+    return ok(TaskDepositPreviewResponse(
+        time_deposit=time_deposit,
+        daily_allowance=allowance,
+        # 仅在解析值真正被配额封顶截断时置位;恰好等于上限不算(封顶态是前端视觉提示依据)
+        capped_by_allowance=capped,
+    ))

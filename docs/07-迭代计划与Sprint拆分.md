@@ -90,9 +90,11 @@
 
 ### 1.9 Epic A9 — 限时任务超时
 
-- Story A9.1(3): 调度器增加 `expire_due_tasks_job`(每 5 分钟扫)。
-- Story A9.2(3): 回收 50% 押金 + 状态置 EXPIRED + 通知。
-- Story A9.3(2): 测试。
+- Story A9.1(3): 调度器增加 `expire_due_tasks_job`(每 5 分钟扫)。✅
+- Story A9.2(3): 状态置 EXPIRED + 通知(`TASK_EXPIRED`)。押金动作按 D4 统一:
+  已接取(IN_PROGRESS)超时退 50%、其余 50% `TIMEOUT_PENALTY` 扣罚;
+  未接取(AVAILABLE)超时无押金动作。✅(DEV-34 块 D)
+- Story A9.3(2): 测试(`test_timed_timeout_penalty.py`)。✅
 
 ### 1.10 Epic A10 — 杂项
 
