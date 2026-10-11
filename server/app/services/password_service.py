@@ -47,34 +47,45 @@ class _LoginThrottle:
         self._failures: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
-    def _prune(self, key: str, window_s: float, now: float) -> deque[float]:
-        dq = self._failures.setdefault(key, deque())
+    def _prune(self, dq: deque[float], window_s: float, now: float) -> deque[float]:
         while dq and dq[0] <= now - window_s:
             dq.popleft()
         return dq
 
     def _sweep(self, window_s: float, now: float) -> None:
         """清掉所有窗口外(空)条目。窗口取当前调用的 window_s——实践中全局统一,够用。"""
-        for key in [k for k, dq in self._failures.items() if not self._prune(k, window_s, now)]:
+        for key in [k for k, dq in self._failures.items() if not self._prune(dq, window_s, now)]:
             del self._failures[key]
 
     def check(self, key: str, *, max_attempts: int, window_s: float) -> None:
-        """超限即抛 429;通过不产生任何副作用。"""
+        """超限即抛 429;只读——不创建条目,未知 key 直接放行。
+
+        严禁在这里 setdefault/写入:登录流程是 check → record_failure,
+        check 先插入空条目会让 record_failure 的容量守卫(key not in)失效,
+        喷射场景字典无界增长(DEV-27 审查 blocker)。
+        """
         with self._lock:
-            dq = self._prune(key, window_s, time.monotonic())
+            dq = self._failures.get(key)
+            if dq is None:
+                return
+            self._prune(dq, window_s, time.monotonic())
             if len(dq) >= max_attempts:
                 raise RateLimitError(
                     f"登录失败次数过多,请 {int(window_s // 60)} 分钟后再试"
                 )
 
     def record_failure(self, key: str, *, window_s: float) -> None:
+        """唯一写入路径:容量守卫只在这里生效。"""
         with self._lock:
             now = time.monotonic()
             if key not in self._failures and len(self._failures) >= self.MAX_KEYS:
                 self._sweep(window_s, now)
                 if len(self._failures) >= self.MAX_KEYS:
                     self._failures.popitem()
-            self._prune(key, window_s, now).append(now)
+            dq = self._failures.get(key)
+            if dq is None:
+                dq = self._failures[key] = deque()
+            self._prune(dq, window_s, now).append(now)
 
     def reset(self, key: str) -> None:
         with self._lock:

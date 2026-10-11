@@ -27,6 +27,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.common.exceptions import RateLimitError
 from app.dev.seed import cleanup_family
 from app.main import app
 from app.models.enums import InviteRole, UserRole
@@ -160,8 +161,30 @@ def test_throttle_dict_is_bounded() -> None:
     assert len(throttle._failures) <= 5
     # 既有 key 仍正常计数(容量兜底不影响限流判断本身)
     throttle.record_failure("login:spray_49", window_s=900)
-    with pytest.raises(Exception):
+    with pytest.raises(RateLimitError):
         throttle.check("login:spray_49", max_attempts=2, window_s=900)
+
+
+def test_throttle_check_is_read_only() -> None:
+    """按真实登录流程 check → record_failure 喷射,容量守卫不被绕过(DEV-27 审查 blocker 回归)。
+
+    check 若通过 setdefault 写入空条目,后续 record_failure 的
+    `key not in _failures` 守卫恒为 False,容量上限整段被跳过。
+    """
+    # check 不产生任何条目
+    probe = password_service._LoginThrottle()
+    for i in range(50):
+        probe.check(f"login:probe_{i}", max_attempts=3, window_s=900)
+    assert len(probe._failures) == 0
+
+    # 完整真实流程顺序喷射:字典规模仍受 MAX_KEYS 约束
+    throttle = password_service._LoginThrottle()
+    throttle.MAX_KEYS = 100
+    for i in range(150):
+        key = f"login:spray_{i}"
+        throttle.check(key, max_attempts=3, window_s=900)
+        throttle.record_failure(key, window_s=900)
+    assert len(throttle._failures) <= 100
 
 
 def test_timing_equalizer_hash_is_valid_scrypt() -> None:
