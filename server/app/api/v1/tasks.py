@@ -179,7 +179,7 @@ async def preview_deposit(
     body: TaskDepositPreviewRequest, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskDepositPreviewResponse]:
     allowance = await coin_service.compute_daily_allowance(db, user.family_id, coin_service.today_bj())
-    time_deposit = coin_service.compute_deposit(
+    time_deposit, capped = coin_service.compute_deposit_detail(
         task_type=body.type,
         estimated_minutes=body.estimated_minutes,
         explicit_deposit=body.time_deposit,
@@ -188,5 +188,6 @@ async def preview_deposit(
     return ok(TaskDepositPreviewResponse(
         time_deposit=time_deposit,
         daily_allowance=allowance,
-        capped_by_allowance=time_deposit >= coin_service.deposit_cap(allowance),
+        # 仅在解析值真正被配额封顶截断时置位;恰好等于上限不算(封顶态是前端视觉提示依据)
+        capped_by_allowance=capped,
     ))

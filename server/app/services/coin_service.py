@@ -113,18 +113,22 @@ def deposit_cap(daily_allowance: int, cfg: DepositSection | None = None) -> int:
     return int(daily_allowance * cfg.allowance_cap_ratio)
 
 
-def compute_deposit(
+def compute_deposit_detail(
     *,
     task_type: TaskType | str,
     estimated_minutes: int | None = None,
     explicit_deposit: int | None = None,
     daily_allowance: int,
     cfg: DepositSection | None = None,
-) -> int:
+) -> tuple[int, bool]:
     """押金解析的纯计算部分(不碰 DB,便于单测与预览接口复用)。
 
     规则见 `DepositSection` docstring:显式值优先 -> 耗时驱动 -> 类型 min/max
     clamp -> 当日配额比例封顶。难度不在参数里:难度只影响 XP,不影响押金。
+    耗时乘数结果**四舍五入**(HALF_UP,`int(x + 0.5)`),不用 `round()`
+    (银行家舍入会让奇数默认值 x 0.5 出现 12.5 -> 12 这类与直觉相反的下取整)。
+
+    返回 `(解析后的押金, 是否被配额封顶截断)`;恰好等于上限但非截断时为 False。
     """
     cfg = cfg or settings.deposit
     rng = _range_for(task_type, cfg)
@@ -137,12 +141,33 @@ def compute_deposit(
         base = rng.default
         if estimated_minutes is not None and estimated_minutes > 0:
             ratio = max(0.5, min(2.0, estimated_minutes / cfg.reference_minutes))
-            value = round(base * ratio)
+            value = int(base * ratio + 0.5)  # 四舍五入(HALF_UP)
         else:
             value = base
 
     value = rng.clamp(value)
-    return min(value, deposit_cap(daily_allowance, cfg))
+    cap = deposit_cap(daily_allowance, cfg)
+    capped = value > cap
+    return (cap if capped else value), capped
+
+
+def compute_deposit(
+    *,
+    task_type: TaskType | str,
+    estimated_minutes: int | None = None,
+    explicit_deposit: int | None = None,
+    daily_allowance: int,
+    cfg: DepositSection | None = None,
+) -> int:
+    """`compute_deposit_detail` 的便捷封装,只取解析后的押金。"""
+    deposit, _capped = compute_deposit_detail(
+        task_type=task_type,
+        estimated_minutes=estimated_minutes,
+        explicit_deposit=explicit_deposit,
+        daily_allowance=daily_allowance,
+        cfg=cfg,
+    )
+    return deposit
 
 
 async def resolve_deposit(

@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from app.common.exceptions import ValidationError
-from app.config import DepositSection, XpSection
+from app.config import DepositSection, DepositTypeRange, XpSection
 from app.models.enums import TaskType
 from app.services import coin_service, xp_service
 
@@ -90,6 +90,18 @@ class TestTimeDriven:
         # 15/30 = 0.5x -> 30 * 0.5 = 15(CHALLENGE 下限)
         assert deposit(TaskType.CHALLENGE, estimated=15) == 15
 
+    def test_odd_default_half_ratio_rounds_half_up(self):
+        """奇数默认值 x 0.5 出现 .5 时四舍五入(HALF_UP),不用银行家舍入。
+
+        COOP 5 x 0.5 = 2.5 -> 3(banker's round 会得 2;COOP min=0,min/max clamp
+        不掩盖取整结果)。TIMED 25 x 0.5 = 12.5 -> 13(banker's round 会得 12),
+        但默认 min=15 会把 13 再 clamp 回 15,故这里把 min 放宽到 10 观察公式本身。
+        """
+        assert deposit(TaskType.COOP, estimated=15) == 3
+        cfg = default_cfg()
+        cfg.by_type["TIMED"] = DepositTypeRange(default=25, min=10, max=40)
+        assert deposit(TaskType.TIMED, estimated=15, cfg=cfg) == 13
+
     def test_missing_estimated_falls_back_to_default(self):
         # 未填耗时 -> 类型默认值(不再有写死的 `or 10` 兜底)
         assert deposit(TaskType.TIMED) == 25
@@ -147,6 +159,32 @@ class TestAllowanceCap:
     def test_deposit_cap_helper(self):
         assert coin_service.deposit_cap(100) == 50
         assert coin_service.deposit_cap(45) == 22
+
+
+# ---- 封顶标志(仅真正截断时置位) ------------------------------------------
+
+class TestCappedFlag:
+    def detail(self, **kwargs) -> tuple[int, bool]:
+        return coin_service.compute_deposit_detail(**kwargs)
+
+    def test_truncated_by_cap_sets_flag(self):
+        # CHALLENGE 默认 30,配额 40 -> cap 20,30 > 20 真截断
+        assert self.detail(task_type=TaskType.CHALLENGE, daily_allowance=40) == (20, True)
+
+    def test_equal_to_cap_without_truncation_clears_flag(self):
+        # CHALLENGE 显式 50 恰好等于 cap 50,非截断 -> False(封顶态是前端视觉提示依据)
+        assert self.detail(
+            task_type=TaskType.CHALLENGE, explicit_deposit=50, daily_allowance=100
+        ) == (50, False)
+
+    def test_hidden_zero_allowance_zero_not_capped(self):
+        # HIDDEN 0 / 配额 0:0 不大于 cap 0,非截断
+        assert self.detail(task_type="HIDDEN", daily_allowance=0) == (0, False)
+
+    def test_below_cap_clears_flag(self):
+        assert self.detail(
+            task_type=TaskType.DAILY, estimated_minutes=30, daily_allowance=100
+        ) == (10, False)
 
 
 # ---- 难度只改 XP 不改押金 --------------------------------------------------
@@ -233,7 +271,10 @@ async def test_preview_deposit_endpoint(api_client, seeded_family) -> None:
         headers=headers,
     )
     assert resp2.status_code == 200, resp2.text
-    assert resp2.json()["data"]["time_deposit"] == 50
+    data2 = resp2.json()["data"]
+    assert data2["time_deposit"] == 50
+    # 50 恰好等于 cap 50 但非截断,不得误报封顶(前端视觉提示依据)
+    assert data2["capped_by_allowance"] is False
 
     # 孩子无权调用(仅父母)
     child_headers = _auth_headers(seeded_family.child_account)

@@ -86,7 +86,7 @@ def calculate_xp(
     # 2) 难度(模板 difficulty,与星级相乘;不影响押金)
     mul *= calculate_difficulty_multiplier(difficulty, cfg)
 
-    # 2) 时效:限时任务在 required_start_time 之前完成 -> bonus,之后 -> penalty;非限时 -> 1.0
+    # 3) 时效:限时任务在 required_start_time 之前完成 -> bonus,之后 -> penalty;非限时 -> 1.0
     if required_start_time is not None:
         deadline = now.replace(
             hour=required_start_time.hour,
@@ -96,19 +96,19 @@ def calculate_xp(
         )
         mul *= cfg.timing_bonus if now <= deadline else cfg.timing_penalty
 
-    # 3) 速度:窗口内完成 -> bonus;窗口外或缺失 -> 1.0
+    # 4) 速度:窗口内完成 -> bonus;窗口外或缺失 -> 1.0
     if started_at is not None and submitted_at is not None:
         elapsed_min = (submitted_at - started_at).total_seconds() / 60
         if 0 < elapsed_min <= cfg.speed_window_minutes:
             mul *= cfg.speed_bonus
 
-    # 4) 任务类型加成
+    # 5) 任务类型加成
     if is_challenge:
         mul *= cfg.challenge_bonus
     if is_hidden:
         mul *= cfg.hidden_bonus
 
-    # 5) 连环任务链末加成
+    # 6) 连环任务链末加成
     if (
         chain_index is not None
         and chain_total is not None
