@@ -30,9 +30,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.exceptions import ConflictError, NotFoundError
+from app.common.exceptions import ConflictError, NotFoundError, ValidationError
 from app.common.storage import ObjectInfo, StorageClient, get_storage
 from app.common.timeutil import now_bj
+from app.config import settings
 from app.models.enums import UploadPurpose
 from app.models.sys_account import SysAccount
 from app.models.sys_upload import SysUpload
@@ -148,6 +149,14 @@ async def save_upload(
     task_id: str | None = None,
 ) -> SysUpload:
     storage = get_storage()
+
+    # 证明文件约束(DEV-33 块 E,UploadSection):大小与 content-type 白名单在上传口收口,
+    # 提交口(submit_task)只做数量与占用校验。
+    if purpose == UploadPurpose.TASK_PROOF:
+        if len(content) > settings.upload.max_proof_file_mb * 1024 * 1024:
+            raise ValidationError(f"证明文件超过大小上限 {settings.upload.max_proof_file_mb}MB")
+        if not settings.upload.content_type_allowed(content_type):
+            raise ValidationError(f"证明文件类型不支持: {content_type}")
 
     # 任务证明类上传若带 task_id,先校验任务存在且属于本家庭,杜绝跨家庭引用/伪造路径段
     task_instance_id: str | None = None

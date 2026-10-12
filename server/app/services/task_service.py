@@ -14,6 +14,7 @@ from app.common.exceptions import (
     ValidationError,
 )
 from app.common.timeutil import today_bj, utcnow
+from app.config import settings
 from app.models.enums import (
     CoinTransactionType,
     NotificationChannel,
@@ -29,12 +30,20 @@ from app.models.scn_notification import ScnNotification
 from app.models.scn_season import ScnSeason
 from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_participant import ScnTaskParticipant
+from app.models.scn_task_proof import ScnTaskProof
 from app.models.scn_task_template import ScnTaskTemplate
 from app.models.scn_task_template_library import ScnTaskTemplateLibrary
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.models.sys_upload import SysUpload
-from app.services import chain_service, coin_service, coop_service, privilege_service, xp_service
+from app.services import (
+    chain_service,
+    coin_service,
+    coop_service,
+    privilege_service,
+    proof_service,
+    xp_service,
+)
 
 # 驳回时若原 expire_at 已过(孩子在截止前提交,但家长审核拖到截止后才驳回),
 # 补一个重新提交窗口,避免下一轮过期批处理(expire_overdue_tasks)把它当成
@@ -349,9 +358,32 @@ async def start_task(
 
 
 async def submit_task(
-    db: AsyncSession, *, task_id: str, user: SysAccount, proof_object_key: str,
+    db: AsyncSession, *, task_id: str, user: SysAccount,
+    proof_object_keys: list[str] | None = None,
+    proof_object_key: str | None = None,
 ) -> ScnTaskInstance:
-    """孩子提交:状态切 PENDING_REVIEW。"""
+    """孩子提交:状态切 PENDING_REVIEW,按所选文件集合创建 scn_task_proof 行。
+
+    多证据(DEV-33 块 E):`proof_object_keys` 是主入口;`proof_object_key`
+    为旧客户端过渡字段(等价单元素列表)。逐个校验(存在、属于当前用户、
+    purpose=task_proof、未被其他任务占用、kind 可推导)后整体落库:
+
+    - 不在本次集合中的本任务旧证据 → 软删(提交即"当前所选集合",驳回重交
+      时旧图自动退出审核视图,也规避 object_key 唯一约束);
+    - 集合中已存在且软删的本任务证据 → 复活;
+    - 其余 → 新建 scn_task_proof 行,并把 sys_upload.task_instance_id 回填绑定。
+    """
+    keys = [k for k in (proof_object_keys or []) if k]
+    if not keys and proof_object_key:
+        keys = [proof_object_key]
+    if not keys:
+        raise ValidationError("至少提交一个证明文件")
+    if len(set(keys)) != len(keys):
+        raise ValidationError("提交的证明文件存在重复")
+    max_files = settings.upload.max_proof_files
+    if len(keys) > max_files:
+        raise ValidationError(f"证明文件数量超过上限 {max_files}")
+
     child = await _account_child(db, user)
     task = await get_task(db, task_id)
     if task.family_id != user.family_id:
@@ -360,28 +392,74 @@ async def submit_task(
         raise PermissionDeniedError("你不是该任务的接取人")
     if task.status != TaskStatus.IN_PROGRESS:
         raise ConflictError(f"当前状态 {_enum_value(task.status)},无法提交")
-    # 归属校验(Mars 审查 🟡):证明 key 必须是当前用户本人上传的 task_proof 凭证。
-    # 不校验时,local 模式下 key 直接映射静态文件路径,提交任意字符串即可引用/探测他人对象。
-    upload = (
+
+    # 逐个校验(先全部校验再落库,任何一个不合法整单拒绝,不留半提交状态):
+    # 存在 + 上传者是当前用户 + purpose=task_proof(DEV-20 归属校验,防 local
+    # 模式下用任意字符串引用/探测他人对象)+ kind 可由 content_type 推导。
+    uploads = (
+        await db.execute(select(SysUpload).where(SysUpload.object_key.in_(keys)))
+    ).scalars().all()
+    uploads_by_key = {u.object_key: u for u in uploads}
+    for key in keys:
+        upload = uploads_by_key.get(key)
+        if (
+            upload is None
+            or upload.uploader_account_id != user.id
+            or upload.purpose != UploadPurpose.TASK_PROOF
+        ):
+            raise ValidationError(f"证明文件 {key} 不存在、不是任务凭证或不属于当前用户")
+        if proof_service.proof_kind_for_content_type(upload.content_type) is None:
+            raise ValidationError(f"证明文件 {key} 的类型不支持: {upload.content_type}")
+        # 任务关联(DEV-30):未绑定的凭证回填;已绑定其他任务的凭证拒绝复用。
+        if upload.task_instance_id is not None and upload.task_instance_id != task.id:
+            raise ValidationError(f"证明文件 {key} 已关联其他任务,请重新上传")
+
+    # 证据占用校验:object_key 在 scn_task_proof 上全局唯一(含软删行),
+    # 已属于其他任务的 key 一律拒绝,即使是软删状态也不能复活成新任务的证据。
+    existing_proof_rows = (
+        await db.execute(select(ScnTaskProof).where(ScnTaskProof.object_key.in_(keys)))
+    ).scalars().all()
+    proofs_by_key = {row.object_key: row for row in existing_proof_rows}
+    for key, row in proofs_by_key.items():
+        if row.task_instance_id != task.id:
+            raise ValidationError(f"证明文件 {key} 已被其他任务占用,请重新上传")
+
+    key_set = set(keys)
+    # 1) 收缩:本任务不在本次集合中的证据软删,集合内的复活
+    task_proof_rows = (
         await db.execute(
-            select(SysUpload).where(
-                SysUpload.object_key == proof_object_key,
-                SysUpload.uploader_account_id == user.id,
-                SysUpload.purpose == UploadPurpose.TASK_PROOF,
-            )
+            select(ScnTaskProof).where(ScnTaskProof.task_instance_id == task.id)
         )
-    ).scalar_one_or_none()
-    if upload is None:
-        raise ValidationError("证明文件不存在、不是任务凭证或不属于当前用户")
-    # 任务关联(DEV-30):上传时未带 task_id 的凭证在提交时回填绑定,
-    # 保证 sys_upload 数据库层始终可按任务检索;已绑定其他任务的凭证拒绝复用。
-    if upload.task_instance_id is None:
-        upload.task_instance_id = task.id
-    elif upload.task_instance_id != task.id:
-        raise ValidationError("该证明文件已关联其他任务,请重新上传")
+    ).scalars().all()
+    for row in task_proof_rows:
+        if row.object_key in key_set:
+            row.deleted_at = None  # 复用/复活本任务已有的证据行
+        else:
+            row.deleted_at = utcnow()
+    # 2) 台账回填绑定 + 新建证据行。
+    #    created_at 按提交顺序显式加微秒偏移:同一事务里 server_default now()
+    #    会给出相同时间戳,排序退化为随机 UUID;显式错开才能保证读取端
+    #    (ORDER BY created_at, id)稳定还原孩子的提交顺序。
+    now = utcnow()
+    for idx, key in enumerate(keys):
+        upload = uploads_by_key[key]
+        if upload.task_instance_id is None:
+            upload.task_instance_id = task.id
+        if key not in proofs_by_key:
+            db.add(ScnTaskProof(
+                family_id=task.family_id,
+                task_instance_id=task.id,
+                kind=proof_service.proof_kind_for_content_type(upload.content_type),
+                object_key=key,
+                size=upload.size,
+                content_type=upload.content_type,
+                uploaded_by=user.id,
+                created_at=now + timedelta(microseconds=idx),
+            ))
+
     task.status = TaskStatus.PENDING_REVIEW
-    task.proof_object_key = proof_object_key
-    task.submitted_at = utcnow()
+    task.proof_object_key = keys[0]  # 过渡字段:首个证据,读取以 scn_task_proof 为准
+    task.submitted_at = now
     task.abandon_count_at_submit = child.daily_abandon_count
     await db.commit()
     await db.refresh(task)

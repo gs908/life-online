@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, Field, model_validator
 from app.models.enums import (
     PoolPolicy,
+    ProofKind,
     TaskCategory,
     TaskParticipantRole,
     TaskStatus,
@@ -227,6 +228,21 @@ class TaskCreate(TaskTemplateCreate):
     expire_at: datetime | None = None
 
 
+class TaskProofRead(BaseModel):
+    """任务证据(DEV-33 块 E):scn_task_proof 行的读取形状。
+
+    `url` 按 object_key 现算(minio 预签名/local 稳定路径),与 UploadRead.access_url 同口径。
+    """
+
+    id: str
+    task_instance_id: str
+    kind: ProofKind
+    url: str | None = None
+    size: int
+    content_type: str
+    created_at: datetime | None = None
+
+
 class TaskParticipantRead(BaseModel):
     """COOP 参与者(非 COOP 任务该列表为空)。"""
 
@@ -260,7 +276,8 @@ class TaskRead(BaseModel):
     # 可空 = 模板未评星(块 A 契约);旧前端未消费该字段
     difficulty: int | None = None
     estimated_minutes: int | None = None
-    proof_url: str | None = None
+    proof_url: str | None = None       # 过渡:= proofs[0].url(读取以 proofs 为准)
+    proofs: list[TaskProofRead] = Field(default_factory=list)
     rating: int | None
     review_comment: str | None = None
     xp_awarded: int | None = None
@@ -292,7 +309,14 @@ class TaskStartRequest(BaseModel):
 
 
 class TaskSubmitRequest(BaseModel):
-    proof_object_key: str
+    """多证据提交(DEV-33 块 E)。
+
+    - `proof_object_keys`:一次提交的全部证明文件 object_key(先经 POST /sys/uploads
+      purpose=task_proof 上传);逐个校验存在/归属/purpose/占用后创建 scn_task_proof 行。
+    - `proof_object_key`:过渡兼容字段,旧客户端单值提交仍可用(等价于单元素列表)。
+    """
+    proof_object_keys: list[str] = Field(default_factory=list)
+    proof_object_key: str | None = None  # 过渡:旧客户端单值字段
 
 
 class TaskApproveRequest(BaseModel):

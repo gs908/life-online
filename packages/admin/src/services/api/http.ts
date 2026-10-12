@@ -134,3 +134,52 @@ setRefreshExecutor(refreshTokens);
 export async function upload<T>(path: string, formData: FormData): Promise<T> {
   return request<T>(path, { method: 'POST', formData });
 }
+
+/** 上传进度回调：0-100（DEV-33 块 E 多文件上传逐个上报） */
+export type UploadProgressHandler = (percent: number) => void;
+
+/**
+ * 带进度的 multipart 上传（DEV-33 块 E）：fetch 没有 upload 进度事件，改走 XHR。
+ * 鉴权与 {code:0} 解包口径与 request 一致；401 时刷新令牌后重放一次。
+ */
+export async function uploadWithProgress<T>(
+  path: string,
+  formData: FormData,
+  onProgress?: UploadProgressHandler,
+): Promise<T> {
+  const send = () =>
+    new Promise<{ status: number; envelope: ApiResponse<T> }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', buildUrl(path));
+      const token = getAccessToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+      xhr.upload.onprogress = (e) => {
+        if (onProgress && e.lengthComputable) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+      xhr.onerror = () => reject(new NetworkError(xhr));
+      xhr.onload = () => {
+        try {
+          resolve({ status: xhr.status, envelope: JSON.parse(xhr.responseText) as ApiResponse<T> });
+        } catch {
+          reject(new NetworkError(xhr));
+        }
+      };
+      xhr.send(formData);
+    });
+
+  let result = await send();
+  if (result.status === 401) {
+    await refreshTokens(); // 失败会抛 ApiError('unauthorized') 并广播登出
+    result = await send();
+  }
+  const { envelope } = result;
+  if (envelope.code !== 0) {
+    const errorCode =
+      (envelope.data as { error_code?: string } | null)?.error_code ?? 'app_error';
+    throw new ApiError(errorCode, envelope.msg || '请求失败', result.status);
+  }
+  return envelope.data;
+}

@@ -32,6 +32,7 @@ api_router.include_router(users.router, tags=["users"])
 api_router.include_router(families.router, tags=["families"])
 api_router.include_router(seasons.router, tags=["seasons"])
 api_router.include_router(tasks.router, tags=["tasks"])
+api_router.include_router(tasks.proofs_router, tags=["scn-task-proofs"])
 # 两套路由前缀同为 /scn/task-templates 但路径不重叠:
 # tasks.templates_router 仅 /preview-deposit(DEV-34 块 C 押金预览);
 # task_templates.router 为块 A 模板 CRUD 与 /{template_id}/... 操作。

@@ -1,10 +1,12 @@
-"""任务路由:模板 + 实例 CRUD 与状态机操作。"""
+"""任务路由:模板 + 实例 CRUD 与状态机操作 + 任务证据(DEV-33 块 E)。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
+from sqlalchemy import select
 
 from app.deps import CurrentUser, DBSession, GuildMasterOnly
 from app.models.enums import TaskStatus, TaskType
+from app.models.scn_task_proof import ScnTaskProof
 from app.schemas.common import ApiResponse, PageQuery, PageResult, ok
 from app.schemas.task import (
     TaskApproveRequest,
@@ -12,15 +14,17 @@ from app.schemas.task import (
     TaskDepositPreviewRequest,
     TaskDepositPreviewResponse,
     TaskParticipantRead,
+    TaskProofRead,
     TaskRead,
     TaskRejectRequest,
     TaskSubmitRequest,
 )
-from app.services import coin_service, coop_service, task_service
+from app.services import coin_service, coop_service, proof_service, task_service
 from app.services.upload_service import build_access_url
 
 router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
 templates_router = APIRouter(prefix="/scn/task-templates", tags=["scn-task-templates"])
+proofs_router = APIRouter(prefix="/scn/task-proofs", tags=["scn-task-proofs"])
 
 
 def _template_value(t, name: str, default=None):
@@ -28,13 +32,56 @@ def _template_value(t, name: str, default=None):
     return getattr(template, name, default) if template is not None else default
 
 
-def _to_read(t) -> TaskRead:
-    proof_url = None
-    if t.proof_object_key:
-        try:
-            proof_url = build_access_url(t.proof_object_key)
-        except Exception:
-            proof_url = None
+def _proof_url(object_key: str) -> str | None:
+    try:
+        return build_access_url(object_key)
+    except Exception:
+        return None
+
+
+def _proof_to_read(p: ScnTaskProof) -> TaskProofRead:
+    return TaskProofRead(
+        id=p.id,
+        task_instance_id=p.task_instance_id,
+        kind=p.kind,
+        url=_proof_url(p.object_key),
+        size=p.size,
+        content_type=p.content_type,
+        created_at=p.created_at,
+    )
+
+
+async def _load_proofs(db, task_ids: list[str]) -> dict[str, list[ScnTaskProof]]:
+    """批量取各任务的未软删证据(避免列表接口 N+1)。"""
+    if not task_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(ScnTaskProof)
+            .where(
+                ScnTaskProof.task_instance_id.in_(task_ids),
+                ScnTaskProof.deleted_at.is_(None),
+            )
+            .order_by(ScnTaskProof.created_at, ScnTaskProof.id)
+        )
+    ).scalars().all()
+    proofs: dict[str, list[ScnTaskProof]] = {}
+    for row in rows:
+        proofs.setdefault(row.task_instance_id, []).append(row)
+    return proofs
+
+
+def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
+    # 块 E(证据)+ 块 F(参与者)语义合并:两条读取口径共存于同一 TaskRead。
+    proofs = proofs or []
+    proof_reads = [_proof_to_read(p) for p in proofs]
+    # 过渡:proof_url = 首个证据的 URL;无证据行时回退到实例上的单值字段(存量数据)
+    if proof_reads:
+        proof_url = proof_reads[0].url
+    elif t.proof_object_key:
+        proof_url = _proof_url(t.proof_object_key)
+    else:
+        proof_url = None
     participants = [
         TaskParticipantRead(
             account_id=p.account_id,
@@ -68,6 +115,7 @@ def _to_read(t) -> TaskRead:
         difficulty=_template_value(t, "difficulty", 2),
         estimated_minutes=_template_value(t, "estimated_minutes"),
         proof_url=proof_url,
+        proofs=proof_reads,
         rating=t.rating,
         review_comment=t.review_comment,
         xp_awarded=t.xp_awarded,
@@ -90,6 +138,10 @@ def _to_read(t) -> TaskRead:
     )
 
 
+async def _to_read_with_proofs(db, t) -> TaskRead:
+    return _to_read(t, await proof_service.list_proofs(db, task_instance_id=t.id))
+
+
 @router.get("", response_model=ApiResponse[PageResult[TaskRead]], summary="任务实例列表")
 async def list_tasks(
     db: DBSession, user: CurrentUser,
@@ -108,8 +160,9 @@ async def list_tasks(
         template_id=template_id,
         offset=query.offset, limit=query.page_size,
     )
+    proofs_map = await _load_proofs(db, [t.id for t in items])
     return ok(PageResult(
-        items=[_to_read(t) for t in items],
+        items=[_to_read(t, proofs_map.get(t.id)) for t in items],
         total=total,
         page=query.page,
         page_size=query.page_size,
@@ -122,7 +175,7 @@ async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiRespons
     if t.family_id != user.family_id:
         from app.common.exceptions import PermissionDeniedError
         raise PermissionDeniedError("只能查看自己家庭的任务")
-    return ok(_to_read(t))
+    return ok(await _to_read_with_proofs(db, t))
 
 
 @router.post("", response_model=ApiResponse[TaskRead], summary="创建任务模板并生成初始实例(父母)")
@@ -160,17 +213,19 @@ async def join_task(
     task_id: str, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:
     t = await coop_service.join_task(db, task_id=task_id, user=user)
-    return ok(_to_read(t))
+    return ok(await _to_read_with_proofs(db, t))
 
 
-@router.post("/{task_id}/submit", response_model=ApiResponse[TaskRead], summary="孩子提交")
+@router.post("/{task_id}/submit", response_model=ApiResponse[TaskRead], summary="孩子提交(多证据)")
 async def submit_task(
     task_id: str, body: TaskSubmitRequest, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:
     t = await task_service.submit_task(
-        db, task_id=task_id, user=user, proof_object_key=body.proof_object_key,
+        db, task_id=task_id, user=user,
+        proof_object_keys=body.proof_object_keys,
+        proof_object_key=body.proof_object_key,
     )
-    return ok(_to_read(t))
+    return ok(await _to_read_with_proofs(db, t))
 
 
 @router.post("/{task_id}/approve", response_model=ApiResponse[TaskRead], summary="父母审核通过")
@@ -180,7 +235,7 @@ async def approve_task(
     t, _assignee, _info = await task_service.approve_task(
         db, task_id=task_id, family_id=user.family_id, rating=body.rating, comment=body.comment,
     )
-    return ok(_to_read(t))
+    return ok(await _to_read_with_proofs(db, t))
 
 
 @router.post("/{task_id}/reject", response_model=ApiResponse[TaskRead], summary="父母审核驳回(打回重做)")
@@ -190,7 +245,7 @@ async def reject_task(
     t = await task_service.reject_task(
         db, task_id=task_id, family_id=user.family_id, comment=body.comment,
     )
-    return ok(_to_read(t))
+    return ok(await _to_read_with_proofs(db, t))
 
 
 @router.post("/{task_id}/abandon", response_model=ApiResponse[TaskRead], summary="孩子放弃")
@@ -198,7 +253,50 @@ async def abandon_task(
     task_id: str, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:
     t, _u, _refund = await task_service.abandon_task(db, task_id=task_id, user=user)
-    return ok(_to_read(t))
+    return ok(await _to_read_with_proofs(db, t))
+
+
+@router.get(
+    "/{task_id}/proofs",
+    response_model=ApiResponse[list[TaskProofRead]],
+    summary="任务的证据列表(未软删,按提交顺序)",
+)
+async def list_task_proofs(
+    task_id: str, db: DBSession, user: CurrentUser,
+) -> ApiResponse[list[TaskProofRead]]:
+    """DEV-33 块 E(docs/07 A7.2):家长审核端逐张/逐段查看的证据来源。"""
+    task = await task_service.get_task(db, task_id)
+    if task.family_id != user.family_id:
+        from app.common.exceptions import PermissionDeniedError
+        raise PermissionDeniedError("只能查看自己家庭的任务证据")
+    proofs = await proof_service.list_proofs(db, task_instance_id=task_id)
+    return ok([_proof_to_read(p) for p in proofs])
+
+
+@proofs_router.get(
+    "/{proof_id}",
+    response_model=ApiResponse[TaskProofRead],
+    summary="单条任务证据",
+)
+async def get_proof(proof_id: str, db: DBSession, user: CurrentUser) -> ApiResponse[TaskProofRead]:
+    proof = await proof_service.get_proof(db, proof_id)
+    if proof.family_id != user.family_id:
+        from app.common.exceptions import PermissionDeniedError
+        raise PermissionDeniedError("只能查看自己家庭的任务证据")
+    return ok(_proof_to_read(proof))
+
+
+@proofs_router.delete(
+    "/{proof_id}",
+    response_model=ApiResponse[dict],
+    summary="软删一条任务证据(deleted_at 置位)",
+)
+async def delete_proof(
+    proof_id: str, db: DBSession, user: CurrentUser,
+) -> ApiResponse[dict]:
+    proof = await proof_service.get_proof(db, proof_id)
+    await proof_service.soft_delete_proof(db, proof=proof, actor=user)
+    return ok({"ok": True})
 
 
 @templates_router.post(

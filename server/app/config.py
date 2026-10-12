@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+from fnmatch import fnmatch
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -171,6 +172,26 @@ class StorageSection(BaseModel):
     provider: str = "minio"
     minio: StorageMinioSection = Field(default_factory=StorageMinioSection)
     local: StorageLocalSection = Field(default_factory=StorageLocalSection)
+
+
+class UploadSection(BaseModel):
+    """上传约束(DEV-33 块 E:多证据提交)。
+
+    - `max_proof_files`:一次任务提交允许携带的证明文件数上限;
+    - `max_proof_file_mb`:单个证明文件大小上限(上传时校验);
+    - `allowed_content_types`:证明文件允许的 content-type 白名单,
+      支持 `image/*` 风格通配(按 fnmatch 匹配,大小写不敏感)。
+    """
+
+    max_proof_files: int = 9
+    max_proof_file_mb: int = 50
+    allowed_content_types: list[str] = Field(
+        default_factory=lambda: ["image/*", "video/*", "audio/*"]
+    )
+
+    def content_type_allowed(self, content_type: str) -> bool:
+        base = (content_type or "").split(";")[0].strip().lower()
+        return any(fnmatch(base, pattern.strip().lower()) for pattern in self.allowed_content_types)
 
 
 class LLMDefaultParams(BaseModel):
@@ -350,6 +371,7 @@ class Settings(BaseModel):
     app: AppSection
     database: DatabaseSection
     storage: StorageSection
+    upload: UploadSection = Field(default_factory=UploadSection)
     ai: AISection = Field(default_factory=AISection)
     jwt: JWTSection
     wechat: WechatSection
