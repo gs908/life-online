@@ -370,7 +370,8 @@ async def submit_task(
 
     - 不在本次集合中的本任务旧证据 → 软删(提交即"当前所选集合",驳回重交
       时旧图自动退出审核视图,也规避 object_key 唯一约束);
-    - 集合中已存在且软删的本任务证据 → 复活;
+    - 集合中已存在(含软删)的本任务证据 → 复活,并按本次提交序位重排
+      created_at(保证读取顺序恒等于本次提交顺序,DEV-42);
     - 其余 → 新建 scn_task_proof 行,并把 sys_upload.task_instance_id 回填绑定。
     """
     keys = [k for k in (proof_object_keys or []) if k]
@@ -425,27 +426,35 @@ async def submit_task(
             raise ValidationError(f"证明文件 {key} 已被其他任务占用,请重新上传")
 
     key_set = set(keys)
-    # 1) 收缩:本任务不在本次集合中的证据软删,集合内的复活
+    # 1) 收缩:本任务不在本次集合中的证据软删(提交即"当前所选集合");
+    #    集合内的复活/复用在下面第 2 步按本次提交序位一并重排。
     task_proof_rows = (
         await db.execute(
             select(ScnTaskProof).where(ScnTaskProof.task_instance_id == task.id)
         )
     ).scalars().all()
     for row in task_proof_rows:
-        if row.object_key in key_set:
-            row.deleted_at = None  # 复用/复活本任务已有的证据行
-        else:
+        if row.object_key not in key_set:
             row.deleted_at = utcnow()
-    # 2) 台账回填绑定 + 新建证据行。
+    # 2) 台账回填绑定 + 复活/新建证据行。
     #    created_at 按提交顺序显式加微秒偏移:同一事务里 server_default now()
     #    会给出相同时间戳,排序退化为随机 UUID;显式错开才能保证读取端
     #    (ORDER BY created_at, id)稳定还原孩子的提交顺序。
+    #    复活/复用行(DEV-42)同样重排 created_at:复活行若保留上次提交的
+    #    旧时间戳,会排在本次新建行之前,导致 proofs[0](=proof_url)与
+    #    keys[0](=task.proof_object_key)不一致。created_at 在本表即"提交
+    #    序位",每次提交整体重写一遍,读取顺序恒等于本次提交顺序。
     now = utcnow()
     for idx, key in enumerate(keys):
         upload = uploads_by_key[key]
         if upload.task_instance_id is None:
             upload.task_instance_id = task.id
-        if key not in proofs_by_key:
+        ordered_created_at = now + timedelta(microseconds=idx)
+        existing = proofs_by_key.get(key)
+        if existing is not None:
+            existing.deleted_at = None  # 复用/复活本任务已有的证据行
+            existing.created_at = ordered_created_at
+        else:
             db.add(ScnTaskProof(
                 family_id=task.family_id,
                 task_instance_id=task.id,
@@ -454,7 +463,7 @@ async def submit_task(
                 size=upload.size,
                 content_type=upload.content_type,
                 uploaded_by=user.id,
-                created_at=now + timedelta(microseconds=idx),
+                created_at=ordered_created_at,
             ))
 
     task.status = TaskStatus.PENDING_REVIEW
