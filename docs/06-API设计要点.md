@@ -297,7 +297,7 @@ submit(COOP):全员已交(无 JOINED)→ PENDING_REVIEW;否则保持 IN_PROGRESS
 approve 带 child_id / participant_id(逐人确认):
   入口 = IN_PROGRESS 或 PENDING_REVIEW,守卫 = 该参与者 SUBMITTED;
   押金即时退份额;全员 DONE → 聚合 COMPLETED,XP 此时一次结算
-approve 带 settle_partial=true(部分通过判退,仅 IN_PROGRESS 且存在 SUBMITTED):
+approve 带 settle_partial=true(部分通过判退,仅 IN_PROGRESS 且存在已交付(SUBMITTED/DONE)参与者):
   已交者退份额结算,未交者按放弃阶梯打折退(不递增放弃计数),
   XP 按交付孩子数一次结算,实例终结 COMPLETED;发 COOP_PARTIAL_SETTLED 通知
 approve 都不带(整单通过):仅 PENDING_REVIEW(现行为);

@@ -391,7 +391,11 @@ async def submit_task(
         raise ValidationError(f"证明文件数量超过上限 {max_files}")
 
     role_value = _enum_value(user.role)
-    task = await get_task(db, task_id)
+    # 行锁:COOP 分支承担实例状态迁移(全员已交 → PENDING_REVIEW),是读-判-写路径;
+    # 并发末两次提交不加锁会各自读到对方仍 JOINED 的旧快照,all_delivered 双双为 False,
+    # 全员 SUBMITTED 却停在 IN_PROGRESS(docs/13 §3 不变量被静默打破)。
+    # 与 join 重摊(MR #10 审查 🔴)/settle 路径同一把实例行锁互斥(DEV-40 审查 🟡)。
+    task = await get_task_for_update(db, task_id)
     if task.family_id != user.family_id:
         raise PermissionDeniedError("只能操作自己家庭的任务")
 
@@ -629,7 +633,10 @@ async def _approve_coop_participant(
         task.status = TaskStatus.COMPLETED
         task.xp_awarded = final_xp
         task.completed_at = utcnow()
-        task.coin_delta = sum(p.deposit_share for p in coop_service.wallet_participants(task))
+        # coin_delta = 实例生命周期累计实退(逐人确认步已退的份额已在先前累加)
+        task.coin_delta = (task.coin_delta or 0) + sum(
+            p.deposit_share for p in coop_service.wallet_participants(task)
+        )
         level_info, unlocked_privileges = await _settle_coop_xp(
             db, task, final_xp=final_xp, assignee=assignee,
         )
@@ -645,6 +652,8 @@ async def _approve_coop_participant(
             **level_info,
         })
     else:
+        # coin_delta = 实例生命周期累计实退(逐人步累加,聚合终结步继续累加)
+        task.coin_delta = (task.coin_delta or 0) + refunded_now
         await db.commit()
         await db.refresh(task)
         await db.refresh(assignee)
@@ -765,7 +774,8 @@ async def _approve_coop_partial_settle(
     task.review_comment = comment
     task.xp_awarded = final_xp
     task.completed_at = utcnow()
-    task.coin_delta = total_refund
+    # coin_delta = 实例生命周期累计实退(判退步实退 + 先前逐人步已退累加)
+    task.coin_delta = (task.coin_delta or 0) + total_refund
     level_info, unlocked_privileges = await _settle_coop_xp(
         db, task, final_xp=final_xp, assignee=assignee,
     )
@@ -873,7 +883,8 @@ async def approve_task(
         level_info, unlocked_privileges = await _settle_coop_xp(
             db, task, final_xp=final_xp, assignee=assignee,
         )
-        task.coin_delta = sum(p.deposit_share for p in coop_service.wallet_participants(task))
+        # coin_delta = 实例生命周期累计实退(本步实退 + 先前逐人步已退累加)
+        task.coin_delta = (task.coin_delta or 0) + total_refund
         settle_info = {
             "participants": [
                 {
@@ -1045,6 +1056,10 @@ async def abandon_task(
         # DEV-40 已实现)——整体 abandon 保留给主接取人收尾整单。
         total_refund = 0
         for p in coop_service.wallet_participants(task):
+            # 已逐人确认(DONE)的参与者结算已发生,跳过防双退
+            # (DEV-40 审查 🔴:B 被逐人 approve 后 OWNER abandon,不查子状态会再退一次)
+            if coop_service.participant_status_of(p) == TaskParticipantStatus.DONE:
+                continue
             p_child = await db.get(SysChild, p.child_id)
             if p_child is None:
                 continue
@@ -1178,6 +1193,9 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
                 # COOP 全额退还是块 F 已过审口径,两口径并存,后续统一待议。)
                 refunded = 0
                 for p in coop_service.wallet_participants(task):
+                    # 已逐人确认(DONE)的参与者结算已发生,跳过防双退(DEV-40 审查 🔴)
+                    if coop_service.participant_status_of(p) == TaskParticipantStatus.DONE:
+                        continue
                     p_child = await db.get(SysChild, p.child_id)
                     if p_child is None:
                         continue
@@ -1191,7 +1209,8 @@ async def expire_overdue_tasks(db: AsyncSession, *, now: datetime | None = None)
                         note="协作任务过期退还押金份额",
                     )
                     refunded += p.deposit_share
-                task.coin_delta = 0
+                # 本次实退累计(不含逐人步已退的 DONE 份额)
+                task.coin_delta = refunded
             else:
                 child = await db.get(SysChild, task.assignee_child_id)
                 if child is not None:

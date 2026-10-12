@@ -50,9 +50,11 @@
   守卫 = 该参与者为 `SUBMITTED`。孩子交一份、家长确认一份,实例停在 `IN_PROGRESS`,
   直到全员 `DONE`(聚合 COMPLETED)或家长主动收尾。
 - **部分通过判退(提前收尾)**:入口状态 = 实例 `IN_PROGRESS`,守卫 = 存在至少一名
-  `SUBMITTED` 参与者,且请求体带显式标志 `settle_partial: true`
-  (不带标志的整单 approve 在 IN_PROGRESS 下 422 拒绝,提示家长逐人确认或等全员交齐——
-  判退会真金白银打折退款,必须显式确认,不能靠漏传 `child_id` 误触)。效果:
+  已交付(`SUBMITTED`/`DONE`)参与者,且请求体带显式标志 `settle_partial: true`
+  (不带标志的整单 approve 在 IN_PROGRESS 下 409 拒绝,提示家长逐人确认或等全员交齐——
+  判退会真金白银打折退款,必须显式确认,不能靠漏传 `child_id` 误触。宽守卫含 `DONE`
+  是必要的:A 已逐人确认、B 中途 leave 后实例停在 IN_PROGRESS,只有宽守卫能让家长
+  用判退收尾终结实例,否则无出口)。效果:
   - `SUBMITTED`(及已 `DONE`)参与者:押金退份额,XP 按最终交付孩子数均摊(见 §5);
   - 仍 `JOINED` 的参与者:视为 `QUIT`,押金按放弃阶梯打折退(§5 裁决 Q1),**不递增当日放弃计数**;
   - 实例终结为 `COMPLETED`(部分通过即整单收尾,不再等待未交付者)。
@@ -167,7 +169,7 @@ EXPIRED 实例 = 该周期终结、不顺延(与 D1/D2 已锁定的消费语义�
 - 测试 `test_coop_partial_completion.py`:子状态迁移全路径;部分结算(Q1 阶梯退款不计数 /
   Q4 交付孩子数分母——含"从未提交者不分 XP"与"家长 SUBMITTED 不入分母");全员 DONE 聚合 COMPLETED
   (XP 聚合终结时一次结算);家长 proof 提交;leave 语义(递增计数 vs 判退不递增);§3.1 守卫
-  (IN_PROGRESS 无 `settle_partial` 的整单 approve 422;无 SUBMITTED 者时判退拒绝);reject 路径
+  (IN_PROGRESS 无 `settle_partial` 的整单 approve 409;无已交付(SUBMITTED/DONE)者时判退拒绝);reject 路径
   (SUBMITTED 回 JOINED、proof 保留、DONE 不受影响);过期全退不复活。
 
 > 改判机制:若家长侧对任一条有异议,可在实现 MR 合入前改判——改判按变更请求记录并

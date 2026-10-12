@@ -660,3 +660,83 @@ async def test_coop_expire_full_refund_and_no_revive(
     # 参与者行保留(EXPIRED 终态,审计不复活)
     roles = await _statuses(db_session, task["id"])
     assert len(roles) == 2
+
+
+# ---------------------------------------------------------------------------
+# 资金守恒回归(DEV-40 审查 🔴):逐人结算后的 abandon / expire 不双退
+# ---------------------------------------------------------------------------
+
+async def _setup_with_b_done(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession, **overrides
+):
+    """A/B 各付 10,B 交卷并被逐人 approve(DONE,已收回 10);返回上下文。"""
+    a_account, b_account, b_child = await _setup_two_children(db_session, seeded_family)
+    parent_headers = _auth_headers(seeded_family.parent)
+    a_headers = _auth_headers(a_account)
+    b_headers = _auth_headers(b_account)
+
+    task = await _create_coop_task(api_client, parent_headers, seeded_family, **overrides)
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=a_headers)
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/join", headers=b_headers)
+    await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": await _proof_key_for(db_session, seeded_family, b_account, "b")},
+        headers=b_headers,
+    )
+    resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/approve",
+        json={"rating": 5, "child_id": b_child.id}, headers=parent_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert (await _statuses(db_session, task["id"]))[TaskParticipantRole.MEMBER] == TaskParticipantStatus.DONE
+    await db_session.refresh(b_child)
+    assert b_child.time_coin_balance == 100  # B 已收回份额(100 - 10 + 10)
+    return a_account, b_account, b_child, task
+
+
+async def test_abandon_after_per_person_approve_no_double_refund(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """B 被逐人确认(DONE)后 OWNER abandon:B 不再退(只动过一次),仅 A 按阶梯退。"""
+    a_account, b_account, b_child, task = await _setup_with_b_done(
+        api_client, seeded_family, db_session
+    )
+    a_headers = _auth_headers(a_account)
+    await db_session.refresh(seeded_family.child)
+    a_before = seeded_family.child.time_coin_balance  # 90(付 10 份额后)
+    b_before = b_child.time_coin_balance              # 100(已结算)
+
+    resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/abandon", headers=a_headers
+    )
+    assert resp.status_code == 200, resp.text
+
+    await db_session.refresh(seeded_family.child)
+    await db_session.refresh(b_child)
+    assert b_child.time_coin_balance == b_before          # B 只在逐人步动过一次
+    assert seeded_family.child.time_coin_balance == a_before + 10  # A 首犯全额退
+    task_row = await task_service.get_task(db_session, task["id"])
+    assert task_row.status == TaskStatus.AVAILABLE.value
+
+
+async def test_expire_after_per_person_approve_no_double_refund(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """B 被逐人确认(DONE)后实例过期:B 不再退(只动过一次),仅 A 全额退。"""
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    a_account, b_account, b_child, task = await _setup_with_b_done(
+        api_client, seeded_family, db_session, expire_at=past
+    )
+    await db_session.refresh(seeded_family.child)
+    a_before = seeded_family.child.time_coin_balance
+    b_before = b_child.time_coin_balance
+
+    processed = await task_service.expire_overdue_tasks(db_session)
+    assert processed >= 1
+    task_row = await task_service.get_task(db_session, task["id"])
+    assert task_row.status == TaskStatus.EXPIRED.value
+
+    await db_session.refresh(seeded_family.child)
+    await db_session.refresh(b_child)
+    assert b_child.time_coin_balance == b_before           # DONE 已结算,过期不再退
+    assert seeded_family.child.time_coin_balance == a_before + 10  # A 全额退
