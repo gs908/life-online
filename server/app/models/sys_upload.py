@@ -47,6 +47,11 @@ class SysUpload(Base, UUIDPrimaryKeyMixin):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # DEV-33 块 E:台账层软删标记(行还在、对象还在,但不再参与业务读取)。
+    # 证据层的软删在 scn_task_proof.deleted_at;本列供后续清理任务(A7.3)使用。
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     family: Mapped["SysFamily"] = relationship(lazy="raise")
     uploader: Mapped["SysAccount | None"] = relationship(lazy="raise")

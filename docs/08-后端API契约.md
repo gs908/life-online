@@ -194,9 +194,17 @@
 | POST | `/scn/task-instances` | 创建模板并生成初始实例 | 父母 |
 | DELETE | `/scn/task-instances/{task_id}` | 删除实例 | 父母 |
 | POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金） | 登录 |
-| POST | `/scn/task-instances/{task_id}/submit` | 孩子提交证明 | 登录 |
+| POST | `/scn/task-instances/{task_id}/submit` | 孩子提交证明（多证据，块 E） | 登录 |
 | POST | `/scn/task-instances/{task_id}/approve` | 父母审核（发 XP、退/扣币） | 父母 |
 | POST | `/scn/task-instances/{task_id}/abandon` | 孩子放弃（罚币） | 登录 |
+| GET | `/scn/task-instances/{task_id}/proofs` | 任务证据列表（未软删，按提交顺序；限本家庭） | 登录 |
+
+**任务证据 `/scn/task-proofs`**（块 E，docs/07 A7.2）：
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/scn/task-proofs/{proof_id}` | 单条证据（404 含已软删；限本家庭） | 登录 |
+| DELETE | `/scn/task-proofs/{proof_id}` | 软删一条证据（`deleted_at` 置位，行保留；仅上传者本人或父母） | 登录 |
 
 **TaskRead**（任务实例唯一形状）：
 
@@ -215,7 +223,8 @@
   "deadline": "datetime | null",
   "expire_at": "datetime | null",
   "required_start_time": "HH:MM:SS | null",     // 来自模板
-  "proof_url": "str | null",                    // 证明图访问 URL（由 object_key 生成）
+  "proof_url": "str | null",                    // 过渡：= proofs[0].url（读取以 proofs 为准）
+  "proofs": [TaskProofRead],                     // 多证据（块 E），未软删，按提交顺序
   "rating": "1-5 | null",
   "review_comment": "str | null",
   "xp_awarded": "int | null",
@@ -233,16 +242,20 @@
 }
 ```
 
+**TaskProofRead** `{ id, task_instance_id, kind: "IMAGE|VIDEO|AUDIO", url: "str | null", size, content_type, created_at }`
+> `kind` 由 `content_type` 推导（image/*→IMAGE，video/*→VIDEO，audio/*→AUDIO）；`url` 按 `object_key` 现算，与 `UploadRead.access_url` 同口径（minio 预签名 / local 稳定路径）。
+
 **TaskCreate**（POST body；= TaskTemplateCreate + 实例参数）：
 `{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?(50, ≥0), type?(DAILY), target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?(15), time_deposit?(10), is_active?(true), target_user_id?, deadline?, expire_at? }`
 
-**TaskSubmitRequest** `{ proof_object_key: str }` — **不是 base64**：先 `POST /sys/uploads`（purpose=`task_proof`，建议带 `task_id`，DEV-30 起 key 含任务实例标识）拿 `object_key`，再提交。`proof_object_key` 做归属校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`，否则 422（防 local 模式下用任意字符串引用/探测他人对象）；提交时把凭证回填绑定到 `task_instance_id`（已绑定其他任务的凭证拒绝复用）。
+**TaskSubmitRequest** `{ proof_object_keys: string[] }`（块 E 起多证据；旧字段 `proof_object_key?: str` 过渡保留，等价单元素列表）— **不是 base64**：先循环 `POST /sys/uploads`（purpose=`task_proof`，建议带同一 `task_id`，DEV-30 起 key 含任务实例标识）逐个拿 `object_key`，再一次提交全部 keys。逐个校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`、content-type 可推导 kind、未被其他任务占用（`sys_upload.task_instance_id` 或既有 `scn_task_proof` 行任一命中即 422，防 local 模式下用任意字符串引用/探测他人对象）；任何一个不合法**整单 422**，不留半提交状态。数量上限 `upload.max_proof_files`（默认 9），重复 key / 空列表 422。提交成功时按所选集合整体落 `scn_task_proof` 行：新 key 建行、本任务已软删的 key 复活、未再携带的旧证据软删（提交即"当前所选集合"）；并把未绑定的凭证回填 `task_instance_id`。
 **TaskApproveRequest** `{ rating: int 1–5（必填）, comment?: str }`
 
 > ⚠️ **规划中变更(尚未实现,以 [12-任务触发与实例化池方案](./12-任务触发与实例化池方案.md) 为准)**:
-> - `TaskSubmitRequest` 由 `proof_object_key` 扩为 `proof_object_keys: string[]`(多图/多视频);`TaskRead` 增 `proofs[]`、`generated_for_date`。
-> - 新增模板级接口 `/scn/task-templates*`、模板库 `/scn/template-library*`、证据 `/scn/task-instances/{id}/proofs`、`/scn/task-proofs/{id}`。
-> - 上述接口/字段**当前后端尚未实现**,前端在实现合入前不得对接(见 §14.2)。
+> - `TaskRead` 增 `generated_for_date`。
+> - 新增模板级接口 `/scn/task-templates*`、模板库 `/scn/template-library*`。
+> - 多证据提交(`proof_object_keys`、`TaskRead.proofs[]`)与证据接口(`/scn/task-instances/{id}/proofs`、`/scn/task-proofs/{id}`)已随块 E(DEV-33/DEV-37)实现合入,前端可对接。
+> - 清理接口 `POST /scn/evidence/purge(-preview)`(docs/07 A7.3)仍未实现。
 
 ## 7. 动态主题样式 `/scn/theme-styles`
 
@@ -346,6 +359,8 @@
 >
 > **任务关联（DEV-30）**：携带 `task_id` 的上传写 `sys_upload.task_instance_id`（数据库层可按任务检索）；未携带的凭证由 `submit` 回填绑定，已绑定其他任务的凭证拒绝复用（422）。
 >
+> **证明文件约束（块 E，`upload` 配置段）**：`purpose=task_proof` 的上传在上传口收口校验——大小 ≤ `max_proof_file_mb`（默认 50MB），content-type须匹配 `allowed_content_types` 白名单（默认 `image/*`、`video/*`、`audio/*` 通配），违规 422。数量上限（`max_proof_files`，默认 9）在任务提交口校验。
+>
 > **URL 行为（MinIO / local 双模式）**：`access_url` 始终按 `object_key` 现算——MinIO 模式返回带过期时间的预签名 URL（`public_url` 不落库）；local 模式返回稳定路径 `{public_base_url}/{object_key}`（`public_url` 落库）。前端两种模式下都只消费 `access_url` / `TaskRead.proof_url`，无需感知存储差异。
 >
 > **存量回归（DEV-20 收尾）**：旧实现曾把 MinIO 预签名 URL 落到 `public_url`，该类 URL 会过期；读取端对 `storage_provider=minio` 的行一律忽略存量 `public_url`、按 `object_key` 现算 `access_url`（选读取端忽略而非一次性迁移：无需对每个环境执行 UPDATE，部署即生效，对 local 行为零影响）。文件序号自增采用「先插库占位、后写对象」：object_key 唯一索引在存储写入前仲裁并发，撞号顺延重试；对象写入失败删除占位行，不留孤儿。
@@ -380,15 +395,15 @@
 - `POST /scn/task-instances/preview-xp`
 - 其余以 `06` 文档"新增"名义列出但不在本文档中的接口
 
-### 14.2 本轮定稿方案（见 `12-任务触发与实例化池方案.md`，尚未实现）
+### 14.2 本轮定稿方案（见 `12-任务触发与实例化池方案.md`）
 
-以下接口/字段已在 12 定稿，但**后端尚未实现**；实现后回填本文档相应章节，未实现前前端禁止对接：
+以下接口/字段已在 12 定稿；实现后回填本文档相应章节，未实现前前端禁止对接：
 
-- `GET/POST /scn/task-templates`、`PATCH /scn/task-templates/{id}`、`POST /{id}/deprecate|activate|regenerate|preview-deposit`
+- `GET/POST /scn/task-templates`、`PATCH /scn/task-templates/{id}`、`POST /{id}/deprecate|activate|regenerate|preview-deposit`（`preview-deposit` 已随 DEV-34 实现）
 - `GET /scn/template-library`、`POST /scn/template-library/{id}/favorite|apply`
-- `GET /scn/task-instances/{id}/proofs`、`GET/DELETE /scn/task-proofs/{id}`
 - `POST /scn/evidence/purge(-preview)`
-- `TaskSubmitRequest` 由 `proof_object_key` 扩为 `proof_object_keys: string[]`；`TaskRead` 增 `generated_for_date`、`proofs[]`
+- `TaskRead` 增 `generated_for_date`
+- ✅ 已随块 E（DEV-33/DEV-37）实现：`GET /scn/task-instances/{id}/proofs`、`GET/DELETE /scn/task-proofs/{id}`；`TaskSubmitRequest.proof_object_keys: string[]`（`proof_object_key` 过渡保留）；`TaskRead.proofs[]`（见 §6）
 
 ---
 
