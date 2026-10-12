@@ -336,6 +336,7 @@ const enUS = {
     proofAlt: 'Proof',
     proofAltWithIndex: 'Proof {{index}}/{{total}}',
     proofVideoAlt: 'Proof video {{index}}/{{total}}',
+    proofAudioAlt: 'Audio proof {{index}}/{{total}}',
     prevProof: 'Previous proof',
     nextProof: 'Next proof',
     proofStripAlt: 'Proof thumbnails',

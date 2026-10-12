@@ -336,6 +336,7 @@ const zhCN = {
     proofAlt: '凭证',
     proofAltWithIndex: '凭证 {{index}}/{{total}}',
     proofVideoAlt: '凭证视频 {{index}}/{{total}}',
+    proofAudioAlt: '音频凭证 {{index}}/{{total}}',
     prevProof: '上一条证据',
     nextProof: '下一条证据',
     proofStripAlt: '证据缩略图列表',

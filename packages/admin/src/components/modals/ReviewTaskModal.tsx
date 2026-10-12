@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import type { ProofKind, TaskRead } from '../../services/api';
-import { ChevronLeft, ChevronRight, Star, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Star, Sparkles, Music } from 'lucide-react';
 
 interface ReviewTaskModalProps {
   isOpen: boolean;
@@ -19,7 +19,7 @@ interface ProofViewItem {
 }
 
 /**
- * 审核弹窗（阶段③+⑥）：证据来自 TaskRead.proofs（DEV-33 块 E 多证据：图集可切换 + 视频播放）；
+ * 审核弹窗（阶段③+⑥）：证据来自 TaskRead.proofs（DEV-33 块 E 多证据：图集可切换 + 视频播放；DEV-43 音频占位/播放控件）；
  * proofs 为空时回退单值 proof_url（过渡字段 = 首个证据，兼容存量数据）。
  * AI 辅助评分走 POST /scn/ai/evaluate-proof，契约要求 image_data_url —— 只对首个图片证据送评，
  * 纯视频/无证据任务跳过 AI（评分只是辅助建议，失败不阻塞人工审核）。
@@ -125,6 +125,18 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
                     className="max-h-64 max-w-full rounded"
                     aria-label={t('reviewTask.proofVideoAlt', { index: activeIndex + 1, total: proofs.length })}
                   />
+                ) : active && active.kind === 'AUDIO' ? (
+                  <div
+                    key={active.url}
+                    className="flex flex-col items-center gap-3 py-6"
+                    aria-label={t('reviewTask.proofAudioAlt', { index: activeIndex + 1, total: proofs.length })}
+                  >
+                    <Music size={40} className="text-slate-400" aria-hidden />
+                    <span className="text-sm text-slate-500">
+                      {t('reviewTask.proofAudioAlt', { index: activeIndex + 1, total: proofs.length })}
+                    </span>
+                    <audio key={active.url} src={active.url} controls preload="metadata" className="w-full max-w-xs" />
+                  </div>
                 ) : (
                   active && (
                     <img
@@ -172,6 +184,10 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
                     >
                       {p.kind === 'VIDEO' ? (
                         <video src={p.url} muted preload="metadata" className="h-full w-full object-cover" />
+                      ) : p.kind === 'AUDIO' ? (
+                        <span className="flex h-full w-full items-center justify-center bg-slate-200" aria-hidden>
+                          <Music size={18} className="text-slate-500" />
+                        </span>
                       ) : (
                         <img src={p.url} alt="" className="h-full w-full object-cover" />
                       )}
