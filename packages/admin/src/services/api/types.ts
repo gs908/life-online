@@ -179,6 +179,19 @@ export interface SeasonHistoryItem {
 
 // ---- 任务 /scn/task-instances（契约 §6）----
 
+export type ProofKind = 'IMAGE' | 'VIDEO' | 'AUDIO';
+
+/** 任务证据（DEV-33 块 E）：scn_task_proof 行读取形状，url 与 UploadRead.access_url 同口径 */
+export interface TaskProofRead {
+  id: string;
+  task_instance_id: string;
+  kind: ProofKind;
+  url: string | null;
+  size: number;
+  content_type: string;
+  created_at: string | null;
+}
+
 export interface TaskRead {
   id: string;
   family_id: string;
@@ -197,7 +210,8 @@ export interface TaskRead {
   deadline: string | null;
   expire_at: string | null;
   required_start_time: string | null; // "HH:MM:SS"
-  proof_url: string | null; // 展示用
+  proof_url: string | null; // 展示用（过渡：= proofs[0].url，读取以 proofs 为准）
+  proofs: TaskProofRead[]; // 全部证据（DEV-33 块 E）
   rating: number | null; // 1-5
   review_comment: string | null;
   xp_awarded: number | null;
@@ -255,9 +269,11 @@ export interface TaskListQuery extends PageQuery {
   assignee_child_id?: string;
 }
 
-/** 提交证明：先 POST /sys/uploads(purpose=task_proof) 拿 object_key（不是 base64） */
+/** 提交证明（DEV-33 块 E 多证据）：先逐个 POST /sys/uploads(purpose=task_proof) 拿 object_key */
 export interface TaskSubmitRequest {
-  proof_object_key: string;
+  proof_object_keys: string[];
+  /** 过渡：旧客户端单值字段，新代码不传 */
+  proof_object_key?: string;
 }
 
 export interface TaskApproveRequest {

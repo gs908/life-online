@@ -259,14 +259,26 @@ const App: React.FC = () => {
 
   const [submitting, setSubmitting] = useState(false);
 
-  /** 提交流：先 POST /sys/uploads(task_proof) 拿 object_key，再 submit（docs/10 §4 阶段③） */
-  const handleSubmitTask = async (file: File) => {
-    if (!selectedTaskId || submitting) return;
+  /**
+   * 提交流（DEV-33 块 E 多证据）：逐个 POST /sys/uploads(task_proof) 收集 object_key，
+   * 再一次性 submit proof_object_keys（docs/10 §4 阶段③）。
+   */
+  const handleSubmitTask = async (files: File[], reportProgress: (percent: number) => void) => {
+    if (!selectedTaskId || submitting || !files.length) return;
     setSubmitting(true);
     try {
-      // DEV-30: 携带 taskId 使 object_key 含任务实例标识（uploadFile 已预留该参数）
-      const uploaded = await api.uploads.uploadFile(file, 'task_proof', selectedTaskId);
-      await api.tasks.submitTask(selectedTaskId, { proof_object_key: uploaded.object_key });
+      // DEV-30: 携带 taskId 使 object_key 含任务实例标识；串行上传让进度条单调递增
+      const objectKeys: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const uploaded = await api.uploads.uploadFileWithProgress(
+          files[i],
+          'task_proof',
+          selectedTaskId,
+          (filePercent) => reportProgress(Math.round(((i + filePercent / 100) / files.length) * 100)),
+        );
+        objectKeys.push(uploaded.object_key);
+      }
+      await api.tasks.submitTask(selectedTaskId, { proof_object_keys: objectKeys });
       setIsSubmitModalOpen(false);
       setSelectedTaskId(null);
       toast(t('toast.taskSubmittedTitle'), t('toast.taskSubmittedMsg'));
