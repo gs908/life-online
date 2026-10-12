@@ -7,13 +7,14 @@ from app.api.v1 import (
     ai,
     auth,
     coins,
+    evidence,
     families,
     health,
     privileges,
     redemptions,
     seasons,
-    tasks,
     task_templates,
+    tasks,
     template_library,
     themes,
     time_config,
@@ -45,4 +46,5 @@ api_router.include_router(privileges.router, tags=["privileges"])
 api_router.include_router(redemptions.router, tags=["redemptions"])
 api_router.include_router(time_config.router, tags=["time-config"])
 api_router.include_router(uploads.router, tags=["uploads"])
+api_router.include_router(evidence.router, tags=["scn-evidence"])
 api_router.include_router(ai.router, tags=["ai"])

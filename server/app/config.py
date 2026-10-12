@@ -181,6 +181,11 @@ class UploadSection(BaseModel):
     - `max_proof_file_mb`:单个证明文件大小上限(上传时校验);
     - `allowed_content_types`:证明文件允许的 content-type 白名单,
       支持 `image/*` 风格通配(按 fnmatch 匹配,大小写不敏感)。
+    - 证据清理(docs/07 A7.3,DEV-44):
+      `purge_default_days` 为 `POST /scn/evidence/purge(-preview)` 的
+      `older_than_days` 缺省账龄口径;
+      `hard_delete_after_days` 为软删(`deleted_at` 置位)后的保留期,
+      定时真删任务只物理删除 `deleted_at` 早于该天数(按创建默认 180 天)的行。
     """
 
     max_proof_files: int = 9
@@ -188,6 +193,8 @@ class UploadSection(BaseModel):
     allowed_content_types: list[str] = Field(
         default_factory=lambda: ["image/*", "video/*", "audio/*"]
     )
+    purge_default_days: int = Field(default=180, ge=1)
+    hard_delete_after_days: int = Field(default=180, ge=1)
 
     def content_type_allowed(self, content_type: str) -> bool:
         base = (content_type or "").split(";")[0].strip().lower()
