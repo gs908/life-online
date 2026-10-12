@@ -282,8 +282,6 @@ export interface TaskTemplateCreate {
   start_time?: string; // "HH:MM"
   duration_minutes?: number; // 15-480，15 的倍数（后端约束 >=1）
   pool_policy?: PoolPolicy; // 默认 REUSE_UNTIL_CONSUMED
-  estimated_minutes?: number;
-  difficulty?: number; // 1-5
   /** 缺省时后端按类型补默认规则（DAILY/TIMED→DAILY@00:00，CHALLENGE→每周一 CRON）；一次性不传 */
   triggers?: TaskTriggerCreate[];
 }
