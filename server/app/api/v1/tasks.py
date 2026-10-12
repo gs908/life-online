@@ -13,12 +13,13 @@ from app.schemas.task import (
     TaskCreate,
     TaskDepositPreviewRequest,
     TaskDepositPreviewResponse,
+    TaskParticipantRead,
     TaskProofRead,
     TaskRead,
     TaskRejectRequest,
     TaskSubmitRequest,
 )
-from app.services import coin_service, proof_service, task_service
+from app.services import coin_service, coop_service, proof_service, task_service
 from app.services.upload_service import build_access_url
 
 router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
@@ -71,6 +72,7 @@ async def _load_proofs(db, task_ids: list[str]) -> dict[str, list[ScnTaskProof]]
 
 
 def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
+    # 块 E(证据)+ 块 F(参与者)语义合并:两条读取口径共存于同一 TaskRead。
     proofs = proofs or []
     proof_reads = [_proof_to_read(p) for p in proofs]
     # 过渡:proof_url = 首个证据的 URL;无证据行时回退到实例上的单值字段(存量数据)
@@ -80,6 +82,17 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
         proof_url = _proof_url(t.proof_object_key)
     else:
         proof_url = None
+    participants = [
+        TaskParticipantRead(
+            account_id=p.account_id,
+            child_id=p.child_id,
+            role=p.role,
+            confirmed_at=p.confirmed_at,
+            deposit_share=p.deposit_share,
+            xp_awarded=p.xp_awarded,
+        )
+        for p in getattr(t, "participants", [])
+    ]
     return TaskRead(
         id=t.id,
         family_id=t.family_id,
@@ -97,6 +110,7 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
         status=t.status,
         deadline=t.deadline,
         expire_at=t.expire_at,
+        generated_for_date=t.generated_for_date,
         required_start_time=_template_value(t, "required_start_time"),
         difficulty=_template_value(t, "difficulty", 2),
         estimated_minutes=_template_value(t, "estimated_minutes"),
@@ -113,6 +127,9 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
         reminder_message=_template_value(t, "reminder_message"),
         reminder_minutes_before=_template_value(t, "reminder_minutes_before", 15),
         time_deposit=t.time_deposit,
+        chain_index=t.chain_index,
+        chain_total=t.chain_total,
+        participants=participants,
         created_at=t.created_at,
         updated_at=t.updated_at,
         creator_id=t.creator_account_id,
@@ -132,6 +149,7 @@ async def list_tasks(
     page_size: int = Query(default=20, ge=1, le=200),
     season_id: str | None = Query(default=None),
     status: TaskStatus | None = Query(default=None),
+    template_id: str | None = Query(default=None),
     assignee_child_id: str | None = Query(default=None),
     assignee_id: str | None = Query(default=None),
 ) -> ApiResponse[PageResult[TaskRead]]:
@@ -139,6 +157,7 @@ async def list_tasks(
     items, total = await task_service.list_tasks(
         db, family_id=user.family_id,
         season_id=season_id, status=status, assignee_id=assignee_child_id or assignee_id,
+        template_id=template_id,
         offset=query.offset, limit=query.page_size,
     )
     proofs_map = await _load_proofs(db, [t.id for t in items])
@@ -170,6 +189,11 @@ async def create_task(
     return ok(_to_read(t))
 
 
+# 注:DEV-36 块 F 的"只建模板不投放实例"入口(POST /scn/task-templates,
+# task_service.create_task_template)已并入块 A 的 task_templates.py 路由:
+# 同 URL 只保留一个 handler(链校验已接线到 task_template_service.create_template,
+# CHAIN 后续步骤模板无默认触发规则,创建后不会长出实例),避免路由遮蔽。
+
 @router.delete("/{task_id}", response_model=ApiResponse[dict], summary="删除任务实例(父母)")
 async def delete_task(task_id: str, db: DBSession, user: GuildMasterOnly) -> ApiResponse[dict]:
     await task_service.delete_task(db, task_id=task_id, family_id=user.family_id)
@@ -182,6 +206,14 @@ async def start_task(
 ) -> ApiResponse[TaskRead]:
     t = await task_service.start_task(db, task_id=task_id, user=user)
     return ok(_to_read(t))
+
+
+@router.post("/{task_id}/join", response_model=ApiResponse[TaskRead], summary="加入 COOP 协作任务(孩子=均摊押金 / 家长=亲子参与)")
+async def join_task(
+    task_id: str, db: DBSession, user: CurrentUser,
+) -> ApiResponse[TaskRead]:
+    t = await coop_service.join_task(db, task_id=task_id, user=user)
+    return ok(await _to_read_with_proofs(db, t))
 
 
 @router.post("/{task_id}/submit", response_model=ApiResponse[TaskRead], summary="孩子提交(多证据)")
