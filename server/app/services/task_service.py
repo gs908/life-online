@@ -170,6 +170,7 @@ async def get_task(db: AsyncSession, task_id: str) -> ScnTaskInstance:
 async def list_tasks(
     db: AsyncSession, *, family_id: str, season_id: str | None = None,
     status: TaskStatus | None = None, assignee_id: str | None = None,
+    template_id: str | None = None,
     offset: int = 0, limit: int | None = None,
 ) -> tuple[list[ScnTaskInstance], int]:
     stmt = select(ScnTaskInstance).where(ScnTaskInstance.family_id == family_id)
@@ -177,6 +178,9 @@ async def list_tasks(
         stmt = stmt.where(ScnTaskInstance.season_id == season_id)
     if status is not None:
         stmt = stmt.where(ScnTaskInstance.status == status)
+    if template_id is not None:
+        # 模板维度筛实例(DEV-35):详情抽屉/重新生成确认弹窗数未消费实例用。
+        stmt = stmt.where(ScnTaskInstance.template_id == template_id)
     if assignee_id is not None:
         child = await _ensure_child(db, family_id=family_id, child_id=assignee_id)
         stmt = stmt.where(ScnTaskInstance.assignee_child_id == child.id)

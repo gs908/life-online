@@ -10,11 +10,14 @@ from app.models.enums import (
     NotificationChannel,
     NotificationStatus,
     NotificationType,
+    PoolPolicy,
     ProofKind,
     TaskCategory,
     TaskStatus,
     TaskType,
     ThemeId,
+    TimedMode,
+    TriggerKind,
     UploadPurpose,
     UserRole,
 )
@@ -31,6 +34,7 @@ from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_proof import ScnTaskProof
 from app.models.scn_task_template import ScnTaskTemplate
 from app.models.scn_task_template_library import ScnTaskTemplateLibrary
+from app.models.scn_task_template_trigger import ScnTaskTemplateTrigger
 from app.models.scn_theme_style import ScnThemeStyle
 from app.models.scn_time_coin import ScnTimeCoin
 from app.models.scn_time_coin_log import ScnTimeCoinLog
@@ -53,6 +57,7 @@ __all__ = [
     "NotificationChannel",
     "NotificationStatus",
     "NotificationType",
+    "PoolPolicy",
     "ProofKind",
     "ScnHiddenQuest",
     "ScnNotification",
@@ -67,6 +72,7 @@ __all__ = [
     "ScnTaskProof",
     "ScnTaskTemplate",
     "ScnTaskTemplateLibrary",
+    "ScnTaskTemplateTrigger",
     "ScnThemeStyle",
     "ScnTimeCoin",
     "ScnTimeCoinLog",
@@ -85,6 +91,8 @@ __all__ = [
     "TaskStatus",
     "TaskType",
     "ThemeId",
+    "TimedMode",
+    "TriggerKind",
     "UploadPurpose",
     "UserRole",
 ]

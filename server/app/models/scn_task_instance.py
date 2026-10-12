@@ -3,10 +3,10 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -19,6 +19,17 @@ if TYPE_CHECKING:
 
 class ScnTaskInstance(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     __tablename__ = "scn_task_instance"
+    # 实例池幂等兜底(docs/12 块 A):同模板同逻辑日至多一条生成实例,
+    # 并发生成靠该 partial unique index 撞库回捞,生成器不再依赖锁。
+    __table_args__ = (
+        Index(
+            "uq_scn_task_instance_template_generated_for_date",
+            "template_id",
+            "generated_for_date",
+            unique=True,
+            postgresql_where=text("generated_for_date IS NOT NULL"),
+        ),
+    )
 
     family_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sys_family.id", ondelete="CASCADE"), nullable=False, index=True
@@ -48,6 +59,9 @@ class ScnTaskInstance(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     )
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    # 实例归属逻辑日(docs/12 块 A):生成器产出实例时锚定"为哪一天生成",
+    # 与 template_id 构成 partial unique index 兜底并发;一次性手工任务为 NULL。
+    generated_for_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     proof_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="1-5 星")
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
