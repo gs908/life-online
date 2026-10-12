@@ -203,6 +203,51 @@ uv run python scripts/diff_pg_schema.py
 - 当前两条 URL 均未设置连接超时;asyncpg/psycopg 用各自默认值。远程库网络抖动场景下
   报错形态是 `WinError 121` / `connection_lost`,与字符集无关。
 
+### 4.4 数据迁移 / 批量导入(拓扑顺序)
+
+> 决策依据(为何保留 DB 级 FK、为何不用 deferrable / `session_replication_role`)
+> 见 `docs/12-外键与迁移策略.md`。本节只放可照抄的命令。
+
+**场景一:整库迁移(Supabase ↔ 本地,推荐)** —— 建表 + 数据一起走,
+FK 顺序由 pg_restore 自行处理,不需要任何 superuser 特权:
+
+```bash
+# 导出(源库连接串;Supabase 用 pooler 连接串 + postgres 角色即可)
+pg_dump --format=custom --no-owner --file=life-online.dump "$SRC_DATABASE_URL"
+
+# 恢复到目标空库(schema + 数据一次性)
+pg_restore --dbname="$DST_DATABASE_URL" --no-owner --exit-on-error life-online.dump
+
+# 终检:目标库 schema 与当前代码零差异
+cd server && uv run python scripts/diff_pg_schema.py
+```
+
+**场景二:仅导数据**(目标库已按 §4 路径 A/B 建好表,数据来自其他库/脚本/ETL):
+
+```bash
+cd server
+
+# 1) 拿导入顺序(被引用表在前)与循环引用回填提示;--reverse 可得删除顺序
+uv run python scripts/fk_topo_order.py > load_order.txt
+
+# 2) 按 load_order.txt 顺序逐表 INSERT / COPY;
+#    回填边标注的列(sys_child.onboarding_step_id)导入时先置 NULL
+
+# 3) 全部表导完后回填循环引用列(按源库数据)
+#    UPDATE sys_child SET onboarding_step_id = ... ;
+
+# 4) 终检
+uv run python scripts/diff_pg_schema.py
+```
+
+分层视图(`--layers`)里同一层的表互不依赖,可并行导入提速。
+若脚本报"不可空的循环引用",按 `docs/12` §3.1 的触发条件先议 deferrable,勿手工绕过。
+
+**禁用手段(在 Supabase 不可用,勿尝试)**:`SET session_replication_role = replica`
+与 `pg_dump --disable-triggers` 都要求 superuser;Supabase `postgres` 角色无此权限
+(本地实测非超用户 `permission denied`),且 replica 模式连 FK 校验一起关闭,
+导入出错会留下静默坏引用。
+
 ## 5. 启动
 
 ```bash
