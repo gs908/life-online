@@ -206,7 +206,7 @@
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
 | GET | `/scn/task-proofs/{proof_id}` | 单条证据（404 含已软删；限本家庭） | 登录 |
-| DELETE | `/scn/task-proofs/{proof_id}` | 软删一条证据（`deleted_at` 置位，行保留；仅上传者本人或父母） | 登录 |
+| DELETE | `/scn/task-proofs/{proof_id}` | 软删一条证据（`deleted_at` 置位，行保留；仅上传者本人或父母）。**状态闸门（DEV-42）**：任务进入 `PENDING_REVIEW` 及之后（`COMPLETED`/`EXPIRED`）返回 409 拒删——审核中的证据集合是审核依据；驳回回到 `IN_PROGRESS` 后重新开放 | 登录 |
 
 **TaskRead**（任务实例唯一形状）：
 
@@ -227,7 +227,7 @@
   "generated_for_date": "date | null",           // 生成器产出实例的逻辑日(见 6A);一次性手工任务为 null
   "required_start_time": "HH:MM:SS | null",     // 来自模板
   "proof_url": "str | null",                    // 过渡：= proofs[0].url（读取以 proofs 为准）
-  "proofs": [TaskProofRead],                     // 多证据（块 E），未软删，按提交顺序
+  "proofs": [TaskProofRead],                     // 多证据（块 E），未软删，按提交顺序（DEV-42：复活/复用行 created_at 随本次提交重排，读取顺序恒等于本次提交顺序，proof_url 恒为 keys[0]）
   "rating": "1-5 | null",
   "review_comment": "str | null",
   "xp_awarded": "int | null",
