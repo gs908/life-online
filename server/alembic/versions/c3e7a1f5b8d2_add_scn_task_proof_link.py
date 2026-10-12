@@ -14,7 +14,7 @@ scn_task_proof 表结构在 d4a5b93011d5 已建齐(family/task/kind/object_key �
 物理外键会把真删流程锁死在证据表上。
 
 Revision ID: c3e7a1f5b8d2
-Revises: a9f3d2c7e1b4
+Revises: d5f8e2b4c6a7
 Create Date: 2026-10-12 00:00:00.000000
 """
 from __future__ import annotations
@@ -25,7 +25,9 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c3e7a1f5b8d2"
-down_revision: Union[str, None] = "a9f3d2c7e1b4"
+# DEV-41 重排后 develop 链头为 d5f8e2b4c6a7(DEV-36 scn_task_participant);
+# 本迁移紧随其后,避免合并后出现 d5f8e2b4c6a7 / d9f4b2e6c1a8 双头。
+down_revision: Union[str, None] = "d5f8e2b4c6a7"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
