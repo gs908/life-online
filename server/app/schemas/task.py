@@ -6,7 +6,15 @@ from typing import Annotated
 
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, Field, model_validator
-from app.models.enums import PoolPolicy, TaskCategory, TaskStatus, TaskType, TimedMode, TriggerKind
+from app.models.enums import (
+    PoolPolicy,
+    TaskCategory,
+    TaskParticipantRole,
+    TaskStatus,
+    TaskType,
+    TimedMode,
+    TriggerKind,
+)
 
 Weekday = Annotated[int, Field(ge=0, le=6)]
 
@@ -124,6 +132,10 @@ class TaskTemplateCreate(BaseModel):
     start_time: time | None = None
     duration_minutes: int | None = Field(default=None, ge=1)
     pool_policy: PoolPolicy = PoolPolicy.REUSE_UNTIL_CONSUMED
+    # ---- CHAIN 链式字段(DEV-36 块 F;仅 CHAIN 类型可用,创建时校验) ----
+    chain_key: str | None = Field(default=None, max_length=64)
+    chain_order: int = Field(default=1, ge=1)
+    chain_total: int = Field(default=1, ge=1)
     # 押金耗时输入(DEV-34 块 C):1 分钟 ~ 24 小时
     estimated_minutes: int | None = Field(default=None, ge=1, le=24 * 60)
     # 难度 1-5(DEV-34 块 C 语义,块 A 契约可空 = 未评星):只影响 XP,不影响押金
@@ -159,6 +171,9 @@ class TaskTemplateRead(BaseModel):
     start_time: time | None = None
     duration_minutes: int | None = None
     pool_policy: PoolPolicy = PoolPolicy.REUSE_UNTIL_CONSUMED
+    chain_key: str | None = None
+    chain_order: int
+    chain_total: int
     estimated_minutes: int | None = None
     difficulty: int | None = None
     deprecated_at: datetime | None = None
@@ -212,6 +227,17 @@ class TaskCreate(TaskTemplateCreate):
     expire_at: datetime | None = None
 
 
+class TaskParticipantRead(BaseModel):
+    """COOP 参与者(非 COOP 任务该列表为空)。"""
+
+    account_id: str
+    child_id: str | None = None
+    role: TaskParticipantRole
+    confirmed_at: datetime | None = None
+    deposit_share: int
+    xp_awarded: int | None = None
+
+
 class TaskRead(BaseModel):
     id: str
     family_id: str
@@ -246,6 +272,11 @@ class TaskRead(BaseModel):
     reminder_message: str | None
     reminder_minutes_before: int
     time_deposit: int
+    # CHAIN:链中位置(1-based)与总步数,链末步骤享受链末 XP 加成
+    chain_index: int | None = None
+    chain_total: int | None = None
+    # COOP 参与者
+    participants: list[TaskParticipantRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

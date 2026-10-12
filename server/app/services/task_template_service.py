@@ -35,7 +35,7 @@ from app.schemas.task import (
     TaskTriggerCreate,
     validate_timed_mode,
 )
-from app.services import coin_service, task_generator_service
+from app.services import chain_service, coin_service, task_generator_service
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +126,17 @@ async def create_template(
     """
     await _ensure_season(db, family_id=family_id, season_id=payload.season_id)
 
+    # CHAIN 链式模板(DEV-36 块 F):链字段完整性校验;后续步骤(chain_order>1)
+    # 不给默认触发规则,创建后不会长出实例(实例由链首投放 + 逐步解锁生成)。
+    await chain_service.validate_chain_template(
+        db,
+        family_id=family_id,
+        task_type=payload.type,
+        chain_key=payload.chain_key,
+        chain_order=payload.chain_order,
+        chain_total=payload.chain_total,
+    )
+
     explicit_deposit = payload.time_deposit
     if explicit_deposit is None and payload.library_id:
         # 模板库套用:用 suggested_time_deposit 播种(显式值,仍受类型范围/配额封顶约束)
@@ -166,6 +177,9 @@ async def create_template(
         start_time=payload.start_time,
         duration_minutes=payload.duration_minutes,
         pool_policy=payload.pool_policy,
+        chain_key=payload.chain_key,
+        chain_order=payload.chain_order,
+        chain_total=payload.chain_total,
         estimated_minutes=payload.estimated_minutes,
         difficulty=payload.difficulty,
     )

@@ -14,6 +14,7 @@ from app.models.enums import TaskStatus
 
 if TYPE_CHECKING:
     from app.models.scn_season import ScnSeason
+    from app.models.scn_task_participant import ScnTaskParticipant
     from app.models.scn_task_template import ScnTaskTemplate
 
 
@@ -74,7 +75,20 @@ class ScnTaskInstance(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     time_deposit: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
 
+    # ---- CHAIN 递进串行(DEV-36 块 F)------------------------------------
+    # 实例化时从模板快照:chain_index = 模板.chain_order(1-based)。
+    # 链末步骤(chain_index == chain_total)审批通过时享受链末 XP 加成。
+    chain_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chain_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     season: Mapped["ScnSeason"] = relationship(back_populates="task_instances", lazy="raise")
     # template 被 _to_read / approve_task 读取(含 create_task 提交后的 refresh 路径),
     # 是 16 处 noload 中唯一确有加载需求的,按语义改 selectin 而非 raise。
     template: Mapped["ScnTaskTemplate | None"] = relationship(lazy="selectin")
+    # COOP 参与者(DEV-36 块 F):非 COOP 任务无记录;COOP 任务至少有主接取人一条
+    participants: Mapped[list["ScnTaskParticipant"]] = relationship(
+        back_populates="task_instance",
+        lazy="selectin",
+        order_by="ScnTaskParticipant.created_at",
+        cascade="all, delete-orphan",
+    )

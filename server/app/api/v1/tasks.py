@@ -11,11 +11,12 @@ from app.schemas.task import (
     TaskCreate,
     TaskDepositPreviewRequest,
     TaskDepositPreviewResponse,
+    TaskParticipantRead,
     TaskRead,
     TaskRejectRequest,
     TaskSubmitRequest,
 )
-from app.services import coin_service, task_service
+from app.services import coin_service, coop_service, task_service
 from app.services.upload_service import build_access_url
 
 router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
@@ -34,6 +35,17 @@ def _to_read(t) -> TaskRead:
             proof_url = build_access_url(t.proof_object_key)
         except Exception:
             proof_url = None
+    participants = [
+        TaskParticipantRead(
+            account_id=p.account_id,
+            child_id=p.child_id,
+            role=p.role,
+            confirmed_at=p.confirmed_at,
+            deposit_share=p.deposit_share,
+            xp_awarded=p.xp_awarded,
+        )
+        for p in getattr(t, "participants", [])
+    ]
     return TaskRead(
         id=t.id,
         family_id=t.family_id,
@@ -67,6 +79,9 @@ def _to_read(t) -> TaskRead:
         reminder_message=_template_value(t, "reminder_message"),
         reminder_minutes_before=_template_value(t, "reminder_minutes_before", 15),
         time_deposit=t.time_deposit,
+        chain_index=t.chain_index,
+        chain_total=t.chain_total,
+        participants=participants,
         created_at=t.created_at,
         updated_at=t.updated_at,
         creator_id=t.creator_account_id,
@@ -121,6 +136,11 @@ async def create_task(
     return ok(_to_read(t))
 
 
+# 注:DEV-36 块 F 的"只建模板不投放实例"入口(POST /scn/task-templates,
+# task_service.create_task_template)已并入块 A 的 task_templates.py 路由:
+# 同 URL 只保留一个 handler(链校验已接线到 task_template_service.create_template,
+# CHAIN 后续步骤模板无默认触发规则,创建后不会长出实例),避免路由遮蔽。
+
 @router.delete("/{task_id}", response_model=ApiResponse[dict], summary="删除任务实例(父母)")
 async def delete_task(task_id: str, db: DBSession, user: GuildMasterOnly) -> ApiResponse[dict]:
     await task_service.delete_task(db, task_id=task_id, family_id=user.family_id)
@@ -132,6 +152,14 @@ async def start_task(
     task_id: str, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:
     t = await task_service.start_task(db, task_id=task_id, user=user)
+    return ok(_to_read(t))
+
+
+@router.post("/{task_id}/join", response_model=ApiResponse[TaskRead], summary="加入 COOP 协作任务(孩子=均摊押金 / 家长=亲子参与)")
+async def join_task(
+    task_id: str, db: DBSession, user: CurrentUser,
+) -> ApiResponse[TaskRead]:
+    t = await coop_service.join_task(db, task_id=task_id, user=user)
     return ok(_to_read(t))
 
 
