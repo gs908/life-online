@@ -76,21 +76,25 @@ async def _top_up(db_session: AsyncSession, seeded_family: SeededFamily, amount:
     await db_session.commit()
 
 
-async def _proof_key(db_session: AsyncSession, seeded_family: SeededFamily, label: str = "p") -> str:
-    """为接取孩子造一条真实归属的 task_proof 上传记录。
+async def _proof_key(
+    db_session: AsyncSession, seeded_family: SeededFamily, label: str = "p", account=None,
+) -> str:
+    """为指定账号(默认接取孩子)造一条真实归属的 task_proof 上传记录。
 
-    DEV-20 起 submit 校验 proof_object_key 归属(存在 + uploader=当前孩子 +
+    DEV-20 起 submit 校验 proof_object_key 归属(存在 + uploader=当前用户 +
     purpose=task_proof),测试不再能用裸字符串 "proofs/1.jpg" 蒙混。
+    DEV-40:COOP 各参与者各自提交,支持为任意账号(二孩/家长)造凭证。
     """
     from uuid import uuid4
 
     from app.models.enums import UploadPurpose
     from app.models.sys_upload import SysUpload
 
-    key = f"proofs/{seeded_family.child_account.id}/{uuid4().hex}-{label}.jpg"
+    uploader = account or seeded_family.child_account
+    key = f"proofs/{uploader.id}/{uuid4().hex}-{label}.jpg"
     db_session.add(SysUpload(
         family_id=seeded_family.family.id,
-        uploader_account_id=seeded_family.child_account.id,
+        uploader_account_id=uploader.id,
         storage_provider="local",
         object_key=key,
         bucket="local",
@@ -1015,13 +1019,21 @@ async def test_coop_deposit_rebalanced_and_xp_split(
     assert seeded_family.child.time_coin_balance == 90  # 80 + 退 10
     assert b_child.time_coin_balance == 90  # 100 - 10
 
-    # A 提交,家长审批:押金按份额退,XP 均摊
+    # A、B 各自提交(DEV-40 §3.1:各参与者交自己的份额),全员已交 → PENDING_REVIEW
     submit_resp = await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
-        json={"proof_object_key": await _proof_key(db_session, seeded_family, "coop")},
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "coop-a")},
         headers=a_headers,
     )
     assert submit_resp.status_code == 200
+    submit_b_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "coop-b", account=b_account)},
+        headers=b_headers,
+    )
+    assert submit_b_resp.status_code == 200, submit_b_resp.text
+    submitted = submit_b_resp.json()["data"]
+    assert submitted["status"] == TaskStatus.PENDING_REVIEW.value
 
     a_xp_before = seeded_family.child.xp
     b_xp_before = b_child.xp
@@ -1085,11 +1097,18 @@ async def test_coop_parent_participates_without_wallet(
     assert roles["PARENT"]["deposit_share"] == 0
     assert roles["PARENT"]["child_id"] is None
 
+    # 孩子、家长各自提交(DEV-40 裁决 Q3:家长交付同样走 proof),全员已交 → PENDING_REVIEW
     await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/submit",
         json={"proof_object_key": await _proof_key(db_session, seeded_family, "pk")},
         headers=a_headers,
     )
+    submit_parent_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "pk-parent", account=seeded_family.parent)},
+        headers=parent_headers,
+    )
+    assert submit_parent_resp.status_code == 200, submit_parent_resp.text
     approve_resp = await api_client.post(
         f"/api/v1/scn/task-instances/{task['id']}/approve",
         json={"rating": 4}, headers=parent_headers,

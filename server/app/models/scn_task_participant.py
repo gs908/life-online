@@ -17,7 +17,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import TaskParticipantRole
+from app.models.enums import TaskParticipantRole, TaskParticipantStatus
 
 if TYPE_CHECKING:
     from app.models.scn_task_instance import ScnTaskInstance
@@ -46,6 +46,13 @@ class ScnTaskParticipant(Base, TimestampMixin, UUIDPrimaryKeyMixin):
 
     role: Mapped[str] = mapped_column(
         String(32), nullable=False, default=TaskParticipantRole.MEMBER
+    )
+    # 参与者子状态(docs/13 定稿版 §3):JOINED/SUBMITTED/DONE/QUIT,与实例状态正交
+    participant_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=TaskParticipantStatus.JOINED,
+        server_default="JOINED",
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 均摊后的押金份额(家长参与者恒为 0);审批/放弃/过期按此结算

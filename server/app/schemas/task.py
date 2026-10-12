@@ -11,6 +11,7 @@ from app.models.enums import (
     ProofKind,
     TaskCategory,
     TaskParticipantRole,
+    TaskParticipantStatus,
     TaskStatus,
     TaskType,
     TimedMode,
@@ -232,6 +233,8 @@ class TaskProofRead(BaseModel):
     """任务证据(DEV-33 块 E):scn_task_proof 行的读取形状。
 
     `url` 按 object_key 现算(minio 预签名/local 稳定路径),与 UploadRead.access_url 同口径。
+    `uploaded_by`(DEV-40,docs/13 §4 裁决 Q3):上传者账号;前端据此为
+    家长参与者提交的证据渲染"家长代交"标注。
     """
 
     id: str
@@ -240,6 +243,7 @@ class TaskProofRead(BaseModel):
     url: str | None = None
     size: int
     content_type: str
+    uploaded_by: str | None = None
     created_at: datetime | None = None
 
 
@@ -249,6 +253,8 @@ class TaskParticipantRead(BaseModel):
     account_id: str
     child_id: str | None = None
     role: TaskParticipantRole
+    # 参与者子状态(docs/13 定稿版 §3):JOINED/SUBMITTED/DONE/QUIT
+    participant_status: TaskParticipantStatus = TaskParticipantStatus.JOINED
     confirmed_at: datetime | None = None
     deposit_share: int
     xp_awarded: int | None = None
@@ -320,8 +326,20 @@ class TaskSubmitRequest(BaseModel):
 
 
 class TaskApproveRequest(BaseModel):
+    """父母审核(docs/13 定稿版 §3.1/§4,DEV-40)。
+
+    - 都不带可选字段 → 整单通过(仅 PENDING_REVIEW;单人任务唯一路径);
+    - `child_id` / `participant_id` → 逐人确认该参与者(家长参与者无 child_id,
+      用 participant_id 定位);入口 IN_PROGRESS/PENDING_REVIEW,守卫=该参与者已 SUBMITTED;
+    - `settle_partial=true` → 部分通过判退收尾(仅 COOP、仅 IN_PROGRESS):
+      已交者退份额结算,未交者按放弃阶梯打折退且不递增放弃计数。
+    """
+
     rating: int = Field(..., ge=1, le=5)
     comment: str | None = None
+    child_id: str | None = None
+    participant_id: str | None = None
+    settle_partial: bool = False
 
 
 class TaskRejectRequest(BaseModel):
