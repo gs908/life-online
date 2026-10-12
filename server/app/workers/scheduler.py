@@ -13,6 +13,11 @@
     扫描 AVAILABLE/IN_PROGRESS 且已过 expire_at 的任务实例,统一切 EXPIRED。
     AVAILABLE 直接过期(不涉及押金);IN_PROGRESS 退 50% 押金、其余 TIMEOUT_PENALTY
     扣罚并发 TASK_EXPIRED 通知(详见 app.services.task_service.expire_overdue_tasks)。
+
+每日 00:20 跑 purge_expired_evidence(A7.3,DEV-44):
+    物理删除软删(`scn_task_proof.deleted_at` / `sys_upload.deleted_at`)超过
+    `upload.hard_delete_after_days`(默认 180 天)的证据 —— 对象存储文件 +
+    台账行 + 证据行(详见 app.services.evidence_cleanup_service.hard_delete_expired)。
 """
 from __future__ import annotations
 
@@ -26,7 +31,12 @@ from sqlalchemy import select
 from app.common.db.session import AsyncSessionLocal
 from app.common.timeutil import today_bj
 from app.models.sys_child import SysChild
-from app.services import coin_service, task_generator_service, task_service
+from app.services import (
+    coin_service,
+    evidence_cleanup_service,
+    task_generator_service,
+    task_service,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +84,15 @@ async def expire_overdue_tasks_job() -> None:
         log.info("expire_overdue_tasks done, processed=%d", processed)
 
 
+async def purge_expired_evidence_job() -> None:
+    """每日 00:20 触发:软删超保留期(默认 180 天)的证据定时真删。"""
+    async with AsyncSessionLocal() as db:
+        try:
+            await evidence_cleanup_service.hard_delete_expired(db)
+        except Exception:
+            log.exception("purge_expired_evidence failed")
+
+
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
     scheduler.add_job(
@@ -96,5 +115,12 @@ def build_scheduler() -> AsyncIOScheduler:
         id="expire_overdue_tasks",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        purge_expired_evidence_job,
+        CronTrigger(hour=0, minute=20),
+        id="purge_expired_evidence",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
     return scheduler

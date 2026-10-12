@@ -51,6 +51,8 @@ storage:
     prefix: ${env:LOCAL_STORAGE_PREFIX:}
 
 # 上传约束(块 E:多证据提交)——证明文件数量/大小/类型白名单,通配符支持 image/* 风格
+# 证据清理(A7.3):purge_default_days 为 purge(-preview) 的默认账龄口径;
+# hard_delete_after_days 为软删后的保留期,定时真删只物理删除软删超过该天数的证据/台账行。
 upload:
   max_proof_files: ${env:UPLOAD_MAX_PROOF_FILES:9}
   max_proof_file_mb: ${env:UPLOAD_MAX_PROOF_FILE_MB:50}
@@ -58,6 +60,8 @@ upload:
     - "image/*"
     - "video/*"
     - "audio/*"
+  purge_default_days: ${env:UPLOAD_PURGE_DEFAULT_DAYS:180}
+  hard_delete_after_days: ${env:UPLOAD_HARD_DELETE_AFTER_DAYS:180}
 
 # AI 能力配置:按能力三分(llm / image / video),各自独立指定 provider、模型与默认参数。
 # - API key 一律经环境变量引用,yaml 不落明文(见 .env.example 的 AI_* 占位)。
