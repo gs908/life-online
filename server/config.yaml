@@ -50,6 +50,15 @@ storage:
     bucket: ${env:LOCAL_STORAGE_BUCKET:local}
     prefix: ${env:LOCAL_STORAGE_PREFIX:}
 
+# 上传约束(块 E:多证据提交)——证明文件数量/大小/类型白名单,通配符支持 image/* 风格
+upload:
+  max_proof_files: ${env:UPLOAD_MAX_PROOF_FILES:9}
+  max_proof_file_mb: ${env:UPLOAD_MAX_PROOF_FILE_MB:50}
+  allowed_content_types:
+    - "image/*"
+    - "video/*"
+    - "audio/*"
+
 # AI 能力配置:按能力三分(llm / image / video),各自独立指定 provider、模型与默认参数。
 # - API key 一律经环境变量引用,yaml 不落明文(见 .env.example 的 AI_* 占位)。
 # - 请求级参数可覆盖默认值:默认值收敛在这里,调用方(含前端经后端)只传业务参数。
@@ -127,3 +136,14 @@ xp:
   timing_penalty: ${env:XP_TIMING_PENALTY:0.8}
   speed_window_minutes: ${env:XP_SPEED_WINDOW_MINUTES:60}
   speed_bonus: ${env:XP_SPEED_BONUS:1.1}
+
+# 任务押金数值(块 C:押金 = 耗时驱动;难度只改 XP 不改押金)。
+# 解析规则:显式值优先 -> clamp(estimated_minutes/reference_minutes, 0.5, 2.0) x 类型默认值
+#           -> clamp 到类型 min/max -> 封顶到 floor(当日配额 x allowance_cap_ratio)。
+# 各类型 (default, min, max) 与难度倍率表为结构化默认,代码内维护(DepositSection/XpSection)。
+deposit:
+  reference_minutes: ${env:DEPOSIT_REFERENCE_MINUTES:30}
+  allowance_cap_ratio: ${env:DEPOSIT_ALLOWANCE_CAP_RATIO:0.5}
+  timeout_refund_ratio: ${env:DEPOSIT_TIMEOUT_REFUND_RATIO:0.5}
+  abandon_full_refund_limit: ${env:DEPOSIT_ABANDON_FULL_REFUND_LIMIT:3}
+  abandon_penalty_refund_ratio: ${env:DEPOSIT_ABANDON_PENALTY_REFUND_RATIO:0.6}

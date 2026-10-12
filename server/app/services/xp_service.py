@@ -10,11 +10,9 @@ from __future__ import annotations
 
 from datetime import datetime, time
 
-from app.config import settings
-from app.config import XpSection
-from app.models.sys_child import SysChild
 from app.common.timeutil import utcnow
-
+from app.config import XpSection, settings
+from app.models.sys_child import SysChild
 
 # ---- 升级曲线 -----------------------------------------------------------
 
@@ -52,10 +50,19 @@ def calculate_rating_multiplier(rating: int | None, cfg: XpSection) -> float:
     return float(cfg.rating_multiplier.get(rating, 1.0))
 
 
+def calculate_difficulty_multiplier(difficulty: int | None, cfg: XpSection) -> float:
+    """难度 1-5 级 -> XP 倍率,缺省(模板无难度/存量数据)按 1.0。只影响 XP,不影响押金。"""
+    if difficulty is None:
+        return 1.0
+    difficulty = max(1, min(5, int(difficulty)))
+    return float(cfg.difficulty_multiplier.get(difficulty, 1.0))
+
+
 def calculate_xp(
     base_xp: int,
     *,
     rating: int | None = None,
+    difficulty: int | None = None,
     started_at: datetime | None = None,
     submitted_at: datetime | None = None,
     required_start_time: time | None = None,
@@ -67,7 +74,7 @@ def calculate_xp(
     cfg: XpSection | None = None,
 ) -> int:
     """
-    最终 XP = base * rating_mul * timing_mul * speed_mul * type_mul * chain_mul
+    最终 XP = base * rating_mul * difficulty_mul * timing_mul * speed_mul * type_mul * chain_mul
     """
     cfg = cfg or settings.xp
     now = now or utcnow()
@@ -76,7 +83,10 @@ def calculate_xp(
     # 1) 星级
     mul *= calculate_rating_multiplier(rating, cfg)
 
-    # 2) 时效:限时任务在 required_start_time 之前完成 -> bonus,之后 -> penalty;非限时 -> 1.0
+    # 2) 难度(模板 difficulty,与星级相乘;不影响押金)
+    mul *= calculate_difficulty_multiplier(difficulty, cfg)
+
+    # 3) 时效:限时任务在 required_start_time 之前完成 -> bonus,之后 -> penalty;非限时 -> 1.0
     if required_start_time is not None:
         deadline = now.replace(
             hour=required_start_time.hour,
@@ -86,19 +96,19 @@ def calculate_xp(
         )
         mul *= cfg.timing_bonus if now <= deadline else cfg.timing_penalty
 
-    # 3) 速度:窗口内完成 -> bonus;窗口外或缺失 -> 1.0
+    # 4) 速度:窗口内完成 -> bonus;窗口外或缺失 -> 1.0
     if started_at is not None and submitted_at is not None:
         elapsed_min = (submitted_at - started_at).total_seconds() / 60
         if 0 < elapsed_min <= cfg.speed_window_minutes:
             mul *= cfg.speed_bonus
 
-    # 4) 任务类型加成
+    # 5) 任务类型加成
     if is_challenge:
         mul *= cfg.challenge_bonus
     if is_hidden:
         mul *= cfg.hidden_bonus
 
-    # 5) 连环任务链末加成
+    # 6) 连环任务链末加成
     if (
         chain_index is not None
         and chain_total is not None

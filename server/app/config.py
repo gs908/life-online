@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+from fnmatch import fnmatch
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -173,6 +174,26 @@ class StorageSection(BaseModel):
     local: StorageLocalSection = Field(default_factory=StorageLocalSection)
 
 
+class UploadSection(BaseModel):
+    """上传约束(DEV-33 块 E:多证据提交)。
+
+    - `max_proof_files`:一次任务提交允许携带的证明文件数上限;
+    - `max_proof_file_mb`:单个证明文件大小上限(上传时校验);
+    - `allowed_content_types`:证明文件允许的 content-type 白名单,
+      支持 `image/*` 风格通配(按 fnmatch 匹配,大小写不敏感)。
+    """
+
+    max_proof_files: int = 9
+    max_proof_file_mb: int = 50
+    allowed_content_types: list[str] = Field(
+        default_factory=lambda: ["image/*", "video/*", "audio/*"]
+    )
+
+    def content_type_allowed(self, content_type: str) -> bool:
+        base = (content_type or "").split(";")[0].strip().lower()
+        return any(fnmatch(base, pattern.strip().lower()) for pattern in self.allowed_content_types)
+
+
 class LLMDefaultParams(BaseModel):
     """LLM 能力默认请求参数(请求级可覆盖)。"""
     temperature: float = 0.7
@@ -298,17 +319,66 @@ class XpSection(BaseModel):
     speed_window_minutes: int = 60
     speed_bonus: float = 1.1
 
+    # 难度系数:1-5 级 -> XP 倍率(只影响 XP,不影响押金)
+    difficulty_multiplier: dict[int, float] = Field(
+        default_factory=lambda: {1: 0.9, 2: 1.0, 3: 1.1, 4: 1.25, 5: 1.4}
+    )
+
+
+class DepositTypeRange(BaseModel):
+    """按任务类型的押金范围(default 默认值 / min 下限 / max 上限)。"""
+
+    default: int
+    min: int
+    max: int
+
+    def clamp(self, value: int) -> int:
+        return max(self.min, min(self.max, value))
+
+
+class DepositSection(BaseModel):
+    """
+    任务押金数值配置(块 C:押金 = 耗时驱动)。
+
+    解析规则(`coin_service.resolve_deposit`):
+    1. 显式值优先(家长手填 / 模板库 suggested_time_deposit 播种);
+    2. 否则按 clamp(estimated_minutes / reference_minutes, 0.5, 2.0) 乘类型默认值四舍五入;
+    3. 结果 clamp 到类型 min/max;
+    4. 最后封顶到 floor(当日配额 * allowance_cap_ratio)。
+    难度(difficulty)只影响 XP,不影响押金。
+    """
+    reference_minutes: int = 30
+    by_type: dict[str, DepositTypeRange] = Field(
+        default_factory=lambda: {
+            "DAILY": DepositTypeRange(default=10, min=5, max=20),
+            "CHALLENGE": DepositTypeRange(default=30, min=15, max=50),
+            "CHAIN": DepositTypeRange(default=20, min=10, max=30),
+            "TIMED": DepositTypeRange(default=25, min=15, max=40),
+            "COOP": DepositTypeRange(default=5, min=0, max=20),
+            "HIDDEN": DepositTypeRange(default=0, min=0, max=0),
+        }
+    )
+    # 押金不得超过当日配额的一定比例(避免孩子永远接不了任务)
+    allowance_cap_ratio: float = 0.5
+    # 限时任务已接取(IN_PROGRESS)超时:退押金比例,其余扣罚
+    timeout_refund_ratio: float = 0.5
+    # 孩子主动放弃:前 N 次全额退,之后按比例退
+    abandon_full_refund_limit: int = 3
+    abandon_penalty_refund_ratio: float = 0.6
+
 
 class Settings(BaseModel):
     app: AppSection
     database: DatabaseSection
     storage: StorageSection
+    upload: UploadSection = Field(default_factory=UploadSection)
     ai: AISection = Field(default_factory=AISection)
     jwt: JWTSection
     wechat: WechatSection
     auth: AuthSection = Field(default_factory=AuthSection)
     redis: RedisSection = Field(default_factory=RedisSection)
     xp: XpSection = Field(default_factory=XpSection)
+    deposit: DepositSection = Field(default_factory=DepositSection)
     dev: DevSection = Field(default_factory=DevSection)
 
 

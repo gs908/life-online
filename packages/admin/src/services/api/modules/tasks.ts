@@ -10,7 +10,10 @@ import type {
   PageResult,
   TaskApproveRequest,
   TaskCreate,
+  TaskDepositPreviewRequest,
+  TaskDepositPreviewResponse,
   TaskListQuery,
+  TaskProofRead,
   TaskRead,
   TaskSubmitRequest,
 } from '../types';
@@ -25,6 +28,13 @@ export const getTask = (taskId: string) =>
 export const createTask = (data: TaskCreate) =>
   request<TaskRead>('/scn/task-instances', { method: 'POST', body: data });
 
+/** 管理端表单实时预览押金（父母权限）：押金 = 耗时驱动，难度不影响押金（DEV-34 块 C） */
+export const previewDeposit = (data: TaskDepositPreviewRequest) =>
+  request<TaskDepositPreviewResponse>('/scn/task-templates/preview-deposit', {
+    method: 'POST',
+    body: data,
+  });
+
 export const deleteTask = (taskId: string) =>
   request<null>(`/scn/task-instances/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
 
@@ -32,12 +42,16 @@ export const deleteTask = (taskId: string) =>
 export const startTask = (taskId: string) =>
   request<TaskRead>(`/scn/task-instances/${encodeURIComponent(taskId)}/start`, { method: 'POST' });
 
-/** 孩子提交证明。proof_object_key 来自 POST /sys/uploads(purpose=task_proof)，不是 base64 */
+/** 孩子提交证明（DEV-33 块 E 多证据）。object_keys 来自 POST /sys/uploads(purpose=task_proof)，不是 base64 */
 export const submitTask = (taskId: string, data: TaskSubmitRequest) =>
   request<TaskRead>(`/scn/task-instances/${encodeURIComponent(taskId)}/submit`, {
     method: 'POST',
     body: data,
   });
+
+/** 任务证据列表（DEV-33 块 E，docs/07 A7.2）：未软删、按提交顺序；TaskRead.proofs 的独立刷新入口 */
+export const listTaskProofs = (taskId: string) =>
+  request<TaskProofRead[]>(`/scn/task-instances/${encodeURIComponent(taskId)}/proofs`);
 
 /** 父母审核（后端发 XP、退/扣币；rating 1-5 必填） */
 export const approveTask = (taskId: string, data: TaskApproveRequest) =>
