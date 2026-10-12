@@ -185,17 +185,19 @@
 
 > `ThemeId` 是**赛季主题枚举**（预设皮肤，前端 `constants/themes.ts` 对应渲染素材）；与第 7 节的动态主题样式 `ThemeStyle` 是两个概念。
 
-## 6. 任务 `/scn/task-instances`
+## 6. 任务 `/scn/task-instances`（路由器前缀 `/scn`，另承载 `/scn/task-templates`）
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
-| GET | `/scn/task-instances?page&page_size&season_id&status&assignee_child_id` | 任务实例分页列表 | 登录 |
+| GET | `/scn/task-instances?page&page_size&season_id&status&template_id&assignee_child_id` | 任务实例分页列表（`template_id` 供模板详情/重新生成确认数未消费实例，DEV-35） | 登录 |
 | GET | `/scn/task-instances/{task_id}` | 详情（限本家庭） | 登录 |
-| POST | `/scn/task-instances` | 创建模板并生成初始实例 | 父母 |
+| POST | `/scn/task-instances` | 创建模板并生成初始实例（CHAIN 仅链首步） | 父母 |
+| POST | `/scn/task-templates` | 只建模板不投放实例（CHAIN 第 2..N 步，DEV-36） | 父母 |
 | DELETE | `/scn/task-instances/{task_id}` | 删除实例 | 父母 |
-| POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金） | 登录 |
+| POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金；COOP 记 OWNER 参与者） | 登录 |
+| POST | `/scn/task-instances/{task_id}/join` | 加入 COOP：孩子均摊押金 / 家长亲子参与（DEV-36） | 登录 |
 | POST | `/scn/task-instances/{task_id}/submit` | 孩子提交证明（多证据，块 E） | 登录 |
-| POST | `/scn/task-instances/{task_id}/approve` | 父母审核（发 XP、退/扣币） | 父母 |
+| POST | `/scn/task-instances/{task_id}/approve` | 父母审核（发 XP、退/扣币；链末 ×1.5、XP 均摊） | 父母 |
 | POST | `/scn/task-instances/{task_id}/abandon` | 孩子放弃（罚币） | 登录 |
 | GET | `/scn/task-instances/{task_id}/proofs` | 任务证据列表（未软删，按提交顺序；限本家庭） | 登录 |
 
@@ -222,6 +224,7 @@
   "status": "AVAILABLE|IN_PROGRESS|PENDING_REVIEW|COMPLETED|EXPIRED",
   "deadline": "datetime | null",
   "expire_at": "datetime | null",
+  "generated_for_date": "date | null",           // 生成器产出实例的逻辑日(见 6A);一次性手工任务为 null
   "required_start_time": "HH:MM:SS | null",     // 来自模板
   "proof_url": "str | null",                    // 过渡：= proofs[0].url（读取以 proofs 为准）
   "proofs": [TaskProofRead],                     // 多证据（块 E），未软删，按提交顺序
@@ -251,10 +254,52 @@
 **TaskSubmitRequest** `{ proof_object_keys: string[] }`（块 E 起多证据；旧字段 `proof_object_key?: str` 过渡保留，等价单元素列表）— **不是 base64**：先循环 `POST /sys/uploads`（purpose=`task_proof`，建议带同一 `task_id`，DEV-30 起 key 含任务实例标识）逐个拿 `object_key`，再一次提交全部 keys。逐个校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`、content-type 可推导 kind、未被其他任务占用（`sys_upload.task_instance_id` 或既有 `scn_task_proof` 行任一命中即 422，防 local 模式下用任意字符串引用/探测他人对象）；任何一个不合法**整单 422**，不留半提交状态。数量上限 `upload.max_proof_files`（默认 9），重复 key / 空列表 422。提交成功时按所选集合整体落 `scn_task_proof` 行：新 key 建行、本任务已软删的 key 复活、未再携带的旧证据软删（提交即"当前所选集合"）；并把未绑定的凭证回填 `task_instance_id`。
 **TaskApproveRequest** `{ rating: int 1–5（必填）, comment?: str }`
 
+## 6A. 任务模板 `/scn/task-templates` 与模板库 `/scn/template-library`（DEV-35 块 A，已实现）
+
+> 模板级接口：只管模板与触发规则，POST 不再强制建实例（创建/改规则/激活后由生成器即时补一次生成）。与 `/scn/task-instances`（实例状态机）分界。
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| GET | `/scn/task-templates?season_id&is_active&type` | 模板列表（含 triggers，不分页） | 登录 |
+| POST | `/scn/task-templates` | 创建模板+触发规则并即时生成 | 父母 |
+| GET | `/scn/task-templates/{id}` | 模板详情 | 登录（限本家庭） |
+| PATCH | `/scn/task-templates/{id}` | 部分更新（triggers 整组替换；`target_child_id` 可改，置 null 清空指派） | 父母 |
+| POST | `/scn/task-templates/{id}/deprecate` | 废弃（停用+审计，既有实例不动） | 父母 |
+| POST | `/scn/task-templates/{id}/activate` | 重新启用并立即补生成 | 父母/管理端 |
+| POST | `/scn/task-templates/{id}/regenerate` | 终结可用/进行中实例并尝试生成 | 父母/管理端 |
+| DELETE | `/scn/task-templates/{id}` | 硬删（**仅无 COMPLETED/EXPIRED 历史实例时可用**，否则 422 引导走 deprecate） | 管理端（家庭 owner） |
+| GET | `/scn/template-library?category&keyword&favorites_only` | 模板库列表（系统预置+家庭自建） | 登录 |
+| GET | `/scn/template-library/{id}` | 库条目详情 | 登录 |
+| POST | `/scn/template-library/{id}/favorite` | 收藏开关（返回切换后状态） | 父母 |
+| POST | `/scn/template-library/{id}/apply` | 用 `suggested_*` 播种新模板并即时生成 | 父母 |
+
+**TaskTemplateCreate**（POST body；`triggers` 缺省时按类型补默认规则：DAILY/TIMED→`DAILY@00:00`，CHALLENGE→每周一 `CRON "0 0 * * 1"`，一次性/CHAIN/COOP 无默认）：
+`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?, type?, target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?, time_deposit?, is_active?, timed_mode?(NONE), deadline_time?, start_time?, duration_minutes?, pool_policy?(REUSE_UNTIL_CONSUMED), estimated_minutes?, difficulty?(1-5), triggers?: [TaskTriggerCreate] }`
+
+**timed_mode 一致性（创建/更新 422）**：`DEADLINE` 需 `deadline_time`；`DURATION` 需 `start_time`+`duration_minutes`；`NONE` 三者皆空。PATCH 对合并后的完整模板复验。
+
+**TaskTriggerCreate** `{ kind: DAILY|WEEKDAYS|MONTHLY|CRON|ONCE, cron_expr?, weekdays?([0-6], 0=周一), day_of_month?(1-31, 月末不足取当月最后一天), generate_at?("HH:MM", 默认 00:00), starts_on?, ends_on?, is_active?(true) }`
+按 kind 校验（422）：`WEEKDAYS` 需非空 weekdays；`MONTHLY` 需 day_of_month；`CRON` 需合法 5 段表达式（校验与匹配同用 APScheduler 语义，day_of_week **0=周一**）；`ONCE` 需 starts_on（该日生成一次）。
+
+**TaskTriggerRead** = TaskTriggerCreate + `{ id, template_id, created_at, updated_at }`。
+**TaskTemplateRead** = TaskTemplateCreate 字段（去 season_id 语义不变）+ `{ id, family_id, season_id, creator_account_id, deprecated_at, deprecated_reason, triggers: [TaskTriggerRead], created_at, updated_at }`。
+**TaskTemplateDeprecate** `{ reason?: str(≤128) }`；**TaskTemplateRegenerate** `{}`（占位）。
+**TemplateLibraryApplyRequest** `{ season_id, target_child_id? }`。
+
+**regenerate 语义（Mars 审查后产品拍板）**：
+- 终结范围 = 未消费三态中的 `AVAILABLE + IN_PROGRESS`；**PENDING_REVIEW 不终结**（孩子已提交待审核的成果保留审核机会）。IN_PROGRESS 终结时全额退押金（不计放弃惩罚）。
+- 待审核实例仍占实例池槽位（D1），存在时**本轮不新建**：响应 `action="kept"`、`new_instance=null`；审核完结（COMPLETED/驳回后完成）后下个触发周期恢复生成。
+- 响应 `data = { template_id, terminalized_instance_ids: string[], action: "created"|"exists"|"kept"|"not_due"|"skipped_expired", new_instance: {id, generated_for_date, status} | null }`；`new_instance` 仅在 `action="created"` 时非空（其余值一律按"未生成新实例"处理）。`exists` 亦会出现在强生成撞当日既有行的路径（如当日实例已消费后 PATCH triggers/activate）。
+- 前端"事前 N"= `GET /scn/task-instances?template_id=X` 按 `AVAILABLE + IN_PROGRESS` 两态 total 求和。
+
+**已知项**：生成器跳过"生成即过期"的当日生成（限时任务在截止时刻过后才到期/创建时不产出注定被过期 job 判死的实例，`action="skipped_expired"`）；`ends_on` 窗口结束后的非限时未消费实例不再顺延也不过期（REUSE_UNTIL_CONSUMED 语义自洽，如需清理属后续产品决策）。
+
+> **收藏实现**：收藏行是本家庭名下一条例外克隆（`meta.favorite_of` 指向原条目），不新增表；`favorites_only=true` 返回收藏行自身，列表项带 `is_favorite` / `favorite_of`。
+
 > ⚠️ **规划中变更(尚未实现,以 [12-任务触发与实例化池方案](./12-任务触发与实例化池方案.md) 为准)**:
-> - `TaskRead` 增 `generated_for_date`。
-> - 新增模板级接口 `/scn/task-templates*`、模板库 `/scn/template-library*`。
-> - 多证据提交(`proof_object_keys`、`TaskRead.proofs[]`)与证据接口(`/scn/task-instances/{id}/proofs`、`/scn/task-proofs/{id}`)已随块 E(DEV-33/DEV-37)实现合入,前端可对接。
+> - ~~`TaskRead` 增 `generated_for_date`~~（✅ DEV-35 已落地）。
+> - ~~模板级接口 `/scn/task-templates*`、模板库 `/scn/template-library*`~~（✅ DEV-35 已实现，见 §6A；`preview-deposit` 仍未实现）。
+> - ~~多证据提交(`proof_object_keys`、`TaskRead.proofs[]`)与证据接口(`/scn/task-instances/{id}/proofs`、`/scn/task-proofs/{id}`)~~ 已随块 E(DEV-33/DEV-37)实现合入,前端可对接。
 > - 清理接口 `POST /scn/evidence/purge(-preview)`(docs/07 A7.3)仍未实现。
 
 ## 7. 动态主题样式 `/scn/theme-styles`
@@ -399,11 +444,10 @@
 
 以下接口/字段已在 12 定稿；实现后回填本文档相应章节，未实现前前端禁止对接：
 
-- `GET/POST /scn/task-templates`、`PATCH /scn/task-templates/{id}`、`POST /{id}/deprecate|activate|regenerate|preview-deposit`（`preview-deposit` 已随 DEV-34 实现）
-- `GET /scn/template-library`、`POST /scn/template-library/{id}/favorite|apply`
+- ~~`GET/POST /scn/task-templates`、`PATCH /scn/task-templates/{id}`、`POST /{id}/deprecate|activate|regenerate`~~（✅ DEV-35 已实现，见 §6A；`preview-deposit` 已随 DEV-34 实现）
+- ~~`GET /scn/template-library`、`POST /scn/template-library/{id}/favorite|apply`~~（✅ DEV-35 已实现，见 §6A）
+- ~~`GET /scn/task-instances/{id}/proofs`、`GET/DELETE /scn/task-proofs/{id}`~~；~~`TaskSubmitRequest.proof_object_keys: string[]`（`proof_object_key` 过渡保留）；`TaskRead.proofs[]`~~（✅ 块 E / DEV-33、DEV-37 已实现，见 §6）
 - `POST /scn/evidence/purge(-preview)`
-- `TaskRead` 增 `generated_for_date`
-- ✅ 已随块 E（DEV-33/DEV-37）实现：`GET /scn/task-instances/{id}/proofs`、`GET/DELETE /scn/task-proofs/{id}`；`TaskSubmitRequest.proof_object_keys: string[]`（`proof_object_key` 过渡保留）；`TaskRead.proofs[]`（见 §6）
 
 ---
 

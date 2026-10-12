@@ -7,7 +7,8 @@ import { Bell } from 'lucide-react';
 
 // API Client（阶段②赛季 + 阶段③任务链路均已接入后端）
 import { api, ApiError } from './services/api';
-import type { TaskCreate, TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserPrivilegeRead } from './services/api';
+import type { AddTaskSubmit } from './components/modals/AddTaskModal';
+import type { TaskCreate, TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserPrivilegeRead, TaskTemplateRead } from './services/api';
 
 // Auth（阶段①：登录态与家庭上下文）
 import { useAuth } from './auth/AuthContext';
@@ -19,6 +20,8 @@ import Header from './components/Header';
 import ChildDashboard from './components/dashboards/ChildDashboard';
 import ParentDashboard from './components/dashboards/ParentDashboard';
 import SeasonHistory from './components/dashboards/SeasonHistory';
+import TaskTemplateManager from './components/TaskTemplateManager';
+import type { TaskTemplateCategoryIntent } from './components/taskTemplateUtils';
 
 // Modals
 import AddTaskModal from './components/modals/AddTaskModal';
@@ -88,6 +91,14 @@ const App: React.FC = () => {
   const [isTimeConfigModalOpen, setIsTimeConfigModalOpen] = useState(false);
   const [isCoinLogsOpen, setIsCoinLogsOpen] = useState(false);
   const [isSeasonConfigModalOpen, setIsSeasonConfigModalOpen] = useState(false);
+
+  // 父母端视图 Tab（DEV-35：任务板 / 任务模板管理，Miss.D「独立 Tab」）
+  const [parentView, setParentView] = useState<'board' | 'templates'>('board');
+  // 任务模板链路：AddTaskModal 双出口（instance/template/update）+ 管理视图重拉信号
+  const [editingTemplate, setEditingTemplate] = useState<TaskTemplateRead | null>(null);
+  const [addModalDefaultCategory, setAddModalDefaultCategory] = useState<TaskTemplateCategoryIntent>('once');
+  const [templateActionBusy, setTemplateActionBusy] = useState(false);
+  const [templatesRefreshSignal, setTemplatesRefreshSignal] = useState(0);
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [pendingQuestId, setPendingQuestId] = useState<string | null>(null);
@@ -189,16 +200,64 @@ const App: React.FC = () => {
 
   // --- HANDLERS（全部走后端；押金/罚币/XP 由后端处理，变更后重拉列表与用户） ---
 
-  const handleAddTask = async (payload: TaskCreate) => {
+  /** @returns 是否创建成功（失败已 toast，弹窗保留） */
+  const handleAddTask = async (payload: TaskCreate): Promise<boolean> => {
     try {
       await api.tasks.createTask(payload);
       setIsAddModalOpen(false);
       toast(t('toast.taskCreatedTitle'), t('toast.taskCreatedMsg'));
       await loadBoard();
+      return true;
     } catch (error) {
       // 422 validation_error 等：表单保留，toast 提示后端字段错误
       showApiError(error, t('toast.taskCreateFailedTitle'));
+      return false;
     }
+  };
+
+  // DEV-35 块 A：AddTaskModal 双出口统一分发（一次性→实例；日常/挑战/限时→模板；编辑→PATCH）
+  const handleTemplateAction = async (action: AddTaskSubmit) => {
+    setTemplateActionBusy(true);
+    try {
+      if (action.mode === 'instance') {
+        const ok = await handleAddTask(action.task);
+        // task-instances 路径同样会落一条模板，仅在创建成功时让管理视图列表重拉
+        if (ok) setTemplatesRefreshSignal(signal => signal + 1);
+        return;
+      }
+      if (action.mode === 'template') {
+        await api.taskTemplates.createTemplate(action.template);
+        setIsAddModalOpen(false);
+        toast(t('toast.templateCreatedTitle'), t('toast.templateCreatedMsg'));
+      } else {
+        await api.taskTemplates.updateTemplate(action.templateId, action.patch);
+        setIsAddModalOpen(false);
+        setEditingTemplate(null);
+        toast(t('toast.templateUpdatedTitle'), t('toast.templateUpdatedMsg'));
+      }
+      setTemplatesRefreshSignal(signal => signal + 1);
+    } catch (error) {
+      // 422（timed_mode 一致性 / 触发规则按 kind 校验）：表单保留，toast 透出后端人话文案
+      showApiError(error, t('toast.templateSaveFailedTitle'));
+    } finally {
+      setTemplateActionBusy(false);
+    }
+  };
+
+  const openCreateModal = (defaultCategory: TaskTemplateCategoryIntent) => {
+    setEditingTemplate(null);
+    setAddModalDefaultCategory(defaultCategory);
+    setIsAddModalOpen(true);
+  };
+
+  const openEditModal = (template: TaskTemplateRead) => {
+    setEditingTemplate(template);
+    setIsAddModalOpen(true);
+  };
+
+  const closeAddModal = () => {
+    setIsAddModalOpen(false);
+    setEditingTemplate(null);
   };
 
   const startQuest = async (id: string) => {
@@ -415,9 +474,37 @@ const App: React.FC = () => {
         ) : (
           <div className="bg-slate-100 min-h-full p-4 md:p-6 lg:p-8">
              <div className="max-w-7xl mx-auto">
+                 {/* 父母端 Tab：任务板 / 任务模板（DEV-35，Miss.D「父母端独立 Tab」） */}
+                 <div className="flex gap-1 mb-4" role="tablist" aria-label={t('parent.management')}>
+                    {([['board', 'parent.tabBoard'], ['templates', 'parent.tabTemplates']] as const).map(([key, labelKey]) => (
+                      <button
+                        key={key}
+                        role="tab"
+                        aria-selected={parentView === key}
+                        onClick={() => setParentView(key)}
+                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
+                          parentView === key
+                            ? 'bg-white text-slate-800 shadow-sm border border-slate-200'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                      >
+                        {t(labelKey)}
+                      </button>
+                    ))}
+                 </div>
                  {showSeasonHistory ? (
                      <SeasonHistory
                         onBack={() => setShowSeasonHistory(false)}
+                     />
+                 ) : parentView === 'templates' ? (
+                     <TaskTemplateManager
+                        seasonId={activeSeason?.id ?? ''}
+                        canHardDelete={Boolean(family && user && family.family.owner_id === user.id)}
+                        onToast={showToast}
+                        onOpenCreate={() => openCreateModal('daily')}
+                        onEditTemplate={openEditModal}
+                        refreshSignal={templatesRefreshSignal}
+                        onInstancesChanged={loadBoard}
                      />
                  ) : (
                      <ParentDashboard
@@ -436,7 +523,7 @@ const App: React.FC = () => {
                         onRetrySeasons={loadSeasons}
                         onOpenSeasonConfig={() => setIsSeasonConfigModalOpen(true)}
                         onViewHistory={() => setShowSeasonHistory(true)}
-                        onOpenAddModal={() => setIsAddModalOpen(true)}
+                        onOpenAddModal={() => openCreateModal('once')}
                         onRecordUsage={handleRecordUsage}
                         onReviewTask={(id) => { setSelectedTaskId(id); setIsReviewModalOpen(true); }}
                         onDeleteTask={handleDeleteTask}
@@ -452,11 +539,14 @@ const App: React.FC = () => {
       {/* --- MODALS --- */}
       <AddTaskModal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onAdd={handleAddTask}
+        onClose={closeAddModal}
+        onSubmit={handleTemplateAction}
         narrativeContext={activeSeason?.narrative_context ?? ''}
         seasonId={activeSeason?.id ?? ''}
         childLevel={childUser.level}
+        submitting={templateActionBusy}
+        editingTemplate={editingTemplate}
+        defaultCategory={addModalDefaultCategory}
       />
 
       <SubmitTaskModal
