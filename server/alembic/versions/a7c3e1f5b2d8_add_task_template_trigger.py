@@ -5,8 +5,13 @@
 expand-only:新表,无存量数据迁移。
 
 Revision ID: a7c3e1f5b2d8
-Revises: e8b2c4f6d9a1
+Revises: a9f3d2c7e1b4
 Create Date: 2026-10-12 00:00:00.000000
+
+链说明(DEV-41 集成):down_revision 原为 e8b2c4f6d9a1,与 develop 侧
+a9f3d2c7e1b4(DEV-34 块 C)形成双头;改为紧随 a9f3d2c7e1b4,合并后全链
+e8b2c4f6d9a1 → a9f3d2c7e1b4 → a7c3e1f5b2d8 → b4d8f2a6c9e1 → c9e2b7d4f1a5
+单头线性。
 """
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "a7c3e1f5b2d8"
-down_revision: Union[str, None] = "e8b2c4f6d9a1"
+down_revision: Union[str, None] = "a9f3d2c7e1b4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
