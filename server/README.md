@@ -206,13 +206,14 @@ uv run python scripts/diff_pg_schema.py
 ### 4.4 数据迁移 / 批量导入(拓扑顺序)
 
 > 决策依据(为何保留 DB 级 FK、为何不用 deferrable / `session_replication_role`)
-> 见 `docs/12-外键与迁移策略.md`。本节只放可照抄的命令。
+> 见 `docs/14-外键与迁移策略.md`。本节只放可照抄的命令。
 
 **场景一:整库迁移(Supabase ↔ 本地,推荐)** —— 建表 + 数据一起走,
 FK 顺序由 pg_restore 自行处理,不需要任何 superuser 特权:
 
 ```bash
-# 导出(源库连接串;Supabase 用 pooler 连接串 + postgres 角色即可)
+# 导出(源库连接串;Supabase 用**会话模式 pooler 5432 或直连**,勿用 6543 事务模式
+# pooler——pg_dump 的会话级命令在事务模式下不可靠,见 §4.2)
 pg_dump --format=custom --no-owner --file=life-online.dump "$SRC_DATABASE_URL"
 
 # 恢复到目标空库(schema + 数据一次性)
@@ -241,7 +242,7 @@ uv run python scripts/diff_pg_schema.py
 ```
 
 分层视图(`--layers`)里同一层的表互不依赖,可并行导入提速。
-若脚本报"不可空的循环引用",按 `docs/12` §3.1 的触发条件先议 deferrable,勿手工绕过。
+若脚本报"不可空的循环引用",按 `docs/14` §3.1 的触发条件先议 deferrable,勿手工绕过。
 
 **禁用手段(在 Supabase 不可用,勿尝试)**:`SET session_replication_role = replica`
 与 `pg_dump --disable-triggers` 都要求 superuser;Supabase `postgres` 角色无此权限

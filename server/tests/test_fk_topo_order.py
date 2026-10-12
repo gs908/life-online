@@ -48,7 +48,7 @@ def _validate_order(
 
 def test_real_metadata_order_is_valid() -> None:
     order, backfill = fk_topo_order.topo_sort(Base.metadata)
-    assert len(order) == 27
+    assert len(order) == 29
     assert order[0] == "sys_family"
     _validate_order(order, Base.metadata, backfill)
 
@@ -92,3 +92,44 @@ def test_not_null_cycle_raises_instead_of_emitting_bad_order() -> None:
     metadata = _make_cycle_metadata(nullable_cycle_column=False)
     with pytest.raises(ValueError, match="deferrable"):
         fk_topo_order.topo_sort(metadata)
+
+
+def test_use_alter_does_not_bypass_nullability_check() -> None:
+    """审查整改(DEV-31):use_alter=True 只是排序优先,不得绕过可空性过滤。
+
+    环上一条 use_alter=True 且 NOT NULL 的边,必须报错而不是输出"先置 NULL"
+    的不可行回填方案。
+    """
+    metadata = MetaData()
+    Table(
+        "a", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("b_id", String(36), ForeignKey("b.id", use_alter=True), nullable=False),
+    )
+    Table(
+        "b", metadata,
+        Column("id", String(36), primary_key=True),
+        Column("a_id", String(36), ForeignKey("a.id"), nullable=False),
+    )
+    with pytest.raises(ValueError, match="deferrable"):
+        fk_topo_order.topo_sort(metadata)
+
+
+def test_cli_modes_emit_valid_output(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """--reverse / --layers 两种输出模式:行集合与正向一致、格式正确。"""
+    forward, backfill = fk_topo_order.topo_sort(Base.metadata)
+
+    monkeypatch.setattr(sys, "argv", ["fk_topo_order.py", "--reverse"])
+    fk_topo_order.main()
+    reversed_out = capsys.readouterr().out.splitlines()
+    assert [ln for ln in reversed_out if not ln.startswith("#")] == list(reversed(forward))
+
+    monkeypatch.setattr(sys, "argv", ["fk_topo_order.py", "--layers"])
+    fk_topo_order.main()
+    layers_out = capsys.readouterr().out
+    assert layers_out.count("\n") >= 6
+    assert "第 1 层: sys_family" in layers_out
+    # 分层视图不丢表:去掉表名外的分隔后,表数量与正向一致
+    named = [part.strip() for ln in layers_out.splitlines() if ln.startswith("第")
+             for part in ln.split(":", 1)[1].split(",")]
+    assert sorted(named) == sorted(forward)

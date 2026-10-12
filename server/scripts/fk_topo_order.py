@@ -9,13 +9,13 @@
 - ``--layers``:分层视图,同层表互不依赖,可并行导入。
 
 **循环引用的处理**:当前模型存在一个真实的表间环
-(``sys_child`` → ``scn_onboarding_step`` → ``scn_task_template`` → ``sys_child``,
-即 ``sys_child`` 上两处 ``use_alter=True`` 外键对应的环)。环上的外键列全部
-可空(``SET NULL``),脚本自动选出"回填边":导入时这些列先置 NULL,其余表按
-输出的拓扑顺序导入,全部完成后再回填这些列。回填边优先取 ``use_alter=True``
-的外键——DDL 建表顺序的破环边同时充当数据导入的破环边,语义一致。
-若未来出现**不可空**的环(置 NULL 走不通),脚本会明确报错并提示改用
-deferrable 约束——裁决依据见 docs/12-外键与迁移策略.md。
+(``sys_child`` → ``scn_onboarding_step`` → ``scn_task_template`` → ``sys_child``;
+``sys_child.onboarding_step_id`` 即环上那处 ``use_alter=True`` 外键)。环上的外键列
+全部可空(``SET NULL``),脚本自动选出"回填边":导入时这些列先置 NULL,其余表按
+输出的拓扑顺序导入,全部完成后再回填这些列。回填边**只在可空列**中选取,
+其中 ``use_alter=True`` 的边优先——DDL 建表顺序的破环边同时充当数据导入的
+破环边,语义一致。若环上没有可空列(置 NULL 走不通),脚本会明确报错并提示
+改用 deferrable 约束——裁决依据见 docs/14-外键与迁移策略.md。
 
 背景:项目保留数据库级 FK,批量导入不使用 ``session_replication_role = replica``
 (Supabase postgres 角色无权限)也不引入 deferrable 约束,统一走拓扑顺序。
@@ -129,16 +129,15 @@ def _tarjan_sccs(nodes: list[str], edges: dict[Edge, bool]) -> list[list[str]]:
 
 
 def _break_scc(scc: list[str], edges: dict[Edge, bool], metadata: MetaData) -> list[Edge]:
-    """在强连通分量内选"回填边":优先 use_alter 边,其次字典序第一条可空边。
+    """在强连通分量内选"回填边":只在**可空列**的边中选取,use_alter 仅作优先排序。
 
     每移除一条边就重算剩余子图的强连通性,直到分量被拆成无环子图。
     """
     members = set(scc)
     intra = {e: ua for e, ua in edges.items() if e[0] in members and e[2] in members}
-    sub_nodes = scc
     chosen: list[Edge] = []
     while True:
-        sub_sccs = [c for c in _tarjan_sccs(sub_nodes, intra) if len(c) > 1]
+        sub_sccs = [c for c in _tarjan_sccs(scc, intra) if len(c) > 1]
         if not sub_sccs:
             return chosen
         # 找仍成环的分量,继续破环
@@ -146,13 +145,11 @@ def _break_scc(scc: list[str], edges: dict[Edge, bool], metadata: MetaData) -> l
         candidates = sorted(
             e for e, _ in intra.items()
             if e[0] in cyclic_members and e[2] in cyclic_members
+            and metadata.tables[e[0]].columns[e[1]].nullable
         )
+        # use_alter 边优先,但永远不出可空过滤——不可空环在此显式报错
         use_alter_edges = [e for e in candidates if intra[e]]
-        nullable_edges = [
-            e for e in candidates
-            if metadata.tables[e[0]].columns[e[1]].nullable
-        ]
-        pick_from = use_alter_edges or nullable_edges
+        pick_from = use_alter_edges or candidates
         if not pick_from:
             stuck = ", ".join(sorted(cyclic_members))
             raise ValueError(
@@ -162,7 +159,6 @@ def _break_scc(scc: list[str], edges: dict[Edge, bool], metadata: MetaData) -> l
         edge = pick_from[0]
         chosen.append(edge)
         del intra[edge]
-        sub_nodes = [n for n in sub_nodes if n in intra or True]  # 节点集不变
 
 
 def topo_sort(metadata: MetaData) -> tuple[list[str], list[Edge]]:
@@ -204,8 +200,9 @@ def topo_sort(metadata: MetaData) -> tuple[list[str], list[Edge]]:
 def _format_layers(order: list[str], backfill: list[Edge], edges: dict[Edge, bool]) -> str:
     """分层视图:第 n 层的表,其(未被回填的)父表都在更早层。"""
     depth: dict[str, int] = {}
+    backfill_set = set(backfill)
     for name in order:
-        parents = {p for (c, _col, p) in edges if c == name and (c, _col, p) not in set(backfill)}
+        parents = {p for (c, _col, p) in edges if c == name and (c, _col, p) not in backfill_set}
         depth[name] = 1 + max((depth[p] for p in parents if p in depth), default=-1)
     max_depth = max(depth.values())
     lines = []
@@ -231,6 +228,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Windows 控制台默认 GBK,强制 UTF-8 避免中文输出/重定向落盘乱码(同 diff_pg_schema.py)
+    if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     args = parse_args()
     order, backfill = topo_sort(Base.metadata)
     edges = _fk_edges(dict(Base.metadata.tables))
