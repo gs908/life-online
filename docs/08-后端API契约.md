@@ -208,6 +208,18 @@
 | GET | `/scn/task-proofs/{proof_id}` | 单条证据（404 含已软删；限本家庭） | 登录 |
 | DELETE | `/scn/task-proofs/{proof_id}` | 软删一条证据（`deleted_at` 置位，行保留；仅上传者本人或父母）。**状态闸门（DEV-42）**：任务进入 `PENDING_REVIEW` 及之后（`COMPLETED`/`EXPIRED`）返回 409 拒删——审核中的证据集合是审核依据；驳回回到 `IN_PROGRESS` 后重新开放 | 登录 |
 
+**证据清理 `/scn/evidence`**（A7.3，DEV-44）：
+
+| 方法 | 路径 | 说明 | 鉴权 |
+|------|------|------|------|
+| POST | `/scn/evidence/purge-preview` | 清理预览：统计将清理的证据/文件（数量、占用空间、items 截断 200 条），**不执行删除** | 父母（管理端/队长口径，限本家庭） |
+| POST | `/scn/evidence/purge` | 执行清理：默认软删到期证据（`scn_task_proof.deleted_at` + `sys_upload.deleted_at` 置位，行与对象保留）；`hard_delete=true` 时立即物理删除（对象存储文件 + 台账行 + 证据行） | 父母（同上） |
+
+- 请求体：`{ "older_than_days"?: int(1..3650，缺省取配置 upload.purge_default_days=180), "proof_ids"?: string[](显式子集，仍限本家庭、仅未软删行；空数组 422), "hard_delete"?: bool(仅 purge，默认 false) }`。
+- 预览响应 `data`：`{ older_than_days, evidence_count, upload_count, total_size, total_size_mb, items: [{proof_id, task_instance_id, object_key, kind, size, content_type, created_at}] }`；purge 响应 `data`：`{ mode: "soft"|"hard", proofs, uploads, objects, failed_objects, items }`。
+- 候选口径：本家庭未软删证据且 `created_at` 早于账龄截止（`proof_ids` 指定时优先）。仍有未软删证据引用的对象一律不动（活跃引用保护）。
+- **定时真删**：调度器每日 00:20 扫描软删超过 `upload.hard_delete_after_days`（默认 180 天，可配）的证据，物理删除对象存储文件 + 台账行（+证据行）；先删对象后删行，对象删除失败跳过待下周期重试。不走上述两个接口。
+
 **TaskRead**（任务实例唯一形状）：
 
 ```jsonc
@@ -300,7 +312,7 @@
 > - ~~`TaskRead` 增 `generated_for_date`~~（✅ DEV-35 已落地）。
 > - ~~模板级接口 `/scn/task-templates*`、模板库 `/scn/template-library*`~~（✅ DEV-35 已实现，见 §6A；`preview-deposit` 仍未实现）。
 > - ~~多证据提交(`proof_object_keys`、`TaskRead.proofs[]`)与证据接口(`/scn/task-instances/{id}/proofs`、`/scn/task-proofs/{id}`)~~ 已随块 E(DEV-33/DEV-37)实现合入,前端可对接。
-> - 清理接口 `POST /scn/evidence/purge(-preview)`(docs/07 A7.3)仍未实现。
+> - ~~清理接口 `POST /scn/evidence/purge(-preview)`(docs/07 A7.3)仍未实现~~（✅ DEV-44 已实现，见 §6「证据清理 `/scn/evidence`」；前端可对接）。
 
 ## 7. 动态主题样式 `/scn/theme-styles`
 
@@ -447,7 +459,7 @@
 - ~~`GET/POST /scn/task-templates`、`PATCH /scn/task-templates/{id}`、`POST /{id}/deprecate|activate|regenerate`~~（✅ DEV-35 已实现，见 §6A；`preview-deposit` 已随 DEV-34 实现）
 - ~~`GET /scn/template-library`、`POST /scn/template-library/{id}/favorite|apply`~~（✅ DEV-35 已实现，见 §6A）
 - ~~`GET /scn/task-instances/{id}/proofs`、`GET/DELETE /scn/task-proofs/{id}`~~；~~`TaskSubmitRequest.proof_object_keys: string[]`（`proof_object_key` 过渡保留）；`TaskRead.proofs[]`~~（✅ 块 E / DEV-33、DEV-37 已实现，见 §6）
-- `POST /scn/evidence/purge(-preview)`
+- ~~`POST /scn/evidence/purge(-preview)`~~（✅ DEV-44 已实现，见 §6「证据清理 `/scn/evidence`」）
 
 ---
 
