@@ -275,6 +275,39 @@ status: PENDING_REVIEW
 POST /api/v1/scn/task-instances/{id}/expire     (内部 worker 调;Admin 手动)
 ```
 
+## 11.1 COOP 参与者子状态层(DEV-40,docs/13 定稿版)
+
+实例级 `status` 之上,`scn_task_participant.participant_status` 表达"各参与者
+各自推进到哪一步"(正交新层,实例状态机不动):
+
+```
+participant_status: JOINED (join / start,= confirmed_at 语义)
+  → SUBMITTED           (参与者各自 submit,proof 落本人 uploaded_by;
+                         家长参与者同样走 proof,前端按 uploaded_by 标"家长代交")
+  → DONE                (家长逐人 approve,押金即时退份额)
+  → QUIT                (leave:按当日放弃阶梯退、递增放弃计数;
+                         或部分通过判退:同阶梯退、不递增计数)
+```
+
+实例级映射与审批三形态:
+
+```
+submit(COOP):全员已交(无 JOINED)→ PENDING_REVIEW;否则保持 IN_PROGRESS
+              并发 COOP_PARTIAL_SUBMITTED 通知(主接取人 + 未交者)
+approve 带 child_id / participant_id(逐人确认):
+  入口 = IN_PROGRESS 或 PENDING_REVIEW,守卫 = 该参与者 SUBMITTED;
+  押金即时退份额;全员 DONE → 聚合 COMPLETED,XP 此时一次结算
+approve 带 settle_partial=true(部分通过判退,仅 IN_PROGRESS 且存在 SUBMITTED):
+  已交者退份额结算,未交者按放弃阶梯打折退(不递增放弃计数),
+  XP 按交付孩子数一次结算,实例终结 COMPLETED;发 COOP_PARTIAL_SETTLED 通知
+approve 都不带(整单通过):仅 PENDING_REVIEW(现行为);
+  XP 分母 = 最终交付的孩子参与者数(家长不入分母,裁决 Q4——对旧行为的修改)
+reject(COOP):SUBMITTED 参与者回 JOINED、proof 保留;DONE 者不受影响,不动押金/XP
+```
+
+XP 结算时序:押金逐人即时结算;**XP 延后到聚合终结**(整单/判退收尾/全员 DONE
+三形态共用同一套代码,分母=交付孩子数)一次算清——逐人时点无法预知最终分母。
+
 ## 12. 时间币补充
 
 ### 12.1 强制重置(Admin)

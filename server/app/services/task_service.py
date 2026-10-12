@@ -21,6 +21,7 @@ from app.models.enums import (
     NotificationStatus,
     NotificationType,
     TaskParticipantRole,
+    TaskParticipantStatus,
     TaskStatus,
     TaskType,
     UploadPurpose,
@@ -362,16 +363,21 @@ async def submit_task(
     proof_object_keys: list[str] | None = None,
     proof_object_key: str | None = None,
 ) -> ScnTaskInstance:
-    """孩子提交:状态切 PENDING_REVIEW,按所选文件集合创建 scn_task_proof 行。
+    """参与者提交(docs/13 定稿版 §4,DEV-40 扩展:任意参与者可为自己提交)。
 
     多证据(DEV-33 块 E):`proof_object_keys` 是主入口;`proof_object_key`
     为旧客户端过渡字段(等价单元素列表)。逐个校验(存在、属于当前用户、
     purpose=task_proof、未被其他任务占用、kind 可推导)后整体落库:
 
-    - 不在本次集合中的本任务旧证据 → 软删(提交即"当前所选集合",驳回重交
-      时旧图自动退出审核视图,也规避 object_key 唯一约束);
-    - 集合中已存在且软删的本任务证据 → 复活;
-    - 其余 → 新建 scn_task_proof 行,并把 sys_upload.task_instance_id 回填绑定。
+    - **COOP**:提交者必须是已确认参与者(孩子或家长,裁决 Q3:家长交付同样
+      走 proof);proof 行 `uploaded_by` = 提交者;收缩/复活只作用于**本人**
+      名下的证据行(他人已交的证据不动);本人 `participant_status → SUBMITTED`;
+      全员已交 → 实例 `PENDING_REVIEW`,否则站内通知主接取人与未交者
+      (`COOP_PARTIAL_SUBMITTED`)。
+    - **单人**:现行为不变(接取人提交 → PENDING_REVIEW)。
+
+    不在本次集合中的本人旧证据 → 软删(提交即"当前所选集合");集合中已存在
+    且软删的本人证据 → 复活;其余 → 新建行并回填 sys_upload.task_instance_id。
     """
     keys = [k for k in (proof_object_keys or []) if k]
     if not keys and proof_object_key:
@@ -384,12 +390,27 @@ async def submit_task(
     if len(keys) > max_files:
         raise ValidationError(f"证明文件数量超过上限 {max_files}")
 
-    child = await _account_child(db, user)
+    role_value = _enum_value(user.role)
     task = await get_task(db, task_id)
     if task.family_id != user.family_id:
         raise PermissionDeniedError("只能操作自己家庭的任务")
-    if task.assignee_child_id != child.id:
-        raise PermissionDeniedError("你不是该任务的接取人")
+
+    coop = coop_service.is_coop(task)
+    participant: ScnTaskParticipant | None = None
+    child: SysChild | None = None
+    if coop and role_value == UserRole.GUILD_MASTER.value:
+        # 亲子协作:家长参与者为自己交卷(无 child_id,按账号定位)
+        participant = coop_service.find_participant(task, account_id=user.id)
+        if participant is None or participant.confirmed_at is None:
+            raise PermissionDeniedError("你不是该协作任务的参与者")
+    else:
+        child = await _account_child(db, user)
+        if coop:
+            participant = coop_service.find_participant(task, child_id=child.id)
+            if participant is None or participant.confirmed_at is None:
+                raise PermissionDeniedError("你不是该协作任务的参与者")
+        elif task.assignee_child_id != child.id:
+            raise PermissionDeniedError("你不是该任务的接取人")
     if task.status != TaskStatus.IN_PROGRESS:
         raise ConflictError(f"当前状态 {_enum_value(task.status)},无法提交")
 
@@ -425,21 +446,26 @@ async def submit_task(
             raise ValidationError(f"证明文件 {key} 已被其他任务占用,请重新上传")
 
     key_set = set(keys)
-    # 1) 收缩:本任务不在本次集合中的证据软删,集合内的复活
+    # 1) 收缩:本人在本任务不在本次集合中的证据软删,集合内的复活。
+    #    COOP 下只动本人名下(uploaded_by=当前提交者)的行——队友已交的证据不属于
+    #    本次提交集合,不能被顺带软删(docs/13 §4 各参与者各自提交)。
     task_proof_rows = (
         await db.execute(
-            select(ScnTaskProof).where(ScnTaskProof.task_instance_id == task.id)
+            select(ScnTaskProof).where(
+                ScnTaskProof.task_instance_id == task.id,
+                ScnTaskProof.uploaded_by == user.id,
+            )
         )
     ).scalars().all()
     for row in task_proof_rows:
         if row.object_key in key_set:
-            row.deleted_at = None  # 复用/复活本任务已有的证据行
+            row.deleted_at = None  # 复用/复活本人已有的证据行
         else:
             row.deleted_at = utcnow()
     # 2) 台账回填绑定 + 新建证据行。
     #    created_at 按提交顺序显式加微秒偏移:同一事务里 server_default now()
     #    会给出相同时间戳,排序退化为随机 UUID;显式错开才能保证读取端
-    #    (ORDER BY created_at, id)稳定还原孩子的提交顺序。
+    #    (ORDER BY created_at, id)稳定还原提交顺序。
     now = utcnow()
     for idx, key in enumerate(keys):
         upload = uploads_by_key[key]
@@ -457,34 +483,182 @@ async def submit_task(
                 created_at=now + timedelta(microseconds=idx),
             ))
 
-    task.status = TaskStatus.PENDING_REVIEW
     task.proof_object_key = keys[0]  # 过渡字段:首个证据,读取以 scn_task_proof 为准
     task.submitted_at = now
-    task.abandon_count_at_submit = child.daily_abandon_count
+    if child is not None:
+        task.abandon_count_at_submit = child.daily_abandon_count
+
+    if coop:
+        participant.participant_status = TaskParticipantStatus.SUBMITTED.value
+        if coop_service.all_delivered(task):
+            task.status = TaskStatus.PENDING_REVIEW
+        else:
+            # 部分交卷:提醒主接取人与未交者(docs/13 §6)
+            _notify_coop_participants(
+                db, task,
+                type_=NotificationType.COOP_PARTIAL_SUBMITTED,
+                recipient_participants=[
+                    p for p in task.participants
+                    if p.account_id != user.id
+                    and coop_service.participant_status_of(p) == TaskParticipantStatus.JOINED
+                ] + [
+                    p for p in task.participants
+                    if p.role == TaskParticipantRole.OWNER and p.account_id != user.id
+                ],
+                title="协作任务有人交卷",
+                body=f"任务「{task.title}」有参与者已提交,等待其余参与者完成。",
+                payload={
+                    "task_instance_id": task.id,
+                    "submitted_account_id": user.id,
+                    "pending_count": len(coop_service.undelivered_participants(task)),
+                },
+            )
+    else:
+        task.status = TaskStatus.PENDING_REVIEW
     await db.commit()
     await db.refresh(task)
     return task
 
 
-async def approve_task(
-    db: AsyncSession, *, task_id: str, family_id: str, rating: int, comment: str | None = None,
+def _notify_coop_participants(
+    db: AsyncSession, task: ScnTaskInstance, *, type_: NotificationType,
+    recipient_participants: list[ScnTaskParticipant],
+    title: str, body: str, payload: dict | None = None,
+) -> None:
+    """COOP 参与者站内通知(INAPP 直写即达,与 _notify_task_expired 同口径)。"""
+    for account_id in dict.fromkeys(p.account_id for p in recipient_participants):
+        if not account_id:
+            continue
+        db.add(ScnNotification(
+            family_id=task.family_id,
+            recipient_account_id=account_id,
+            channel=NotificationChannel.INAPP,
+            type=type_,
+            title=title,
+            body=body,
+            payload=payload or {},
+            status=NotificationStatus.SENT,
+            sent_at=utcnow(),
+        ))
+
+
+async def _settle_coop_xp(
+    db: AsyncSession, task: ScnTaskInstance, *, final_xp: int, assignee: SysChild,
+) -> tuple[dict, list]:
+    """COOP XP 一次性结算(docs/13 定稿版 §6,DEV-40)。
+
+    分母 = **最终交付的孩子参与者数**(裁决 Q4:家长 SUBMITTED 不入分母、
+    未交付/退出的孩子不分)。XP 在聚合终结时(整单通过 / 部分通过判退收尾 /
+    全员 DONE)一次算清——逐人 approve 时点无法预知最终分母,提前落账必错。
+    """
+    delivered = coop_service.delivered_children(task)
+    xp_shares = coop_service.split_evenly(final_xp, len(delivered)) if delivered else []
+    xp_results: list[dict] = []
+    unlocked_privileges: list = []
+    for i, p in enumerate(delivered):
+        share = xp_shares[i]
+        p_child = await db.get(SysChild, p.child_id)
+        if p_child is None:
+            continue
+        info = xp_service.apply_xp_and_level(p_child, share)
+        p.xp_awarded = share
+        xp_results.append(info)
+        unlocked = await privilege_service.unlock_for_user(db, p_child)
+        unlocked_privileges.extend(unlocked)
+    level_info = xp_results[0] if xp_results else xp_service.apply_xp_and_level(assignee, 0)
+    return level_info, unlocked_privileges
+
+
+async def _approve_coop_participant(
+    db: AsyncSession, task: ScnTaskInstance, *, family_id: str, rating: int,
+    comment: str | None, child_id: str | None, participant_id: str | None,
 ) -> tuple[ScnTaskInstance, SysChild, dict]:
-    """父母审核:状态切 COMPLETED,发 XP + 退押金。行锁(get_task_for_update)
-    保证与 COOP join / 并发双审批互斥。"""
-    task = await get_task_for_update(db, task_id)
-    if task.family_id != family_id:
-        raise PermissionDeniedError("只能审核自己家庭的任务")
-    if task.status != TaskStatus.PENDING_REVIEW:
-        raise ConflictError(f"当前状态 {_enum_value(task.status)},无法审核")
-    if not task.assignee_child_id:
-        raise ValidationError("任务没有接取人")
+    """逐人确认(docs/13 定稿版 §3.1):带 child_id / participant_id 的 approve。
+
+    入口状态 = IN_PROGRESS 或 PENDING_REVIEW,守卫 = 该参与者 SUBMITTED。
+    押金即时结算(退份额);XP 不在此结算,延后到聚合终结一次算清(§6)。
+    全员 DONE → 实例聚合 COMPLETED 并执行 XP 结算。
+    """
+    if task.status not in (TaskStatus.IN_PROGRESS, TaskStatus.PENDING_REVIEW):
+        raise ConflictError(f"当前状态 {_enum_value(task.status)},无法逐人确认")
+    participant = coop_service.find_participant(
+        task, child_id=child_id, participant_id=participant_id,
+    )
+    if participant is None or participant.confirmed_at is None:
+        raise NotFoundError("该任务没有此参与者")
+    status = coop_service.participant_status_of(participant)
+    if status == TaskParticipantStatus.DONE:
+        raise ConflictError("该参与者已确认过")
+    if status != TaskParticipantStatus.SUBMITTED:
+        raise ConflictError("该参与者尚未提交,无法逐人确认")
+
+    participant.participant_status = TaskParticipantStatus.DONE.value
+    refunded_now = 0
+    if participant.child_id:
+        p_child = await db.get(SysChild, participant.child_id)
+        if p_child is not None and participant.deposit_share > 0:
+            p_child.time_coin_balance += participant.deposit_share
+            await coin_service.record_transaction(
+                db,
+                child=p_child,
+                type=CoinTransactionType.TASK_REFUND,
+                amount=participant.deposit_share,
+                task_instance_id=task.id,
+                note="协作任务逐人确认退还押金份额",
+            )
+            refunded_now = participant.deposit_share
+    task.rating = rating
+    task.review_comment = comment
 
     assignee = await _ensure_child(db, family_id=family_id, child_id=task.assignee_child_id)
+    settle_info: dict = {
+        "participant": {
+            "child_id": participant.child_id,
+            "role": _enum_value(participant.role),
+            "participant_status": TaskParticipantStatus.DONE.value,
+            "deposit_refunded": refunded_now,
+        },
+    }
+
+    if all(
+        coop_service.participant_status_of(p) == TaskParticipantStatus.DONE
+        for p in task.participants
+    ):
+        # 聚合终结:全员 DONE → COMPLETED,XP 按最终交付孩子数一次结算(docs/13 §6)
+        final_xp = _coop_final_xp(task, rating=rating)
+        task.status = TaskStatus.COMPLETED
+        task.xp_awarded = final_xp
+        task.completed_at = utcnow()
+        task.coin_delta = sum(p.deposit_share for p in coop_service.wallet_participants(task))
+        level_info, unlocked_privileges = await _settle_coop_xp(
+            db, task, final_xp=final_xp, assignee=assignee,
+        )
+        await chain_service.spawn_next_chain_step(db, task)
+        await db.commit()
+        await db.refresh(task)
+        await db.refresh(assignee)
+        settle_info.update({
+            "aggregated": True,
+            "xp_awarded": final_xp,
+            "deposit_refunded": task.coin_delta,
+            "unlocked_privilege_count": len(unlocked_privileges),
+            **level_info,
+        })
+    else:
+        await db.commit()
+        await db.refresh(task)
+        await db.refresh(assignee)
+        settle_info.update({"aggregated": False, "xp_awarded": 0, "deposit_refunded": refunded_now})
+    return task, assignee, settle_info
+
+
+def _coop_final_xp(task: ScnTaskInstance, *, rating: int) -> int:
+    """聚合终结时的最终 XP(参数与整单审批同一套:难度/时间窗/链末加成)。"""
     template = task.template
     required_start_time = template.required_start_time if template else None
     is_challenge = bool(template and template.type == TaskType.CHALLENGE)
     difficulty = template.difficulty if template is not None else None
-    final_xp = xp_service.calculate_xp(
+    return xp_service.calculate_xp(
         task.xp_reward,
         rating=rating,
         difficulty=difficulty,
@@ -492,52 +666,224 @@ async def approve_task(
         submitted_at=task.submitted_at,
         required_start_time=required_start_time,
         is_challenge=is_challenge,
-        # CHAIN 链末步骤(chain_index == chain_total)享受链末加成(docs/04 §2.3)
         chain_index=task.chain_index,
         chain_total=task.chain_total,
     )
+
+
+async def _approve_coop_partial_settle(
+    db: AsyncSession, task: ScnTaskInstance, *, rating: int, comment: str | None,
+) -> tuple[ScnTaskInstance, SysChild, dict]:
+    """部分通过判退收尾(docs/13 定稿版 §3.1 / §5 裁决 Q1)。
+
+    入口 = IN_PROGRESS + 存在至少一名 SUBMITTED;显式 settle_partial=True 才进本路径
+    (漏传标志的整单 approve 在 IN_PROGRESS 下 409,判退真金白银打折退款必须显式确认)。
+    - SUBMITTED:押金退份额、子状态 → DONE;
+    - JOINED:视为 QUIT,押金按放弃阶梯打折退,**不递增当日放弃计数**(裁决 Q1);
+    - XP 按最终交付孩子数一次结算(裁决 Q4),实例终结 COMPLETED。
+    """
+    if task.status != TaskStatus.IN_PROGRESS:
+        raise ConflictError(
+            f"部分通过判退仅限 IN_PROGRESS(当前 {_enum_value(task.status)};"
+            "全员已交请直接整单审批)"
+        )
+    if not coop_service.delivered_participants(task):
+        raise ValidationError("没有已提交的参与者,无可部分通过;未开始请走放弃任务")
+
+    # family 归属已由 approve_task 入口校验(task.family_id == family_id),
+    # 这里按任务上的 family_id 取主接取人
+    assignee = (
+        await _ensure_child(db, family_id=task.family_id, child_id=task.assignee_child_id)
+        if task.assignee_child_id else None
+    )
+    if assignee is None:
+        raise ValidationError("任务没有接取人")
+
+    judged: list[ScnTaskParticipant] = []
+    total_refund = 0
+    for p in task.participants:
+        status = coop_service.participant_status_of(p)
+        if status == TaskParticipantStatus.SUBMITTED:
+            p.participant_status = TaskParticipantStatus.DONE.value
+            if p.child_id and p.deposit_share > 0:
+                p_child = await db.get(SysChild, p.child_id)
+                if p_child is not None:
+                    p_child.time_coin_balance += p.deposit_share
+                    await coin_service.record_transaction(
+                        db,
+                        child=p_child,
+                        type=CoinTransactionType.TASK_REFUND,
+                        amount=p.deposit_share,
+                        task_instance_id=task.id,
+                        note="协作任务部分通过,退还押金份额",
+                    )
+                    total_refund += p.deposit_share
+        elif status == TaskParticipantStatus.JOINED:
+            # 部分通过判退:按放弃阶梯打折退,但不递增当日放弃计数
+            # (判退是家长收尾动作,不是孩子的主动放弃,一次行为不双重惩罚)
+            p.participant_status = TaskParticipantStatus.QUIT.value
+            if p.child_id and p.deposit_share > 0:
+                p_child = await db.get(SysChild, p.child_id)
+                if p_child is not None:
+                    refund = coin_service.calculate_refund(
+                        p.deposit_share, p_child.daily_abandon_count
+                    )
+                    if refund >= p.deposit_share:
+                        note = "[部分通过判退] 押金份额已全额退还"
+                    else:
+                        percent = int(refund * 100 / p.deposit_share)
+                        note = (
+                            f"[部分通过判退] 当日已放弃 {p_child.daily_abandon_count} 次,"
+                            f"按 {percent}% 退还"
+                        )
+                    p_child.time_coin_balance += refund
+                    await coin_service.record_transaction(
+                        db,
+                        child=p_child,
+                        type=CoinTransactionType.TASK_REFUND,
+                        amount=refund,
+                        task_instance_id=task.id,
+                        note=note,
+                    )
+                    total_refund += refund
+                    penalty = p.deposit_share - refund
+                    if penalty > 0:
+                        await coin_service.record_transaction(
+                            db,
+                            child=p_child,
+                            type=CoinTransactionType.ABANDON_PENALTY,
+                            amount=-penalty,
+                            task_instance_id=task.id,
+                            note="[部分通过判退] 未交付押金扣罚",
+                        )
+                    judged.append(p)
+        # DONE:逐人确认时已结算,不动(防双退)
+
+    final_xp = _coop_final_xp(task, rating=rating)
+    task.status = TaskStatus.COMPLETED
+    task.rating = rating
+    task.review_comment = comment
+    task.xp_awarded = final_xp
+    task.completed_at = utcnow()
+    task.coin_delta = total_refund
+    level_info, unlocked_privileges = await _settle_coop_xp(
+        db, task, final_xp=final_xp, assignee=assignee,
+    )
+    await chain_service.spawn_next_chain_step(db, task)
+
+    # 通知被判退者,内容带退款解释(实现期补充要求:孩子要能看懂"为什么退少了")
+    _notify_coop_participants(
+        db, task,
+        type_=NotificationType.COOP_PARTIAL_SETTLED,
+        recipient_participants=judged,
+        title="协作任务已部分通过结算",
+        body=(
+            f"任务「{task.title}」家长已按已交付部分结算。"
+            "你未交付本人份额,押金按当日放弃规则退还,详见时间币流水。"
+        ),
+        payload={"task_instance_id": task.id, "outcome": "PARTIAL_SETTLED"},
+    )
+
+    await db.commit()
+    await db.refresh(task)
+    await db.refresh(assignee)
+    return task, assignee, {
+        "aggregated": True,
+        "partial_settled": True,
+        "xp_awarded": final_xp,
+        "deposit_refunded": total_refund,
+        "judged_quit": [
+            {"child_id": p.child_id, "deposit_share": p.deposit_share} for p in judged
+        ],
+        "unlocked_privilege_count": len(unlocked_privileges),
+        **level_info,
+    }
+
+
+async def approve_task(
+    db: AsyncSession, *, task_id: str, family_id: str, rating: int, comment: str | None = None,
+    child_id: str | None = None, participant_id: str | None = None,
+    settle_partial: bool = False,
+) -> tuple[ScnTaskInstance, SysChild, dict]:
+    """父母审核(docs/13 定稿版 §3.1/§4,DEV-40):
+
+    - 带 `child_id`(或家长参与者的 `participant_id`)→ 逐人确认;
+    - `settle_partial=True` → 部分通过判退收尾(仅 IN_PROGRESS);
+    - 都不带 → 整单通过(仅 PENDING_REVIEW,现行为;单人任务唯一路径)。
+    行锁(get_task_for_update)保证与 COOP join / 并发双审批互斥。
+    """
+    task = await get_task_for_update(db, task_id)
+    if task.family_id != family_id:
+        raise PermissionDeniedError("只能审核自己家庭的任务")
+    coop = coop_service.is_coop(task)
+
+    if child_id is not None or participant_id is not None:
+        if not coop:
+            raise ValidationError("单人任务不支持逐人确认")
+        return await _approve_coop_participant(
+            db, task, family_id=family_id, rating=rating, comment=comment,
+            child_id=child_id, participant_id=participant_id,
+        )
+    if settle_partial:
+        if not coop:
+            raise ValidationError("单人任务不支持部分通过判退")
+        return await _approve_coop_partial_settle(db, task, rating=rating, comment=comment)
+    if coop and task.status == TaskStatus.IN_PROGRESS:
+        # IN_PROGRESS 下尚有未交者:整单 approve 会把未交付者静默判退,
+        # 必须显式 settle_partial 确认(docs/13 §3.1)
+        raise ConflictError(
+            "仍有参与者未提交;如需按已交付部分收尾,请显式传入 settle_partial=true"
+        )
+    if task.status != TaskStatus.PENDING_REVIEW:
+        raise ConflictError(f"当前状态 {_enum_value(task.status)},无法审核")
+    if not task.assignee_child_id:
+        raise ValidationError("任务没有接取人")
+
+    assignee = await _ensure_child(db, family_id=family_id, child_id=task.assignee_child_id)
+    final_xp = _coop_final_xp(task, rating=rating)
     task.status = TaskStatus.COMPLETED
     task.rating = rating
     task.review_comment = comment
     task.xp_awarded = final_xp
     task.completed_at = utcnow()
 
-    settle_info: dict = {}
     unlocked_privileges: list = []
-    if coop_service.is_coop(task):
-        wallets = coop_service.wallet_participants(task)
-        # XP 在孩子参与者间均摊(家长参与者不获得 XP,也不占份额)
-        xp_shares = coop_service.split_evenly(final_xp, len(wallets)) if wallets else []
-        xp_results = []
-        for i, p in enumerate(wallets):
-            share = xp_shares[i]
-            p_child = await db.get(SysChild, p.child_id)
-            if p_child is None:
+    if coop:
+        # 整单通过:结算所有未确认的 SUBMITTED 参与者(逐人确认过的 DONE 不重复退);
+        # PENDING_REVIEW 下无 JOINED(进该状态要求全员已交)
+        total_refund = 0
+        for p in task.participants:
+            if coop_service.participant_status_of(p) != TaskParticipantStatus.SUBMITTED:
                 continue
-            info = xp_service.apply_xp_and_level(p_child, share)
-            p.xp_awarded = share
-            xp_results.append(info)
-            # 押金按各自份额退还
-            p_child.time_coin_balance += p.deposit_share
-            await coin_service.record_transaction(
-                db,
-                child=p_child,
-                type=CoinTransactionType.TASK_REFUND,
-                amount=p.deposit_share,
-                task_instance_id=task.id,
-                note="协作任务完成退还押金份额",
-            )
-            unlocked = await privilege_service.unlock_for_user(db, p_child)
-            unlocked_privileges.extend(unlocked)
-        level_info = xp_results[0] if xp_results else xp_service.apply_xp_and_level(assignee, 0)
-        total_refund = sum(p.deposit_share for p in wallets)
-        task.coin_delta = total_refund
+            p.participant_status = TaskParticipantStatus.DONE.value
+            if p.child_id and p.deposit_share > 0:
+                p_child = await db.get(SysChild, p.child_id)
+                if p_child is not None:
+                    p_child.time_coin_balance += p.deposit_share
+                    await coin_service.record_transaction(
+                        db,
+                        child=p_child,
+                        type=CoinTransactionType.TASK_REFUND,
+                        amount=p.deposit_share,
+                        task_instance_id=task.id,
+                        note="协作任务完成退还押金份额",
+                    )
+                    total_refund += p.deposit_share
+        # XP 按最终交付孩子数一次结算(裁决 Q4,行为修改:原为全部已确认孩子均摊)
+        level_info, unlocked_privileges = await _settle_coop_xp(
+            db, task, final_xp=final_xp, assignee=assignee,
+        )
+        task.coin_delta = sum(p.deposit_share for p in coop_service.wallet_participants(task))
         settle_info = {
             "participants": [
                 {
                     "child_id": p.child_id,
                     "role": p.role.value if hasattr(p.role, "value") else str(p.role),
-                    "deposit_refunded": p.deposit_share,
+                    "participant_status": p.participant_status,
+                    "deposit_refunded": p.deposit_share
+                    if coop_service.participant_status_of(p) == TaskParticipantStatus.DONE
+                    and p.child_id
+                    else 0,
                     "xp_awarded": p.xp_awarded,
                 }
                 for p in task.participants
@@ -558,6 +904,7 @@ async def approve_task(
             note="任务完成退还押金",
         )
         task.coin_delta = deposit
+        settle_info = {}
 
     # CHAIN:第 N 步 COMPLETED -> 生成第 N+1 步。
     # 唯一接线点在 chain_service.spawn_next_chain_step(DEV-35 合入后只改那一处)。
@@ -578,8 +925,14 @@ async def approve_task(
 async def reject_task(
     db: AsyncSession, *, task_id: str, family_id: str, comment: str | None = None,
 ) -> ScnTaskInstance:
-    """父母审核驳回:状态切回 IN_PROGRESS,不动押金,孩子可修改后重新提交。"""
-    task = await get_task(db, task_id)
+    """父母审核驳回:状态切回 IN_PROGRESS,不动押金,孩子可修改后重新提交。
+
+    COOP(docs/13 定稿版 §3.1):未结算的 SUBMITTED 参与者回 JOINED、可重新提交;
+    已落 proof 行保留(审计链),重新提交追加新行,审核以最新一轮为准;
+    已 DONE 的参与者不受影响(逐人确认即时结算后不回滚)。
+    行锁与并发 approve/reject 互斥(与整单审批同一把实例行锁)。
+    """
+    task = await get_task_for_update(db, task_id)
     if task.family_id != family_id:
         raise PermissionDeniedError("只能审核自己家庭的任务")
     if task.status != TaskStatus.PENDING_REVIEW:
@@ -589,10 +942,83 @@ async def reject_task(
     task.review_comment = comment
     task.submitted_at = None
 
+    if coop_service.is_coop(task):
+        for p in task.participants:
+            if coop_service.participant_status_of(p) == TaskParticipantStatus.SUBMITTED:
+                p.participant_status = TaskParticipantStatus.JOINED.value
+
     now = utcnow()
     if task.expire_at is not None and task.expire_at <= now:
         task.expire_at = now + REJECT_RESUBMIT_GRACE
 
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def leave_task(
+    db: AsyncSession, *, task_id: str, user: SysAccount,
+) -> ScnTaskInstance:
+    """参与者退出协作任务(docs/13 定稿版 §4/§5,DEV-40)。
+
+    - 仅 COOP、仅 IN_PROGRESS;主接取人(OWNER)不走本接口,用整体 abandon;
+    - 押金按该参与者当日放弃次数打折退(`calculate_refund`),**递增**其当日
+      放弃计数(主动放弃行为,与部分通过判退的"不递增"相对,docs/13 §5);
+    - 子状态 → QUIT,参与者行保留作审计;已落 proof 保留;
+    - 实例与其余参与者不动,其余参与者仍可继续交卷/被逐人确认。
+    """
+    task = await get_task_for_update(db, task_id)
+    if task.family_id != user.family_id:
+        raise PermissionDeniedError("只能操作自己家庭的任务")
+    if not coop_service.is_coop(task):
+        raise ValidationError("只有协作任务支持参与者退出")
+    if task.status != TaskStatus.IN_PROGRESS:
+        raise ConflictError(f"当前状态 {_enum_value(task.status)},无法退出")
+    participant = coop_service.find_participant(task, account_id=user.id)
+    if participant is None or participant.confirmed_at is None:
+        raise PermissionDeniedError("你不是该协作任务的参与者")
+    if participant.role == TaskParticipantRole.OWNER:
+        raise ConflictError("主接取人请使用放弃任务(整体退出)")
+    status = coop_service.participant_status_of(participant)
+    if status in (TaskParticipantStatus.DONE, TaskParticipantStatus.QUIT):
+        raise ConflictError("你已确认完成或已退出,无需重复操作")
+
+    if participant.child_id and participant.deposit_share > 0:
+        child = await db.get(SysChild, participant.child_id)
+        if child is not None:
+            refund = coin_service.calculate_refund(
+                participant.deposit_share, child.daily_abandon_count
+            )
+            if refund >= participant.deposit_share:
+                note = "[放弃] 退出协作任务,押金份额已全额退还"
+            else:
+                percent = int(refund * 100 / participant.deposit_share)
+                note = (
+                    f"[放弃] 退出协作任务,当日已放弃 {child.daily_abandon_count} 次,"
+                    f"按 {percent}% 退还"
+                )
+            child.time_coin_balance += refund
+            await coin_service.record_transaction(
+                db,
+                child=child,
+                type=CoinTransactionType.TASK_REFUND,
+                amount=refund,
+                task_instance_id=task.id,
+                note=note,
+            )
+            penalty = participant.deposit_share - refund
+            if penalty > 0:
+                await coin_service.record_transaction(
+                    db,
+                    child=child,
+                    type=CoinTransactionType.ABANDON_PENALTY,
+                    amount=-penalty,
+                    task_instance_id=task.id,
+                    note="[放弃] 退出协作任务惩罚",
+                )
+            child.daily_abandon_count += 1  # 主动放弃行为:递增计数(docs/13 §5)
+
+    participant.participant_status = TaskParticipantStatus.QUIT.value
     await db.commit()
     await db.refresh(task)
     return task
@@ -615,7 +1041,8 @@ async def abandon_task(
         # COOP 放弃:发起放弃的主接取人按连续放弃规则打折退款并计数;
         # 其他参与者未发起放弃,全额退还份额,不计入其惩罚。
         # 参与者行随放弃清除,任务回 AVAILABLE 后可重新接取/加入;
-        # 更细的"部分完成"结算见 docs/13 设计草案(待独立立项实现)。
+        # 参与者"各自交付"的中间态结算见 docs/13 定稿版(逐人 approve / leave,
+        # DEV-40 已实现)——整体 abandon 保留给主接取人收尾整单。
         total_refund = 0
         for p in coop_service.wallet_participants(task):
             p_child = await db.get(SysChild, p.child_id)

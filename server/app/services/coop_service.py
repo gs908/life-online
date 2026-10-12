@@ -27,6 +27,7 @@ from app.common.timeutil import utcnow
 from app.models.enums import (
     CoinTransactionType,
     TaskParticipantRole,
+    TaskParticipantStatus,
     TaskStatus,
     TaskType,
     UserRole,
@@ -74,6 +75,59 @@ def wallet_participants(task: ScnTaskInstance) -> list[ScnTaskParticipant]:
         p for p in task.participants
         if p.child_id is not None and p.confirmed_at is not None
     ]
+
+
+# ---------------------------------------------------------------------------
+# 参与者子状态(docs/13 定稿版 §3/§3.1,DEV-40)
+# ---------------------------------------------------------------------------
+
+def _status_of(p: ScnTaskParticipant) -> TaskParticipantStatus:
+    value = p.participant_status or TaskParticipantStatus.JOINED.value
+    return TaskParticipantStatus(value)
+
+
+def participant_status_of(p: ScnTaskParticipant) -> TaskParticipantStatus:
+    """参与者子状态(存量行/缺省回 JOINED)。"""
+    return _status_of(p)
+
+
+def undelivered_participants(task: ScnTaskInstance) -> list[ScnTaskParticipant]:
+    """还没交卷的参与者(子状态 JOINED)。"""
+    return [p for p in task.participants if _status_of(p) == TaskParticipantStatus.JOINED]
+
+
+def delivered_participants(task: ScnTaskInstance) -> list[ScnTaskParticipant]:
+    """已交付的参与者(SUBMITTED / DONE)——含家长(裁决 Q3:家长交付走 proof)。"""
+    return [
+        p for p in task.participants
+        if _status_of(p) in (TaskParticipantStatus.SUBMITTED, TaskParticipantStatus.DONE)
+    ]
+
+
+def delivered_children(task: ScnTaskInstance) -> list[ScnTaskParticipant]:
+    """最终交付的**孩子**参与者(裁决 Q4:XP 均摊分母,家长不入分母)。"""
+    return [p for p in delivered_participants(task) if p.child_id is not None]
+
+
+def all_delivered(task: ScnTaskInstance) -> bool:
+    """全员已交(无 JOINED)→ 实例可进 PENDING_REVIEW(docs/13 §3)。"""
+    return bool(task.participants) and not undelivered_participants(task)
+
+
+def find_participant(
+    task: ScnTaskInstance, *, account_id: str | None = None, child_id: str | None = None,
+    participant_id: str | None = None,
+) -> ScnTaskParticipant | None:
+    """按账号/孩子/参与者行 ID 找参与者(逐人 approve 需要能定位家长参与者,
+    家长没有 child_id,用 participant_id)。"""
+    for p in task.participants:
+        if participant_id is not None and p.id == participant_id:
+            return p
+        if account_id is not None and p.account_id == account_id:
+            return p
+        if child_id is not None and p.child_id == child_id:
+            return p
+    return None
 
 
 async def _lock_task_for_join(db: AsyncSession, task_id: str) -> ScnTaskInstance:

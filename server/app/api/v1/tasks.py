@@ -47,6 +47,9 @@ def _proof_to_read(p: ScnTaskProof) -> TaskProofRead:
         url=_proof_url(p.object_key),
         size=p.size,
         content_type=p.content_type,
+        # 家长代交标注(docs/13 §4 裁决 Q3 展示侧要求):前端按
+        # uploaded_by 是否为家长账号渲染"家长代交"角标,避免孩子侧混淆
+        uploaded_by=p.uploaded_by,
         created_at=p.created_at,
     )
 
@@ -87,6 +90,7 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
             account_id=p.account_id,
             child_id=p.child_id,
             role=p.role,
+            participant_status=p.participant_status or "JOINED",
             confirmed_at=p.confirmed_at,
             deposit_share=p.deposit_share,
             xp_awarded=p.xp_awarded,
@@ -228,12 +232,14 @@ async def submit_task(
     return ok(await _to_read_with_proofs(db, t))
 
 
-@router.post("/{task_id}/approve", response_model=ApiResponse[TaskRead], summary="父母审核通过")
+@router.post("/{task_id}/approve", response_model=ApiResponse[TaskRead], summary="父母审核通过(整单/逐人/部分通过判退)")
 async def approve_task(
     task_id: str, body: TaskApproveRequest, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
     t, _assignee, _info = await task_service.approve_task(
         db, task_id=task_id, family_id=user.family_id, rating=body.rating, comment=body.comment,
+        child_id=body.child_id, participant_id=body.participant_id,
+        settle_partial=body.settle_partial,
     )
     return ok(await _to_read_with_proofs(db, t))
 
@@ -253,6 +259,15 @@ async def abandon_task(
     task_id: str, db: DBSession, user: CurrentUser,
 ) -> ApiResponse[TaskRead]:
     t, _u, _refund = await task_service.abandon_task(db, task_id=task_id, user=user)
+    return ok(await _to_read_with_proofs(db, t))
+
+
+@router.post("/{task_id}/leave", response_model=ApiResponse[TaskRead], summary="退出 COOP 协作任务(参与者个人退出,主接取人请走 abandon)")
+async def leave_task(
+    task_id: str, db: DBSession, user: CurrentUser,
+) -> ApiResponse[TaskRead]:
+    """docs/13 定稿版 §4:参与者退出,押金按当日放弃阶梯退并递增放弃计数。"""
+    t = await task_service.leave_task(db, task_id=task_id, user=user)
     return ok(await _to_read_with_proofs(db, t))
 
 

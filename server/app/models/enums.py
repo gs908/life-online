@@ -82,12 +82,27 @@ class CoinTransactionType(str, Enum):
     MANUAL_ADJUST = "MANUAL_ADJUST"
 
 
+class TaskParticipantStatus(str, Enum):
+    """COOP 参与者子状态(docs/13 定稿版 §3)。
+
+    与实例级 `scn_task_instance.status` 正交:实例状态机是任务整体进度,
+    本状态是"各参与者各自推进到哪一步"。裁决 Q2:不引入 WORKING 弱状态。
+    """
+
+    JOINED = "JOINED"          # 已确认加入(join / start,= confirmed_at 语义)
+    SUBMITTED = "SUBMITTED"    # 本人份额已交付(各自 submit,proof 落本人 uploaded_by)
+    DONE = "DONE"              # 家长已确认本人份额(逐人 approve)
+    QUIT = "QUIT"              # 中途退出(leave)/ 部分通过判退(押金按放弃阶梯结算)
+
+
 class NotificationType(str, Enum):
     TASK_SUBMITTED = "TASK_SUBMITTED"
     TASK_APPROVED = "TASK_APPROVED"
     TASK_REJECTED = "TASK_REJECTED"
     TASK_REMINDER = "TASK_REMINDER"
     TASK_EXPIRED = "TASK_EXPIRED"
+    COOP_PARTIAL_SUBMITTED = "COOP_PARTIAL_SUBMITTED"  # 协作任务有参与者交卷,提醒未交者/主接取人
+    COOP_PARTIAL_SETTLED = "COOP_PARTIAL_SETTLED"      # 部分通过判退,通知被判退者(含退款解释)
     PRIVILEGE_UNLOCKED = "PRIVILEGE_UNLOCKED"
     LEVEL_UP = "LEVEL_UP"
     TIME_COIN_RESET = "TIME_COIN_RESET"
