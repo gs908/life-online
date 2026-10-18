@@ -246,8 +246,11 @@ async def _prepare_content(
         return template.lore_snippet, ContentSource.FALLBACK.value, meta
 
     brief = template.content_brief or template.description or ""  # R19:空回落 description
-    topic, child_level = await _load_content_context(db, template)
+    topic, child_level = "", 1
     try:
+        # 上下文加载纳入同一 try(Mars 🟡1):赛季/孩子查询失败也回落 FALLBACK,
+        # 不让实例创建失败(R13)。失败时保留默认值 ("", 1) 继续生成。
+        topic, child_level = await _load_content_context(db, template)
         narrative, meta = await ai_service.generate_task_narrative(
             content_brief=brief,
             topic=topic,
@@ -265,9 +268,11 @@ async def _prepare_content(
         return narrative, ContentSource.LLM.value, meta
     except Exception as exc:  # noqa: BLE001 - R13:LLM 任何失败都不阻断实例创建
         # meta 由 ai_service 备好(含底层错误类名);非 TaskNarrativeError 的
-        # 意外异常兜底补当前类名。R14:FALLBACK 必须留错误类名。
+        # 意外异常(含上下文加载失败)兜底补错误类名与模型名。R14:FALLBACK
+        # 必须留错误类名。
         meta = dict(getattr(exc, "meta", None) or {})
         meta.setdefault("error", type(exc).__name__)
+        meta.setdefault("model", settings.ai.llm.model)
         meta.setdefault("elapsed_ms", 0)
         log.warning(
             "task content: template=%s date=%s content_source=FALLBACK "

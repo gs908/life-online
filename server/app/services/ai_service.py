@@ -186,22 +186,30 @@ async def generate_task_narrative(
             ),
             timeout=timeout_seconds,
         )
+        # 响应解析纳入同一 try(Mars 🟡2):网关忽略 response_format 返回非 dict
+        # JSON 时,保真 generation_meta(模型名/提示词哈希/token/耗时)而非退化。
+        meta["elapsed_ms"] = _elapsed_ms()
+        usage = (resp.raw or {}).get("usage") or {}
+        meta["tokens"] = usage.get("total_tokens")
+        if not isinstance(resp.data, dict):
+            meta["error"] = "InvalidPayload"
+            raise TaskNarrativeError(
+                f"任务叙事生成失败: 返回结构非法({type(resp.data).__name__})", meta=meta,
+            )
+        narrative = str(resp.data.get("narrative") or "").strip()
+        if not narrative:
+            meta["error"] = "EmptyNarrative"
+            raise TaskNarrativeError("任务叙事生成失败: 返回空文本", meta=meta)
+        if len(narrative) > max_narrative_chars:
+            meta["error"] = "NarrativeTooLong"
+            raise TaskNarrativeError(
+                f"任务叙事生成失败: 文本超长({len(narrative)} > {max_narrative_chars})",
+                meta=meta,
+            )
+    except TaskNarrativeError:
+        raise  # 已带完整 meta,不二次包装
     except Exception as exc:
         meta["elapsed_ms"] = _elapsed_ms()
-        meta["error"] = type(exc).__name__
+        meta.setdefault("error", type(exc).__name__)
         raise TaskNarrativeError(f"任务叙事生成失败: {exc}", meta=meta) from exc
-
-    meta["elapsed_ms"] = _elapsed_ms()
-    usage = (resp.raw or {}).get("usage") or {}
-    meta["tokens"] = usage.get("total_tokens")
-    narrative = str(resp.data.get("narrative") or "").strip()
-    if not narrative:
-        meta["error"] = "EmptyNarrative"
-        raise TaskNarrativeError("任务叙事生成失败: 返回空文本", meta=meta)
-    if len(narrative) > max_narrative_chars:
-        meta["error"] = "NarrativeTooLong"
-        raise TaskNarrativeError(
-            f"任务叙事生成失败: 文本超长({len(narrative)} > {max_narrative_chars})",
-            meta=meta,
-        )
     return narrative, meta

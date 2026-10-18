@@ -22,6 +22,7 @@ import asyncio
 import uuid
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -239,6 +240,66 @@ async def test_t3_fallback_counted_in_run_generation(db_session, seeded, monkeyp
     assert stats["fallback"] == 1  # T3:统计中 fallback=1
     assert stats["llm_generated"] == 0
     assert stats["errors"] == 0
+
+
+# ---- 🟡硬化路径:上下文加载失败 / 返回结构非法 —— 仍回落,实例照建 ----
+
+
+async def test_context_load_failure_falls_back(db_session, seeded, monkeypatch):
+    """🟡1:赛季/孩子上下文加载抛异常时,实例仍创建、回落模板文本(R13)。"""
+    fake = FakeNarrativeClient()
+    _patch_llm(monkeypatch, fake)
+
+    async def _boom(db, template):
+        raise RuntimeError("context load failed")
+
+    monkeypatch.setattr(task_generator_service, "_load_content_context", _boom)
+    template = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+        content_mode=ContentMode.LLM,
+    )
+
+    instance, action = await task_generator_service.generate_for_template(
+        db_session, template, today=TODAY, now=NOW,
+    )
+
+    assert action == "created"  # 实例创建始终成功
+    assert fake.calls == 0
+    assert instance.lore_snippet == TEMPLATE_LORE
+    assert instance.content_source == ContentSource.FALLBACK
+    assert instance.generation_meta["error"] == "RuntimeError"
+
+
+async def test_invalid_payload_falls_back_with_full_meta(db_session, seeded, monkeypatch):
+    """🟡2:chat_json 返回非 dict JSON 时,回落 FALLBACK 且 generation_meta 保真。"""
+
+    class _BadShapeClient(FakeNarrativeClient):
+        async def chat_json(self, messages, json_schema=None, *, temperature=None):
+            self.calls += 1
+            self.temperatures.append(temperature)
+            return SimpleNamespace(data=["not-a-dict"], raw={"usage": {"total_tokens": 7}})
+
+    fake = _BadShapeClient()
+    _patch_llm(monkeypatch, fake)
+    template = await _make_template(
+        db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
+        content_mode=ContentMode.LLM,
+    )
+
+    instance, action = await task_generator_service.generate_for_template(
+        db_session, template, today=TODAY, now=NOW,
+    )
+
+    assert action == "created"
+    assert fake.calls == 1
+    assert instance.lore_snippet == TEMPLATE_LORE
+    assert instance.content_source == ContentSource.FALLBACK
+    meta = instance.generation_meta
+    assert meta["error"] == "InvalidPayload"
+    assert meta["model"] == settings.ai.llm.model
+    assert meta["prompt_hash"]
+    assert meta["tokens"] == 7  # 解析失败不丢已采集字段
+    assert isinstance(meta["elapsed_ms"], int)
 
 
 # ---- T4:返回文本超长 —— 按失败处理(R23) ----
