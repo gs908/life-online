@@ -34,10 +34,21 @@ from sqlalchemy.orm import selectinload
 
 from app.common.exceptions import ConflictError
 from app.common.timeutil import BJ_TZ, now_bj, today_bj, utcnow
-from app.models.enums import PoolPolicy, TaskStatus, TimedMode, TriggerKind
+from app.config import settings
+from app.models.enums import (
+    ContentMode,
+    ContentSource,
+    PoolPolicy,
+    TaskStatus,
+    TimedMode,
+    TriggerKind,
+)
+from app.models.scn_season import ScnSeason
 from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_template import ScnTaskTemplate
 from app.models.scn_task_template_trigger import ScnTaskTemplateTrigger
+from app.models.sys_child import SysChild
+from app.services import ai_service
 
 log = logging.getLogger(__name__)
 
@@ -182,10 +193,102 @@ async def _get_instance_for_date(
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def _load_content_context(
+    db: AsyncSession, template: ScnTaskTemplate,
+) -> tuple[str, int]:
+    """叙事生成的上下文要素(docs/15 R18):返回 (赛季主题, 孩子等级)。"""
+    topic = ""
+    season = await db.get(ScnSeason, template.season_id)
+    if season is not None:
+        topic = season.narrative_context or ""
+    child_level = 1
+    if template.target_child_id is not None:
+        child = await db.get(SysChild, template.target_child_id)
+        if child is not None:
+            child_level = child.level
+    return topic, child_level
+
+
+async def _prepare_content(
+    db: AsyncSession, template: ScnTaskTemplate, *, day: date,
+) -> tuple[str | None, str, dict | None]:
+    """按模板 content_mode 准备实例叙事内容(docs/15 §6)。
+
+    返回 (lore_snippet, content_source, generation_meta) —— 全部普通值,
+    不持有 ORM 对象:调用方插入撞索引时整事务 rollback 会 expire 会话内
+    全部对象(R10,叙事必须是普通字符串)。
+
+    - STATIC        -> 直接复制模板 lore_snippet,标 TEMPLATE(R7);
+    - LLM 且开关闭  -> 不调 LLM,落模板文本标 FALLBACK(R21);
+    - LLM 且开关开  -> 调 ai_service.generate_task_narrative 一次(R8);
+      任何失败(能力未启用/未配置、HTTP、超时、非法 JSON、空文本、超长)
+      落模板文本标 FALLBACK,不向上抛(R12/R13)。
+
+    LLM 与 FALLBACK 结果各打 1 行日志(模板 id/目标日期/content_source/耗时,
+    不含 API key 与提示词全文,R27)。
+    """
+    mode = _mode_value(template.content_mode)
+    if mode != ContentMode.LLM.value:
+        return template.lore_snippet, ContentSource.TEMPLATE.value, None
+
+    cfg = settings.task_content
+    template_id = template.id  # 后续路径可能 rollback,先取普通值
+    if not cfg.llm_enabled:
+        meta = {
+            "model": settings.ai.llm.model,
+            "prompt_hash": None, "tokens": None, "elapsed_ms": 0,
+            "error": "LLMDisabled",
+        }
+        log.info(
+            "task content: template=%s date=%s content_source=FALLBACK elapsed_ms=0",
+            template_id, day,
+        )
+        return template.lore_snippet, ContentSource.FALLBACK.value, meta
+
+    brief = template.content_brief or template.description or ""  # R19:空回落 description
+    topic, child_level = await _load_content_context(db, template)
+    try:
+        narrative, meta = await ai_service.generate_task_narrative(
+            content_brief=brief,
+            topic=topic,
+            category=_mode_value(template.category) if template.category else None,
+            child_level=child_level,
+            is_weekend=day.weekday() >= 5,
+            task_type=_mode_value(template.type),
+            timeout_seconds=cfg.llm_timeout_seconds,
+            max_narrative_chars=cfg.max_narrative_chars,
+        )
+        log.info(
+            "task content: template=%s date=%s content_source=LLM elapsed_ms=%s",
+            template_id, day, meta.get("elapsed_ms"),
+        )
+        return narrative, ContentSource.LLM.value, meta
+    except Exception as exc:  # noqa: BLE001 - R13:LLM 任何失败都不阻断实例创建
+        # meta 由 ai_service 备好(含底层错误类名);非 TaskNarrativeError 的
+        # 意外异常兜底补当前类名。R14:FALLBACK 必须留错误类名。
+        meta = dict(getattr(exc, "meta", None) or {})
+        meta.setdefault("error", type(exc).__name__)
+        meta.setdefault("elapsed_ms", 0)
+        log.warning(
+            "task content: template=%s date=%s content_source=FALLBACK "
+            "elapsed_ms=%s error=%s",
+            template_id, day, meta.get("elapsed_ms"), type(exc).__name__,
+        )
+        return template.lore_snippet, ContentSource.FALLBACK.value, meta
+
+
 async def _insert_instance(
     db: AsyncSession, template: ScnTaskTemplate, day: date,
+    *,
+    lore_snippet: str | None = None,
+    content_source: str = ContentSource.TEMPLATE.value,
+    generation_meta: dict | None = None,
 ) -> tuple[ScnTaskInstance, bool]:
     """插入当日实例;撞唯一索引(并发兜底)时回滚并取回既有行。
+
+    lore_snippet/content_source/generation_meta 由调用方在写库前备好
+    (LLM 必须在写库之前调用,叙事存普通字符串,R10)。缺省即 STATIC
+    口径:复制模板 lore_snippet、标 TEMPLATE。
 
     返回 (实例, 是否新建)。兜底取回既有行时 created=False(可能是并发方
     刚插入的 AVAILABLE 行,也可能是当日已消费的 COMPLETED/EXPIRED 行),
@@ -205,13 +308,15 @@ async def _insert_instance(
         target_child_id=target_child_id,
         title=template.title,
         description=template.description,
-        lore_snippet=template.lore_snippet,
+        lore_snippet=template.lore_snippet if lore_snippet is None else lore_snippet,
         xp_reward=template.xp_reward,
         status=TaskStatus.AVAILABLE,
         deadline=expire_at,  # 限时任务 deadline 与过期时刻同源;非限时恒 NULL
         expire_at=expire_at,
         generated_for_date=day,
         time_deposit=template.time_deposit,
+        content_source=content_source,
+        generation_meta=generation_meta,
     )
     db.add(instance)
     try:
@@ -303,7 +408,18 @@ async def generate_for_template(
     if expire_at is not None and expire_at <= now:
         return None, "skipped_expired"
 
-    instance, created = await _insert_instance(db, template, today)
+    # docs/15:叙事内容在写库之前准备(LLM 可能在此发生,普通字符串带回)。
+    # 仅新建路径到这里 —— rolled_forward/exists/kept/not_due/skipped_expired
+    # 均不调 LLM(R11),顺延任务保留首次生成的叙事。
+    lore_snippet, content_source, generation_meta = await _prepare_content(
+        db, template, day=today,
+    )
+    instance, created = await _insert_instance(
+        db, template, today,
+        lore_snippet=lore_snippet,
+        content_source=content_source,
+        generation_meta=generation_meta,
+    )
     await db.commit()
     if not created:
         # 兜底回捞到当日既有行(并发方的 AVAILABLE,或当日已消费的
@@ -329,6 +445,7 @@ async def run_generation(
     stats = {
         "created": 0, "rolled_forward": 0, "kept": 0, "exists": 0,
         "not_due": 0, "skipped_expired": 0, "errors": 0,
+        "llm_generated": 0, "fallback": 0,  # docs/15 R27
     }
     due = await due_templates(db, today=today, now=now)
     plan = [t.id for t in due]  # 预取普通值:后续 rollback 会使 ORM 对象失效
@@ -344,6 +461,14 @@ async def run_generation(
                 continue
             _instance, action = await generate_for_template(db, template, today=today, now=now)
             stats[action] = stats.get(action, 0) + 1
+            if action == "created" and _instance is not None:
+                # 新建实例按叙事来源计数(docs/15 R27);顺延/保留的实例沿用
+                # 首次生成的叙事,不计入本轮。
+                source = _mode_value(_instance.content_source)
+                if source == ContentSource.LLM.value:
+                    stats["llm_generated"] += 1
+                elif source == ContentSource.FALLBACK.value:
+                    stats["fallback"] += 1
         except Exception:
             # 单模板失败不阻断整轮;生产由日志告警跟进。
             stats["errors"] += 1
