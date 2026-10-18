@@ -17,6 +17,7 @@ from app.common.timeutil import today_bj, utcnow
 from app.config import settings
 from app.models.enums import (
     CoinTransactionType,
+    ContentMode,
     NotificationChannel,
     NotificationStatus,
     NotificationType,
@@ -241,6 +242,9 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         chain_key=kwargs.get("chain_key"),
         chain_order=chain_order,
         chain_total=kwargs.get("chain_total", 1),
+        # docs/15:内容字段落到模板(叙事由生成器批量作业产出,本路径不调 LLM)
+        content_mode=kwargs.get("content_mode") or ContentMode.STATIC,
+        content_brief=kwargs.get("content_brief"),
     )
     db.add(template)
     await db.flush()

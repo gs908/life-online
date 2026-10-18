@@ -251,6 +251,7 @@
   "reminder_message": "str | null",             // 来自模板
   "reminder_minutes_before": 15,                // 来自模板
   "time_deposit": 10,
+  "content_source": "TEMPLATE|LLM|FALLBACK",     // 叙事来源（docs/15）：TEMPLATE=模板文本 / LLM=生成成功 / FALLBACK=LLM 失败或能力关闭回落模板文本；generation_meta 为内部数据，不出接口
   "created_at": "datetime", "updated_at": "datetime",
   // 兼容旧前端字段（迁移期保留，勿新用）：
   "creator_id": "str | null", "target_user_id": "str | null", "assignee_id": "str | null"
@@ -286,7 +287,9 @@
 | POST | `/scn/template-library/{id}/apply` | 用 `suggested_*` 播种新模板并即时生成 | 父母 |
 
 **TaskTemplateCreate**（POST body；`triggers` 缺省时按类型补默认规则：DAILY/TIMED→`DAILY@00:00`，CHALLENGE→每周一 `CRON "0 0 * * 1"`，一次性/CHAIN/COOP 无默认）：
-`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?, type?, target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?, time_deposit?, is_active?, timed_mode?(NONE), deadline_time?, start_time?, duration_minutes?, pool_policy?(REUSE_UNTIL_CONSUMED), estimated_minutes?, difficulty?(1-5), triggers?: [TaskTriggerCreate] }`
+`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?, type?, target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?, time_deposit?, is_active?, timed_mode?(NONE), deadline_time?, start_time?, duration_minutes?, pool_policy?(REUSE_UNTIL_CONSUMED), estimated_minutes?, difficulty?(1-5), content_mode?(STATIC), content_brief?, triggers?: [TaskTriggerCreate] }`
+
+> **内容生成字段（docs/15，DEV-49）**：`content_mode`（`STATIC`|`LLM`，默认 `STATIC`）决定实例化时是否调 LLM 生成叙事；`content_brief` 为"任务要点"（LLM 叙事输入，空则生成器回落用 `description`）。`content_mode=LLM` 时叙事写入实例 `lore_snippet`、`content_source=LLM`；LLM 失败/能力关闭（`task_content.llm_enabled=false`）回落模板文本并标 `FALLBACK`，实例创建恒成功。`TaskInstanceRead`（TaskRead）只回 `content_source`，`generation_meta` 为内部数据不出接口。
 
 **timed_mode 一致性（创建/更新 422）**：`DEADLINE` 需 `deadline_time`；`DURATION` 需 `start_time`+`duration_minutes`；`NONE` 三者皆空。PATCH 对合并后的完整模板复验。
 

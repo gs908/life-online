@@ -7,6 +7,8 @@ from typing import Annotated
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, Field, model_validator
 from app.models.enums import (
+    ContentMode,
+    ContentSource,
     PoolPolicy,
     ProofKind,
     TaskCategory,
@@ -142,6 +144,10 @@ class TaskTemplateCreate(BaseModel):
     estimated_minutes: int | None = Field(default=None, ge=1, le=24 * 60)
     # 难度 1-5(DEV-34 块 C 语义,块 A 契约可空 = 未评星):只影响 XP,不影响押金
     difficulty: int | None = Field(default=None, ge=1, le=5)
+    # ---- 任务内容生成(docs/15 R24)----
+    content_mode: ContentMode = ContentMode.STATIC
+    # 任务要点:LLM 叙事生成的输入;为空时生成器回落用 description
+    content_brief: str | None = None
     triggers: list[TaskTriggerCreate] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -178,6 +184,8 @@ class TaskTemplateRead(BaseModel):
     chain_total: int
     estimated_minutes: int | None = None
     difficulty: int | None = None
+    content_mode: ContentMode = ContentMode.STATIC
+    content_brief: str | None = None
     deprecated_at: datetime | None = None
     deprecated_reason: str | None = None
     triggers: list[TaskTriggerRead] = []
@@ -211,6 +219,8 @@ class TaskTemplateUpdate(BaseModel):
     pool_policy: PoolPolicy | None = None
     estimated_minutes: int | None = Field(default=None, ge=1)
     difficulty: int | None = Field(default=None, ge=1, le=5)
+    content_mode: ContentMode | None = None
+    content_brief: str | None = None
     triggers: list[TaskTriggerCreate] | None = None
 
 
@@ -298,6 +308,8 @@ class TaskRead(BaseModel):
     # CHAIN:链中位置(1-based)与总步数,链末步骤享受链末 XP 加成
     chain_index: int | None = None
     chain_total: int | None = None
+    # 叙事来源(docs/15 R25);generation_meta 为内部数据,不出接口
+    content_source: ContentSource = ContentSource.TEMPLATE
     # COOP 参与者
     participants: list[TaskParticipantRead] = Field(default_factory=list)
     created_at: datetime
