@@ -11,7 +11,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Tim
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import PoolPolicy, TaskCategory, TaskType, TimedMode
+from app.models.enums import ContentMode, PoolPolicy, TaskCategory, TaskType, TimedMode
 
 if TYPE_CHECKING:
     from app.models.scn_season import ScnSeason
@@ -78,6 +78,14 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     # ---- 废弃审计:deprecated_at 非空表示已停用,生成器跳过 ----
     deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deprecated_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # ---- 任务内容生成(docs/15 §5)----
+    # LLM 只写叙事,任务实质由模板决定:实例的 title/description/xp_reward 等
+    # 保持模板原文,叙事只写入实例 lore_snippet。
+    content_mode: Mapped[ContentMode] = mapped_column(
+        String(16), nullable=False, default=ContentMode.STATIC, comment="内容生成模式:STATIC/LLM"
+    )
+    # 任务要点:任务实质中不变的部分,LLM 叙事生成的输入;为空时生成器回落用 description。
+    content_brief: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     season: Mapped["ScnSeason"] = relationship(back_populates="task_templates", lazy="raise")
     # 模板读接口恒带触发规则,selectin 避免 lazy="raise" 踩雷。

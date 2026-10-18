@@ -151,3 +151,11 @@ deposit:
   timeout_refund_ratio: ${env:DEPOSIT_TIMEOUT_REFUND_RATIO:0.5}
   abandon_full_refund_limit: ${env:DEPOSIT_ABANDON_FULL_REFUND_LIMIT:3}
   abandon_penalty_refund_ratio: ${env:DEPOSIT_ABANDON_PENALTY_REFUND_RATIO:0.6}
+
+# 任务内容生成(docs/15:实例化时 LLM 叙事生成/失败回落)。
+# llm_enabled=false 时生成器不调 LLM,content_mode=LLM 的实例一律标 FALLBACK;
+# 超时作用于每一次叙事 LLM 调用;叙事超长按失败回落。
+task_content:
+  llm_enabled: ${env:TASK_CONTENT_LLM_ENABLED:true}
+  llm_timeout_seconds: ${env:TASK_CONTENT_LLM_TIMEOUT_SECONDS:15}
+  max_narrative_chars: ${env:TASK_CONTENT_MAX_NARRATIVE_CHARS:200}

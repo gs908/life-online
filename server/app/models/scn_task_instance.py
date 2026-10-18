@@ -6,11 +6,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.common.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import TaskStatus
+from app.models.enums import ContentSource, TaskStatus
 
 if TYPE_CHECKING:
     from app.models.scn_season import ScnSeason
@@ -80,6 +80,15 @@ class ScnTaskInstance(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     # 链末步骤(chain_index == chain_total)审批通过时享受链末 XP 加成。
     chain_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     chain_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # ---- 任务内容生成(docs/15 §5)------------------------------------
+    # 叙事来源:TEMPLATE(模板文本)/ LLM(生成成功)/ FALLBACK(LLM 失败或能力关闭)。
+    # generation_meta 为内部数据(模型名/提示词哈希/token 数/耗时/失败错误类名),
+    # 不出 API(docs/15 R25)。
+    content_source: Mapped[ContentSource] = mapped_column(
+        String(16), nullable=False, default=ContentSource.TEMPLATE, comment="叙事来源:TEMPLATE/LLM/FALLBACK"
+    )
+    generation_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     season: Mapped["ScnSeason"] = relationship(back_populates="task_instances", lazy="raise")
     # template 被 _to_read / approve_task 读取(含 create_task 提交后的 refresh 路径),
