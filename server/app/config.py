@@ -374,6 +374,21 @@ class DepositSection(BaseModel):
     abandon_penalty_refund_ratio: float = 0.6
 
 
+class TaskContentSection(BaseModel):
+    """任务内容生成配置(docs/15:实例化时 LLM 叙事生成 / 失败回落)。
+
+    - `llm_enabled`:总开关。false 时生成器不调 LLM,模板 content_mode=LLM 的
+      实例一律落模板文本并标 FALLBACK(运维可辨识,docs/15 R21);
+    - `llm_timeout_seconds`:作用于每一次叙事 LLM 调用的超时(秒);
+      批量作业保持串行,单次超时只影响该实例(回落),不阻断整轮(R22);
+    - `max_narrative_chars`:叙事长度上限,超长按失败回落(R23)。
+    """
+
+    llm_enabled: bool = True
+    llm_timeout_seconds: int = Field(default=15, ge=1)
+    max_narrative_chars: int = Field(default=200, ge=1)
+
+
 class Settings(BaseModel):
     app: AppSection
     database: DatabaseSection
@@ -386,6 +401,7 @@ class Settings(BaseModel):
     redis: RedisSection = Field(default_factory=RedisSection)
     xp: XpSection = Field(default_factory=XpSection)
     deposit: DepositSection = Field(default_factory=DepositSection)
+    task_content: TaskContentSection = Field(default_factory=TaskContentSection)
     dev: DevSection = Field(default_factory=DevSection)
 
 

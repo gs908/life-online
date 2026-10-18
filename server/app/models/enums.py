@@ -52,6 +52,21 @@ class PoolPolicy(str, Enum):
     NEW_EACH_PERIOD = "NEW_EACH_PERIOD"            # 备选:每周期新开(本轮不默认)
 
 
+class ContentMode(str, Enum):
+    """模板内容生成模式(docs/15 R1)。"""
+
+    STATIC = "STATIC"  # 直接复制模板 lore_snippet
+    LLM = "LLM"        # 实例化时调 LLM 生成叙事,失败回落模板文本
+
+
+class ContentSource(str, Enum):
+    """实例叙事来源(docs/15 R3)。"""
+
+    TEMPLATE = "TEMPLATE"  # 模板文本(STATIC 模式或回落前值)
+    LLM = "LLM"            # LLM 生成
+    FALLBACK = "FALLBACK"  # LLM 失败/能力关闭,回落模板文本
+
+
 class ThemeId(str, Enum):
     DEFAULT = "DEFAULT"
     FROSTBOUND = "FROSTBOUND"

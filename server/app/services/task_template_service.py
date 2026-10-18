@@ -182,6 +182,8 @@ async def create_template(
         chain_total=payload.chain_total,
         estimated_minutes=payload.estimated_minutes,
         difficulty=payload.difficulty,
+        content_mode=payload.content_mode,
+        content_brief=payload.content_brief,
     )
     triggers = _build_triggers(payload.triggers) or default_triggers_for_type(payload.type)
     template.triggers = triggers
@@ -204,6 +206,7 @@ _TEMPLATE_UPDATABLE_FIELDS = (
     "required_start_time", "reminder_message", "reminder_minutes_before",
     "time_deposit", "is_active", "timed_mode", "deadline_time", "start_time",
     "duration_minutes", "pool_policy", "estimated_minutes", "difficulty",
+    "content_mode", "content_brief",  # docs/15 R24
 )
 
 

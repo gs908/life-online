@@ -133,6 +133,7 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
         time_deposit=t.time_deposit,
         chain_index=t.chain_index,
         chain_total=t.chain_total,
+        content_source=t.content_source,
         participants=participants,
         created_at=t.created_at,
         updated_at=t.updated_at,
