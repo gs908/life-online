@@ -174,7 +174,7 @@ async def activate_task_template(
 async def regenerate_task_template(
     template_id: str, _body: TaskTemplateRegenerate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[dict]:
-    template_id, terminalized_ids, fresh, action = (
+    template_id, terminalized_ids, scheduled_kept_ids, fresh, action = (
         await task_template_service.regenerate_template(
             db, family_id=user.family_id, template_id=template_id,
         )
@@ -182,6 +182,11 @@ async def regenerate_task_template(
     return ok({
         "template_id": template_id,
         "terminalized_instance_ids": terminalized_ids,
+        # DEV-50(审查 🟡5):已排期到未来的实例**不终结**。前端确认文案应据
+        # `scheduled_kept_count` 点名"已排期到未来的 N 条不受影响",否则家长会
+        # 以为"点一下把明天也清掉了"。
+        "scheduled_kept_instance_ids": scheduled_kept_ids,
+        "scheduled_kept_count": len(scheduled_kept_ids),
         # action: created=已生成新实例;kept=存在待审核实例(不终结不新增,见 §6A);
         # exists=当日已有实例(含强生成撞当日已消费行);not_due/skipped_expired=
         # 当日无有效生成。new_instance 仅在 created 时非空。
