@@ -7,6 +7,8 @@
  */
 import { request } from '../http';
 import type {
+  TaskGenerateRequest,
+  TaskGenerateResult,
   TaskTemplateCreate,
   TaskTemplateDeprecateRequest,
   TaskTemplateListQuery,
@@ -53,6 +55,18 @@ export const regenerateTemplate = (templateId: string) =>
   request<TaskTemplateRegenerateResult>(
     `/scn/task-templates/${encodeURIComponent(templateId)}/regenerate`,
     { method: 'POST', body: {} },
+  );
+
+/** 选模板 → 生成（契约 §6B）：为指定日期生成一条实例，可覆盖难度/押金/经验值。
+ *
+ * - `target_date` 缺省 = 今天；`< 今天` 422、`> 今天 + 30 天` 422（后端一律 `today_bj()`）。
+ * - 覆盖字段**未传 = 用模板当前值**；**显式传 `null` 一律 422**（生成路径无"清除覆盖"动作）。
+ * - 手工生成 `manual=True`，不受模板触发规则限制；无激活赛季 → 409。
+ * - 幂等：该日期已有实例时返回既有行（`action='exists'`），不覆盖、不新建。 */
+export const generateTemplate = (templateId: string, data: TaskGenerateRequest = {}) =>
+  request<TaskGenerateResult>(
+    `/scn/task-templates/${encodeURIComponent(templateId)}/generate`,
+    { method: 'POST', body: data },
   );
 
 /** 硬删（连同实例与规则；管理端=家庭 owner），不可恢复 */

@@ -12,6 +12,7 @@ import type {
   TaskCreate,
   TaskDepositPreviewRequest,
   TaskDepositPreviewResponse,
+  TaskInstancePatch,
   TaskListQuery,
   TaskProofRead,
   TaskRead,
@@ -27,6 +28,18 @@ export const getTask = (taskId: string) =>
 /** 创建 = 建模板 + 初始实例（无独立模板接口，docs/09 A6） */
 export const createTask = (data: TaskCreate) =>
   request<TaskRead>('/scn/task-instances', { method: 'POST', body: data });
+
+/** 微调实例（契约 §6B）：难度 / 押金 / 经验值三个快照字段。
+ *
+ * - **只放用户真的改过的字段**；没动过的不放进 body（未提供 = 保持不变）。
+ * - **绝不传 `null`** —— 三个字段都是快照，`null` 一律 422（不存在"清除覆盖"）。
+ * - 「恢复默认」= 先取模板当前值，再把该数值作为显式数字提交。
+ * - 只允许改这三个字段；实例 `season_id` 不可改。 */
+export const patchTask = (taskId: string, data: TaskInstancePatch) =>
+  request<TaskRead>(`/scn/task-instances/${encodeURIComponent(taskId)}`, {
+    method: 'PATCH',
+    body: data,
+  });
 
 /** 管理端表单实时预览押金（父母权限）：押金 = 耗时驱动，难度不影响押金（DEV-34 块 C） */
 export const previewDeposit = (data: TaskDepositPreviewRequest) =>

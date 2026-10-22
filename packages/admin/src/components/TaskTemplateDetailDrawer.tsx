@@ -9,6 +9,7 @@ import {
   describeTimeWindow,
   describeTrigger,
 } from './taskTemplateUtils';
+import { isScheduled, localToday } from '../utils/date';
 
 /** 实例状态色点（Miss.D §4 详情抽屉：最近实例列表） */
 const STATUS_DOT: Record<TaskStatus, string> = {
@@ -21,16 +22,25 @@ const STATUS_DOT: Record<TaskStatus, string> = {
 
 interface TaskTemplateDetailDrawerProps {
   template: TaskTemplateRead | null;
+  /** 生成任务成功后由父层递增 → 重拉「最近实例」（否则生成完看不到结果） */
+  refreshSignal?: number;
   onClose: () => void;
   onEdit: (template: TaskTemplateRead) => void;
 }
 
 /** 模板详情抽屉（Miss.D §4：点卡片滑出，展示全部触发规则、时间窗、pool_policy、最近实例） */
-const TaskTemplateDetailDrawer: React.FC<TaskTemplateDetailDrawerProps> = ({ template, onClose, onEdit }) => {
+const TaskTemplateDetailDrawer: React.FC<TaskTemplateDetailDrawerProps> = ({
+  template,
+  refreshSignal,
+  onClose,
+  onEdit,
+}) => {
   const { t } = useTranslation();
+  const today = localToday();
   const [recent, setRecent] = useState<TaskRead[] | null>(null);
 
-  // 打开时拉最近实例（契约 §6：GET /scn/task-instances?template_id）
+  // 打开时拉最近实例（契约 §6：GET /scn/task-instances?template_id）。
+  // 查询不带 season：模板跨赛季后这里本就跨赛季混显，故行内展示 season_name 分辨归属。
   useEffect(() => {
     setRecent(null);
     if (!template) return;
@@ -40,7 +50,7 @@ const TaskTemplateDetailDrawer: React.FC<TaskTemplateDetailDrawerProps> = ({ tem
       .then(page => { if (!cancelled) setRecent(page.items); })
       .catch(() => { if (!cancelled) setRecent([]); });
     return () => { cancelled = true; };
-  }, [template]);
+  }, [template, refreshSignal]);
 
   // Esc 关闭
   useEffect(() => {
@@ -135,15 +145,25 @@ const TaskTemplateDetailDrawer: React.FC<TaskTemplateDetailDrawerProps> = ({ tem
               <p className="text-xs text-slate-400">{t('taskTemplate.noInstances')}</p>
             ) : (
               <ul className="space-y-1.5">
-                {recent.map(task => (
-                  <li key={task.id} className="flex items-center gap-2 text-xs">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${STATUS_DOT[task.status]}`} aria-hidden />
-                    <span className="text-slate-700 font-medium truncate flex-1">{task.title}</span>
-                    <span className="text-slate-400 shrink-0">
-                      {task.generated_for_date ?? task.created_at.slice(0, 10)} · {t(`taskStatus.${task.status}`)}
-                    </span>
-                  </li>
-                ))}
+                {recent.map(task => {
+                  const scheduled = isScheduled(task, today);
+                  return (
+                    <li key={task.id} className="flex items-center gap-2 text-xs">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${STATUS_DOT[task.status]}`} aria-hidden />
+                      <span className="text-slate-700 font-medium truncate flex-1">{task.title}</span>
+                      {/* 已排期角标：未来日期的实例孩子端看不到，不标出来家长会以为生成失败 */}
+                      {scheduled && (
+                        <span className="text-[10px] font-bold bg-sky-100 text-sky-700 px-1.5 py-0.5 rounded shrink-0">
+                          {t('taskTemplate.scheduledBadge', { date: task.generated_for_date })}
+                        </span>
+                      )}
+                      <span className="text-slate-400 shrink-0">
+                        {task.season_name ? `${task.season_name} · ` : ''}
+                        {task.generated_for_date ?? task.created_at.slice(0, 10)} · {t(`taskStatus.${task.status}`)}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </section>

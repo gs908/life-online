@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../../services/api';
 import type {
+  ContentMode,
   TaskCreate,
   TaskTemplateCreate,
   TaskTemplateRead,
@@ -9,7 +9,7 @@ import type {
   TaskType,
   TimedMode,
 } from '../../services/api';
-import { X, Plus, BrainCircuit, Info, AlertTriangle } from 'lucide-react';
+import { X, Plus, Info, AlertTriangle } from 'lucide-react';
 import {
   DURATION_MAX,
   DURATION_MIN,
@@ -36,7 +36,7 @@ interface AddTaskModalProps {
   onClose: () => void;
   /** 统一提交出口：一次性→instance（POST /scn/task-instances）；其余→template（POST /scn/task-templates）；编辑→update（PATCH） */
   onSubmit: (action: AddTaskSubmit) => void;
-  narrativeContext: string;
+  /** 来源赛季标签（契约 §6B）：有激活赛季则带上、没有则省略 —— 模板不绑赛季 */
   seasonId: string;
   childLevel: number;
   submitting?: boolean;
@@ -115,9 +115,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   isOpen,
   onClose,
   onSubmit,
-  narrativeContext,
   seasonId,
-  childLevel,
   submitting,
   editingTemplate,
   defaultCategory = 'once',
@@ -128,11 +126,13 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   const [category, setCategory] = useState<TaskTemplateCategoryIntent>(defaultCategory);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
-  const [newTaskLore, setNewTaskLore] = useState('');
   const [newTaskXP, setNewTaskXP] = useState(50);
   /** null = 未评星（契约 difficulty 可空）；编辑态保留原值，避免 PATCH 把 null 静默写成 3 */
   const [difficulty, setDifficulty] = useState<number | null>(3);
-  const [aiType, setAiType] = useState<TaskType | null>(null);
+  /** 任务要点（docs/15 R24）：模板只存与赛季无关的任务实质，作为 LLM 叙事的输入 */
+  const [contentBrief, setContentBrief] = useState('');
+  /** 叙事方式（docs/15 R24）：新口径下后端默认 LLM（生成时结合当季背景） */
+  const [contentMode, setContentMode] = useState<ContentMode>('LLM');
 
   const [triggers, setTriggers] = useState<TriggerDraft[]>([makeTriggerDraft()]);
   const [timedMode, setTimedMode] = useState<TimedMode>('NONE');
@@ -141,25 +141,18 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   const [durationMinutes, setDurationMinutes] = useState(45);
   const [errors, setErrors] = useState<TemplateFormErrors | null>(null);
 
-  // AI State（阶段⑥已切后端 /scn/ai/generate-quest）
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
-
   // 打开时重置表单（创建失败时 App 保留弹窗与已填内容，成功后关闭并在此处复位）
   useEffect(() => {
     if (!isOpen) return;
     setErrors(null);
-    setAiPrompt('');
-    setAiError(null);
-    setAiType(null);
     if (editingTemplate) {
       setCategory(categoryOf(editingTemplate));
       setNewTaskTitle(editingTemplate.title);
       setNewTaskDesc(editingTemplate.description);
-      setNewTaskLore(editingTemplate.lore_snippet ?? '');
       setNewTaskXP(editingTemplate.xp_reward);
       setDifficulty(editingTemplate.difficulty); // null 保留 null（Mars S2）
+      setContentBrief(editingTemplate.content_brief ?? '');
+      setContentMode(editingTemplate.content_mode);
       // 编辑预填：规则为空（如一次性走实例路径产生的模板）保持为空，
       // 不注入默认草稿——否则保存时会静默给模板追加一条 DAILY 触发器
       setTriggers(editingTemplate.triggers.map(triggerToDraft));
@@ -171,9 +164,11 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       setCategory(defaultCategory);
       setNewTaskTitle('');
       setNewTaskDesc('');
-      setNewTaskLore('');
       setNewTaskXP(50);
       setDifficulty(3);
+      setContentBrief('');
+      // 新口径：模板默认叙事方式为 LLM（生成任务时结合当季背景）——与后端默认值一致
+      setContentMode('LLM');
       // Miss.D §2 默认触发：一次性无规则区；日常=DAILY、挑战=WEEKDAYS 周一、限时=DAILY
       setTriggers([
         defaultCategory === 'challenge'
@@ -214,36 +209,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     setTriggers(prev => prev.map((draft, i) => (i === index ? { ...draft, ...patch } : draft)));
   };
 
-  const handleGenerateQuest = async () => {
-    if (!aiPrompt) return;
-    setIsGenerating(true);
-    setAiError(null);
-    // AI 调用统一走后端 /scn/ai(模型与默认参数收敛在后端 config.yaml 的 ai.llm 段)
-    try {
-      const suggestion = await api.ai.generateQuest({
-        topic: aiPrompt,
-        child_level: childLevel,
-        narrative_context: narrativeContext,
-      });
-      setNewTaskTitle(suggestion.title);
-      setNewTaskDesc(suggestion.description);
-      setNewTaskLore(suggestion.lore_snippet ?? '');
-      setNewTaskXP(suggestion.xp_reward);
-      setAiType(suggestion.type);
-      // AI 给出 CHAIN/COOP 时本轮四类选择器不收录，归入日常
-      if (!isEdit && ['DAILY', 'CHALLENGE', 'TIMED'].includes(suggestion.type)) {
-        setCategory(suggestion.type.toLowerCase() as TaskTemplateCategoryIntent);
-      }
-    } catch (err) {
-      if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
-        setAiError(t('addTask.aiNotConfigured'));
-      } else {
-        setAiError(err instanceof Error ? err.message : t('addTask.aiFailed'));
-      }
-    } finally {
-      setIsGenerating(false);
-    }
-  };
+  // 说明：模板表单原有的「AI 生成」面板已整体迁到生成表单（GenerateTaskModal）——
+// 它会带上**本赛季的 narrative_context**，属于"模板结合赛季背景生成内容"，
+// 与新口径（模板只存与赛季无关的任务实质）冲突，故不在此处出现。
 
   // V3：切回 NONE 时清空三字段（对应后端「三者皆空」校验）
   const changeTimedMode = (mode: TimedMode) => {
@@ -271,7 +239,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     });
 
   const handleSubmit = () => {
-    if (!seasonId && !isEdit) return;
+    // 模板不绑赛季（契约 §6B）：无激活赛季也能建模板，故不再有赛季闸门
     const formErrors = buildError();
     setErrors(formErrors);
     if (formErrors) return;
@@ -283,14 +251,20 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
           ? { timed_mode: timedMode, start_time: startTime, duration_minutes: durationMinutes }
           : { timed_mode: 'NONE' as const, deadline_time: null, start_time: null, duration_minutes: null };
 
+    // 来源赛季标签（契约 §6B）：有激活赛季就带上，没有则省略（模板不绑赛季）
+    const seasonTag = seasonId ? { season_id: seasonId } : {};
+
     if (isEdit && editingTemplate) {
       const patch: TaskTemplateUpdate = {
         title: newTaskTitle.trim(),
         description: newTaskDesc,
-        lore_snippet: newTaskLore || null,
+        // ⚠️ 不提交 lore_snippet：模板 lore 已收窄为"中性兜底叙事"，表单不再提供输入，
+        // 不传 = PATCH 保持不变（避免把既有值静默清空）
         xp_reward: Math.max(0, newTaskXP),
         // 显式传 null = 保持「未评星」，与 PATCH「未提供的字段不变」语义对齐（Mars S2）
         difficulty,
+        content_brief: contentBrief.trim() || null,
+        content_mode: contentMode,
         ...timedPayload,
         // triggers 整组替换（契约 §6A）；一次性类别 = 清空周期规则
         triggers: category === 'once' ? [] : triggers.map(draftToTriggerPayload),
@@ -302,8 +276,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     const base = {
       title: newTaskTitle.trim(),
       description: newTaskDesc,
-      lore_snippet: newTaskLore || undefined,
       xp_reward: Math.max(0, newTaskXP),
+      content_brief: contentBrief.trim() || undefined,
+      content_mode: contentMode,
       reminder_message: t('addTask.defaultReminder'),
       reminder_minutes_before: 15,
     };
@@ -312,8 +287,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       // 一次性：POST /scn/task-instances（旧实例路径，立即出现、不重复生成）
       const task: TaskCreate = {
         ...base,
-        season_id: seasonId,
-        type: aiType ?? 'DAILY',
+        ...seasonTag,
+        type: 'DAILY',
       };
       onSubmit({ mode: 'instance', task });
       return;
@@ -321,7 +296,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
 
     const template: TaskTemplateCreate = {
       ...base,
-      season_id: seasonId,
+      ...seasonTag,
       type: CATEGORY_TYPE[category],
       // 未评星不写字段（新建时 difficulty 可空，避免把 null 固化成默认值）
       ...(difficulty !== null ? { difficulty } : {}),
@@ -355,30 +330,49 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
         </div>
         <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
           {/* AI Generator（保留） */}
-          <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
-            <label className="text-xs font-bold text-purple-700 uppercase mb-2 block flex items-center gap-1">
-              <BrainCircuit size={14} /> {t('addTask.aiGenerator')}
-            </label>
-            <p className="text-xs text-slate-500 mb-2 italic">{t('addTask.basedOnTheme')} "{narrativeContext.substring(0, 50)}..."</p>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder={t('addTask.aiPlaceholder')}
-                className="flex-1 text-sm p-2 rounded border border-purple-200 focus:outline-none focus:border-purple-500"
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-              />
-              <button
-                disabled={isGenerating || !aiPrompt}
-                onClick={handleGenerateQuest}
-                className="bg-purple-600 text-white px-3 py-2 rounded font-bold text-xs disabled:opacity-50"
-              >
-                {isGenerating ? t('common.loadingThinking') : t('common.generate')}
-              </button>
+          {/* 叙事方式 + 任务要点（docs/15 R24）：模板只存与赛季无关的任务实质。
+              原「AI 生成」面板已迁到生成表单 —— 它会带入赛季背景，不属于模板层。 */}
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+            <div>
+              <div className="text-xs font-bold text-slate-600 mb-1.5">{t('addTask.narrativeMode')}</div>
+              <div role="radiogroup" aria-label={t('addTask.narrativeMode')} className="flex gap-1.5">
+                {(['LLM', 'STATIC'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={contentMode === mode}
+                    tabIndex={contentMode === mode ? 0 : -1}
+                    onClick={() => setContentMode(mode)}
+                    className={`text-xs px-3 py-1.5 rounded-full border font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
+                      contentMode === mode
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white border-slate-200 text-slate-500 hover:border-slate-400'
+                    }`}
+                  >
+                    {t(`addTask.narrativeModeValue.${mode}`)}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                {contentMode === 'LLM' ? t('addTask.narrativeModeLlmHint') : t('addTask.narrativeModeStaticHint')}
+              </p>
             </div>
-            {aiError && (
-              <p className="text-xs text-red-600 mt-2" data-testid="ai-error">{aiError}</p>
-            )}
+
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-600 block" htmlFor="add-task-brief">
+                {t('addTask.contentBrief')}
+              </label>
+              <textarea
+                id="add-task-brief"
+                value={contentBrief}
+                onChange={event => setContentBrief(event.target.value)}
+                placeholder={t('addTask.contentBriefPlaceholder')}
+                maxLength={500}
+                className="w-full border border-slate-200 rounded-lg p-2 h-16 text-sm"
+              />
+              <p className="text-[11px] text-slate-400">{t('addTask.contentBriefHint')}</p>
+            </div>
           </div>
 
           {/* 任务类型四卡（Miss.D §2；radio group 语义，方向键切换） */}
@@ -494,6 +488,13 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
           <div className="space-y-1.5">
             <label className="text-sm font-bold text-slate-700">{t('addTask.descriptionLore')}</label>
             <textarea className="w-full border border-slate-200 p-2 rounded h-20" value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} placeholder={t('addTask.descriptionPlaceholder')} />
+            {/* 模板 lore 已收窄为「与赛季无关的中性兜底叙事」：不再提供输入，
+                编辑态若既有值带赛季色彩，仅作提示（Shark §二-4） */}
+            {isEdit && editingTemplate?.lore_snippet && (
+              <p className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-lg p-2">
+                {t('addTask.loreNeutralHint')}
+              </p>
+            )}
           </div>
 
           {/* 一次性：隐藏触发规则区，显示提示条（Miss.D §3） */}
@@ -755,7 +756,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
             <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded">{t('common.cancel')}</button>
             <button
               onClick={handleSubmit}
-              disabled={submitting || !newTaskTitle.trim() || (!seasonId && !isEdit)}
+              disabled={submitting || !newTaskTitle.trim()}
               className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md transform active:scale-95 disabled:opacity-50"
             >
               {submitting ? t('common.loading') : submitLabel}

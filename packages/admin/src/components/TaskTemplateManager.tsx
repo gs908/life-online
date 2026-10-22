@@ -26,28 +26,35 @@ type FilterKey = 'all' | Exclude<TaskTemplateCategoryIntent, 'once'> | 'deprecat
 const FILTER_KEYS: FilterKey[] = ['all', 'daily', 'challenge', 'timed', 'deprecated'];
 
 interface TaskTemplateManagerProps {
-  /** 激活赛季 id；空 = 无激活赛季（新建禁用 + 提示） */
-  seasonId: string;
   /** 家庭 owner 才显示硬删（后端 DELETE 守卫口径：家庭 owner，docs/08 §6A） */
   canHardDelete: boolean;
   onToast: (title: string, msg: string) => void;
   onOpenCreate: () => void;
   onEditTemplate: (template: TaskTemplateRead) => void;
+  /** 选模板 → 生成（契约 §6B）：模板行「生成」入口 */
+  onOpenGenerate: (template: TaskTemplateRead) => void;
   /** App 层创建/编辑成功后递增，触发本组件重拉 */
   refreshSignal: number;
+  /** 生成任务成功后递增 → 详情抽屉的「最近实例」跟着重拉 */
+  instancesRefreshSignal?: number;
   /** 实例被 regenerate 终结 / delete 硬删后通知 App 重拉任务板 */
   onInstancesChanged?: () => void;
 }
 
 /** 管理端「任务模板」视图（DEV-35 块 A，Miss.D 设计规范 §4/§6）：
- *  与「特权模板」（PrivilegeTree 琥珀色）视觉区分——卡片一律中性底，颜色只出现在类型徽标。 */
+ *  与「特权模板」（PrivilegeTree 琥珀色）视觉区分——卡片一律中性底，颜色只出现在类型徽标。
+ *
+ * 契约 §6B：**模板不绑赛季**（可跨赛季复用）——
+ * 列表不再按赛季过滤；`season_id` 只作「来源赛季」标签展示；
+ * 无激活赛季时也能新建模板（原赛季闸门已去掉）。 */
 const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
-  seasonId,
   canHardDelete,
   onToast,
   onOpenCreate,
   onEditTemplate,
+  onOpenGenerate,
   refreshSignal,
+  instancesRefreshSignal,
   onInstancesChanged,
 }) => {
   const { t } = useTranslation();
@@ -71,17 +78,16 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // 列表不分页（契约 §6A）；is_active 不传 = 全部，筛选 chip 与「一次性」类别都在前端推导
-      const items = await api.taskTemplates.listTemplates(
-        seasonId ? { season_id: seasonId } : {},
-      );
+      // 列表不分页（契约 §6A）；is_active 不传 = 全部，筛选 chip 与「一次性」类别都在前端推导。
+      // ⚠️ 不传 season_id：模板不绑赛季（契约 §6B），按赛季过滤会让上个赛季建的模板"消失"。
+      const items = await api.taskTemplates.listTemplates();
       setTemplates(items);
     } catch (error) {
       onToast(t('toast.loadFailedTitle'), error instanceof ApiError ? error.message : t('taskTemplate.loadFailed'));
     } finally {
       setLoading(false);
     }
-  }, [seasonId, onToast, t]);
+  }, [onToast, t]);
 
   useEffect(() => {
     load();
@@ -212,20 +218,17 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
           </div>
           <button
             onClick={onOpenCreate}
-            disabled={!seasonId}
-            title={seasonId ? undefined : t('taskTemplate.noSeasonHint')}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 hover:bg-green-700 transition-colors shadow-md shadow-green-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 hover:bg-green-700 transition-colors shadow-md shadow-green-600/20"
           >
             <Plus size={16} aria-hidden /> {t('taskTemplate.createTemplate')}
           </button>
         </div>
       </div>
 
-      {!seasonId && (
-        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mt-3">
-          {t('taskTemplate.noSeasonHint')}
-        </p>
-      )}
+      {/* 模板与赛季无关（契约 §6B）：无激活赛季也能维护模板库，故这里只做中性说明，不再禁用新建 */}
+      <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3 mt-3">
+        {t('taskTemplate.seasonAgnosticHint')}
+      </p>
 
       {/* 筛选 chips（Miss.D §4） */}
       <div className="flex flex-wrap gap-1.5 mt-4" role="group" aria-label={t('taskTemplate.title')}>
@@ -268,8 +271,7 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
               <p className="text-xs text-slate-500 mt-1 mb-4">{t('taskTemplate.emptyHint')}</p>
               <button
                 onClick={onOpenCreate}
-                disabled={!seasonId}
-                className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50"
+                className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-green-700"
               >
                 {t('taskTemplate.createTemplate')}
               </button>
@@ -317,6 +319,10 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
                       ? template.triggers.map(trigger => describeTrigger(trigger, t)).join(t('taskTemplate.listJoiner'))
                       : t('taskTemplate.noTriggers')}
                     {' · '}⏱ {describeTimeWindow(template, t)}
+                    {/* 来源赛季标签（契约 §6B）：模板不绑赛季，这里只作溯源提示 */}
+                    {template.season_name && (
+                      ' · ' + t('taskTemplate.sourceSeason', { name: template.season_name })
+                    )}
                     {!active && template.deprecated_at && (
                       ' · ' + t('taskTemplate.deprecatedInfo', {
                         date: template.deprecated_at.slice(0, 10),
@@ -333,6 +339,14 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
                     <>
                       <button disabled={busy} onClick={() => onEditTemplate(template)} className="text-xs font-semibold text-sky-700 hover:text-sky-800 disabled:opacity-50">
                         {t('taskTemplate.edit')}
+                      </button>
+                      {/* 选模板 → 生成（契约 §6B）：新增入口，与「重新生成」（终结重建）语义不同 */}
+                      <button
+                        disabled={busy}
+                        onClick={() => onOpenGenerate(template)}
+                        className="text-xs font-bold text-green-700 hover:text-green-800 disabled:opacity-50"
+                      >
+                        {t('taskTemplate.generate')}
                       </button>
                       <button disabled={busy} onClick={() => openRegenerate(template)} className="text-xs text-slate-500 hover:text-slate-700 disabled:opacity-50">
                         {t('taskTemplate.regenerate')}
@@ -492,6 +506,7 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
       {/* 详情抽屉 */}
       <TaskTemplateDetailDrawer
         template={detailTemplate}
+        refreshSignal={instancesRefreshSignal}
         onClose={() => setDetailId(null)}
         onEdit={(target) => { setDetailId(null); onEditTemplate(target); }}
       />

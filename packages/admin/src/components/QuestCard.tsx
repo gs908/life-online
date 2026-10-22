@@ -8,11 +8,15 @@ interface QuestCardProps {
   task: TaskRead;
   role: UserRole;
   isActive?: boolean;
+  /** 已排期（`generated_for_date > 今天`）：孩子端看不到也接不了，父母端必须标出来 */
+  scheduled?: boolean;
   onAccept: (id: string) => void;
   onSubmit: (id: string) => void;
   onApprove: (id: string) => void;
   onDelete?: (id: string) => void;
   onAbandon?: (id: string) => void;
+  /** 微调难度/押金/经验值（契约 §6B：PATCH /scn/task-instances/{id}） */
+  onTune?: (id: string) => void;
 }
 
 /**
@@ -20,7 +24,7 @@ interface QuestCardProps {
  * 本地 XP 倍率动态计算已删除（docs/10 §4 阶段③）——评分倍率/超时惩罚/快速加成
  * 由后端 approve 计算并写入 xp_awarded，前端不再预演。
  */
-const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, onSubmit, onApprove, onDelete, onAbandon }) => {
+const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, onAccept, onSubmit, onApprove, onDelete, onAbandon, onTune }) => {
   const { t } = useTranslation();
 
   const getTypeColor = (type: TaskRead['type']) => {
@@ -61,6 +65,12 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
             {task.type === 'COOP' && <Users size={16} className="text-purple-500" />}
             {task.type === 'TIMED' && <Clock size={16} className="text-orange-500" />}
             <span className="text-xs uppercase font-bold text-slate-500 tracking-wider">{t(`taskType.${task.type}`)}</span>
+            {/* 已排期角标（契约 §6B）：未来日期的实例孩子端不可见，不标出来家长会当成"孩子没做" */}
+            {scheduled && (
+              <span className="text-[10px] font-bold bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full">
+                {t('taskTemplate.scheduledBadge', { date: task.generated_for_date })}
+              </span>
+            )}
         </div>
         <div className="flex items-center gap-2">
             <div className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-600">
@@ -126,6 +136,12 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, onAccept, o
            <button onClick={() => onApprove(task.id)} className="bg-yellow-500 text-white text-sm px-4 py-2 rounded-lg font-bold hover:bg-yellow-600 flex items-center gap-2 active:scale-95 transition-all shadow-md">
              <CheckCircle size={16} /> {t('questCard.review')}
            </button>
+        )}
+
+        {role === UserRole.PARENT && onTune && task.status === TaskStatus.AVAILABLE && (
+            <button onClick={() => onTune(task.id)} className="text-sky-600 hover:text-sky-800 text-xs font-bold underline">
+                {t('tune.entry')}
+            </button>
         )}
 
         {role === UserRole.PARENT && onDelete && task.status !== TaskStatus.PENDING_REVIEW && (
