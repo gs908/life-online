@@ -42,6 +42,11 @@ interface TaskTuneFieldsProps {
   /** 「按模板当前值填回」：父组件拉一次模板当前值后回填并标记脏 */
   onFillBack: (field: TuneField) => void;
   fillingBack?: TuneField | null;
+  /**
+   * 按字段置灰「填回」。**难度必须用**：模板未评星时 `difficulty` 是 null，
+   * "填回"没有任何值可填 —— 写 0 会被后端 `ge=1` 直接 422（这是正常点击可达的路径）。
+   */
+  fillBackDisabled?: Partial<Record<TuneField, boolean>>;
   /** 押金预览的日期基准（生成表单 = 目标日期；微调表单 = 实例归属日） */
   previewDate: string;
   disabled?: boolean;
@@ -54,6 +59,7 @@ const TaskTuneFields: React.FC<TaskTuneFieldsProps> = ({
   onChange,
   onFillBack,
   fillingBack,
+  fillBackDisabled,
   previewDate,
   disabled,
 }) => {
@@ -61,7 +67,11 @@ const TaskTuneFields: React.FC<TaskTuneFieldsProps> = ({
   const [preview, setPreview] = useState<TaskDepositPreviewResponse | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
 
-  const fillBackDisabled = disabled || template.id === null;
+  const fillBackDisabledFor = (field: TuneField): { disabled: boolean; hint: string } => {
+    if (template.id === null) return { disabled: true, hint: t('tune.fillBackUnavailable') };
+    if (fillBackDisabled?.[field]) return { disabled: true, hint: t('tune.fillBackNoTemplateValue') };
+    return { disabled: false, hint: t('tune.fillBackHint') };
+  };
 
   /**
    * 押金预览。⚠️ `value.difficulty` **刻意不进依赖**：
@@ -92,18 +102,21 @@ const TaskTuneFields: React.FC<TaskTuneFieldsProps> = ({
     };
   }, [template.type, template.estimated_minutes, value.time_deposit, previewDate, disabled]);
 
-  const fillBackButton = (field: TuneField) => (
-    <button
-      type="button"
-      onClick={() => onFillBack(field)}
-      disabled={fillBackDisabled || disabled || fillingBack === field}
-      title={fillBackDisabled ? t('tune.fillBackUnavailable') : t('tune.fillBackHint')}
-      className="text-[11px] font-bold text-sky-700 hover:text-sky-800 disabled:text-slate-300 disabled:cursor-not-allowed flex items-center gap-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 rounded px-1"
-    >
-      <RefreshCw size={11} aria-hidden />
-      {fillingBack === field ? t('common.loading') : t('tune.fillBack')}
-    </button>
-  );
+  const fillBackButton = (field: TuneField) => {
+    const state = fillBackDisabledFor(field);
+    return (
+      <button
+        type="button"
+        onClick={() => onFillBack(field)}
+        disabled={state.disabled || disabled || fillingBack === field}
+        title={state.hint}
+        className="text-[11px] font-bold text-sky-700 hover:text-sky-800 disabled:text-slate-300 disabled:cursor-not-allowed flex items-center gap-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 rounded px-1"
+      >
+        <RefreshCw size={11} aria-hidden />
+        {fillingBack === field ? t('common.loading') : t('tune.fillBack')}
+      </button>
+    );
+  };
 
   const dirtyBadge = (field: TuneField) =>
     dirty[field] ? (
@@ -140,7 +153,7 @@ const TaskTuneFields: React.FC<TaskTuneFieldsProps> = ({
                 aria-label={t('taskTemplate.difficultyN', { n: star })}
                 disabled={disabled}
                 // 再点当前值不做取消：清空 = 传 null = 422（快照语义下没有"未覆盖"态）
-                onClick={() => onChange('difficulty', star)}
+                onClick={() => onChange('difficulty', Math.min(5, Math.max(1, star)))}
                 className={`w-7 h-7 text-lg leading-none rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
                   active ? 'text-amber-500' : 'text-slate-200 hover:text-slate-300'
                 }`}
@@ -150,9 +163,13 @@ const TaskTuneFields: React.FC<TaskTuneFieldsProps> = ({
             );
           })}
           <span className="text-[11px] text-slate-400 ml-2">
-            {value.difficulty === null ? t('tune.unrated') : `★${value.difficulty}`}
+            {/* 0 与 null 都不是有效星级（后端 ge=1）：一律显示「未评星」，避免 ★0 残留 */}
+            {value.difficulty === null || value.difficulty < 1 ? t('tune.unrated') : `★${value.difficulty}`}
           </span>
         </div>
+        {fillBackDisabledFor('difficulty').disabled && template.id !== null && (
+          <p className="text-[11px] text-slate-400 mt-1">{t('tune.fillBackNoTemplateValue')}</p>
+        )}
         <p className="text-[11px] text-slate-400 mt-1">{t('tmpl.difficultyHint')}</p>
       </div>
 
@@ -223,7 +240,10 @@ const TaskTuneFields: React.FC<TaskTuneFieldsProps> = ({
             min={0}
             value={value.xp_reward}
             disabled={disabled}
-            onChange={event => onChange('xp_reward', Math.max(0, Number(event.target.value)))}
+            onChange={event => {
+              const parsed = Number(event.target.value);
+              onChange('xp_reward', Number.isFinite(parsed) ? Math.max(0, parsed) : 0);
+            }}
             aria-label={t('common.xp')}
             className="w-24 border border-slate-200 rounded px-2 py-1 text-sm"
           />

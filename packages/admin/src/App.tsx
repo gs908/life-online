@@ -110,7 +110,9 @@ const App: React.FC = () => {
   /** 生成成功 → 模板详情抽屉的「最近实例」重拉（否则生成完看不到结果） */
   const [instancesRefreshSignal, setInstancesRefreshSignal] = useState(0);
   const [tuningTask, setTuningTask] = useState<TaskRead | null>(null);
-  const today = useMemo(() => localToday(), []);
+  // 每次渲染取一次（纯字符串计算）：不要用 useMemo([]) 冻结在挂载那一刻，
+  // 否则跨零点后「已排期 / 已投放」分组会错。字符串按值比较，不会造成额外重渲染。
+  const today = localToday();
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [pendingQuestId, setPendingQuestId] = useState<string | null>(null);
@@ -278,15 +280,18 @@ const App: React.FC = () => {
     setIsGenerateOpen(true);
   };
 
-  /** 生成成功（含 action='exists' 命中既有实例）：回显由弹窗负责，这里只负责刷新与 toast */
+  /** 生成成功（含 action='exists' 命中既有实例）：回显由弹窗负责，这里只负责刷新与 toast。
+   *  ⚠️ `generated_for_date` 可为 null（skipped_expired 无产物；复用的链式实例也可能是 NULL）——
+   *  不判空会算出 `null <= today` 恒 false，进而说「已排期到 null」。 */
   const handleGenerated = async (result: TaskGenerateResult) => {
-    const deployed = result.generated_for_date <= today;
-    toast(
-      t('toast.taskGeneratedTitle'),
-      deployed
-        ? t('toast.taskGeneratedDeployedMsg', { date: result.generated_for_date })
-        : t('toast.taskGeneratedScheduledMsg', { date: result.generated_for_date }),
-    );
+    const date = result.generated_for_date;
+    if (date === null) {
+      toast(t('toast.taskGeneratedTitle'), t('generateTask.resultSkipped'));
+    } else if (date <= today) {
+      toast(t('toast.taskGeneratedTitle'), t('toast.taskGeneratedDeployedMsg', { date }));
+    } else {
+      toast(t('toast.taskGeneratedTitle'), t('toast.taskGeneratedScheduledMsg', { date }));
+    }
     setInstancesRefreshSignal(signal => signal + 1);
     await loadBoard();
   };

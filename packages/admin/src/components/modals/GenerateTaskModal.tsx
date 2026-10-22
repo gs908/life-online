@@ -61,6 +61,8 @@ const GenerateTaskModal: React.FC<GenerateTaskModalProps> = ({
   /** 目标日期是否已有实例（预检，中性提示，不是警示） */
   const [dateHasInstance, setDateHasInstance] = useState<boolean | null>(null);
   const [result, setResult] = useState<TaskGenerateResult | null>(null);
+  /** 本次提交是否真的带了覆盖值：配合 `overrides_applied` 判断"改动没被写入" */
+  const [sentOverrides, setSentOverrides] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -88,6 +90,7 @@ const GenerateTaskModal: React.FC<GenerateTaskModalProps> = ({
     if (!isOpen) return;
     setTargetDate(today);
     setResult(null);
+    setSentOverrides(false);
     setFormError(null);
     setDateHasInstance(null);
     setFillingBack(null);
@@ -165,9 +168,19 @@ const GenerateTaskModal: React.FC<GenerateTaskModalProps> = ({
     setFillingBack(field);
     try {
       const fresh = await api.taskTemplates.getTemplate(selected.id);
-      const next =
-        field === 'difficulty' ? fresh.difficulty ?? 0 : field === 'time_deposit' ? fresh.time_deposit : fresh.xp_reward;
-      setValues(prev => ({ ...prev, [field]: next }));
+      // ⚠️ 模板未评星时 difficulty 是 null，而难度没有"空值"可提交（后端 ge=1）：
+      // 既不能写 0（必然 422），也不该进 dirty。这里直接不动值、给一句说明。
+      if (field === 'difficulty') {
+        if (fresh.difficulty === null || fresh.difficulty < 1) {
+          onToast(t('toast.actionFailedTitle'), t('tune.fillBackNoTemplateValue'));
+          return;
+        }
+        setValues(prev => ({ ...prev, difficulty: fresh.difficulty as number }));
+      } else if (field === 'time_deposit') {
+        setValues(prev => ({ ...prev, time_deposit: fresh.time_deposit }));
+      } else {
+        setValues(prev => ({ ...prev, xp_reward: fresh.xp_reward }));
+      }
       setDirty(prev => ({ ...prev, [field]: true }));
     } catch (error) {
       onToast(t('toast.actionFailedTitle'), error instanceof ApiError ? error.message : t('tune.fillBackFailed'));
@@ -182,9 +195,13 @@ const GenerateTaskModal: React.FC<GenerateTaskModalProps> = ({
     setSubmitting(true);
     // 只提交用户改过的字段：未改动 = 不放进 body = 用模板当前值（快照）
     const body: TaskGenerateRequest = { target_date: targetDate };
-    if (dirty.difficulty && values.difficulty !== null) body.difficulty = values.difficulty;
+    // 结构上兜住"永不发出非法难度"：后端 ge=1，0 / 负数一律不带
+    if (dirty.difficulty && values.difficulty !== null && values.difficulty >= 1) {
+      body.difficulty = values.difficulty;
+    }
     if (dirty.time_deposit) body.time_deposit = values.time_deposit;
     if (dirty.xp_reward) body.xp_reward = values.xp_reward;
+    setSentOverrides(Object.keys(body).some(key => key !== 'target_date'));
     try {
       const generated = await api.taskTemplates.generateTemplate(selected.id, body);
       setResult(generated);
@@ -222,8 +239,7 @@ const GenerateTaskModal: React.FC<GenerateTaskModalProps> = ({
     }
   };
 
-  const isFuture = Boolean(result && result.generated_for_date > today);
-
+  
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div
@@ -370,33 +386,58 @@ const GenerateTaskModal: React.FC<GenerateTaskModalProps> = ({
                   onChange={changeField}
                   onFillBack={fillBack}
                   fillingBack={fillingBack}
+                  // 模板未评星（difficulty 为 null）时难度「填回」置灰：没有值可填，
+                  // 写 0 会被后端 ge=1 直接 422（Mars 审查 🔴）
+                  fillBackDisabled={{ difficulty: selected.difficulty === null }}
                   previewDate={targetDate}
                   disabled={submitting}
                 />
               </div>
 
-              {/* 提交后回显 */}
-              {result && (
+              {/* 提交后回显。
+                  ⚠️ 无产物动作（skipped_expired：后端该分支 8 个字段全 null）**不能套成功框** ——
+                  否则会渲染出「已排期到 null」+ contentSource.null。这里按 instance_id 分两态。 */}
+              {result && result.instance_id === null && (
+                <div
+                  className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="text-sm font-bold text-amber-800">{t('generateTask.resultSkippedTitle')}</div>
+                  <p className="text-xs text-amber-700">{resultActionCopy(result)}</p>
+                </div>
+              )}
+
+              {result && result.instance_id !== null && (
                 <div
                   className="bg-green-50 border border-green-200 rounded-xl p-3 space-y-1"
                   role="status"
                   aria-live="polite"
                 >
                   <div className="text-sm font-bold text-green-800">
-                    {isFuture
-                      ? t('generateTask.scheduledFor', { date: result.generated_for_date })
-                      : t('generateTask.deployedToday')}
+                    {result.generated_for_date === null
+                      ? t('generateTask.resultReused')
+                      : result.generated_for_date > today
+                        ? t('generateTask.scheduledFor', { date: result.generated_for_date })
+                        : t('generateTask.deployedToday')}
                   </div>
                   <p className="text-xs text-green-700">{resultActionCopy(result)}</p>
                   <p className="text-[11px] text-slate-500">
                     {t('generateTask.resultValues', {
                       difficulty: result.difficulty ?? t('tune.unrated'),
-                      deposit: result.time_deposit,
-                      xp: result.xp_reward,
+                      deposit: result.time_deposit ?? '—',
+                      xp: result.xp_reward ?? '—',
                     })}
                     {result.season_name ? ` · ${result.season_name}` : ''}
-                    {` · ${t(`contentSource.${result.content_source}`)}`}
+                    {result.content_source ? ` · ${t(`contentSource.${result.content_source}`)}` : ''}
                   </p>
+                  {/* 覆盖值只在 created 时写入；其余动作复用既有实例，改动被丢弃 ——
+                      不能静默，明确把用户引导到「微调」（消费 overrides_applied） */}
+                  {sentOverrides && !result.overrides_applied && (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                      {t('generateTask.overridesNotApplied')}
+                    </p>
+                  )}
                 </div>
               )}
 

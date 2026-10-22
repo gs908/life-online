@@ -340,14 +340,19 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
                       <button disabled={busy} onClick={() => onEditTemplate(template)} className="text-xs font-semibold text-sky-700 hover:text-sky-800 disabled:opacity-50">
                         {t('taskTemplate.edit')}
                       </button>
-                      {/* 选模板 → 生成（契约 §6B）：新增入口，与「重新生成」（终结重建）语义不同 */}
-                      <button
-                        disabled={busy}
-                        onClick={() => onOpenGenerate(template)}
-                        className="text-xs font-bold text-green-700 hover:text-green-800 disabled:opacity-50"
-                      >
-                        {t('taskTemplate.generate')}
-                      </button>
+                      {/* 选模板 → 生成（契约 §6B）：与「重新生成」（终结重建）语义不同。
+                          ⚠️ CHAIN 第 2..N 步模板不显示：链实例由"链首投放 + 逐步解锁"产生，
+                          手动生成会绕过解锁（今天生成会把 NULL 日期的链实例盖上今天，未来日期直接建平行实例）。
+                          后端另有 409 守卫兜底（Mars 审查 🟡4）。 */}
+                      {!(template.type === 'CHAIN' && template.chain_order > 1) && (
+                        <button
+                          disabled={busy}
+                          onClick={() => onOpenGenerate(template)}
+                          className="text-xs font-bold text-green-700 hover:text-green-800 disabled:opacity-50"
+                        >
+                          {t('taskTemplate.generate')}
+                        </button>
+                      )}
                       <button disabled={busy} onClick={() => openRegenerate(template)} className="text-xs text-slate-500 hover:text-slate-700 disabled:opacity-50">
                         {t('taskTemplate.regenerate')}
                       </button>
