@@ -11,6 +11,7 @@ import {
   type TaskTemplateCategoryIntent,
 } from './taskTemplateUtils';
 import TaskTemplateDetailDrawer from './TaskTemplateDetailDrawer';
+import { isScheduled, localToday } from '../utils/date';
 
 /** 类别徽标（Miss.D §2：100 档底 × 700 档字，对比 ≥ 4.5:1；卡片本体保持中性底）。
  *  补遗 1 §1：列表无「一次性」类，无周期规则模板按 type 归入日常（categoryOf）。 */
@@ -58,6 +59,7 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
   onInstancesChanged,
 }) => {
   const { t } = useTranslation();
+  const today = localToday();
   const [templates, setTemplates] = useState<TaskTemplateRead[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -69,6 +71,8 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
   const [deprecateReason, setDeprecateReason] = useState('');
   const [regenerating, setRegenerating] = useState<TaskTemplateRead | null>(null);
   const [unconsumedCount, setUnconsumedCount] = useState<number | null>(null);
+  /** 已排期到未来、regenerate 不会终结的条数（null = 数不出来 / 超一页） */
+  const [scheduledKeptCount, setScheduledKeptCount] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<TaskTemplateRead | null>(null);
   const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -158,34 +162,54 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
     setRegenerating(template);
     regenerateIdRef.current = template.id;
     setUnconsumedCount(null);
+    setScheduledKeptCount(null);
     try {
-      // 事前 N（契约 §6A，e278c3e）：AVAILABLE + IN_PROGRESS 两态 total 求和；
-      // PENDING_REVIEW 不终结（保留审核机会），不计入也不影响确认文案语义
+      // 事前 N（DEV-50 审查 🟡5 后口径）：AVAILABLE + IN_PROGRESS 里**会被终结的**
+      // 那部分 = 池内实例（`generated_for_date IS NULL OR <= 今天`）。
+      // 已排期到未来的实例后端不终结，这里单独计数，文案点名"不受影响"——
+      // 否则家长会以为"点一下把明天也清掉了"。
+      // PENDING_REVIEW 仍不计入（保留审核机会），与后端一致。
       const [available, inProgress] = await Promise.all([
-        api.tasks.listTasks({ template_id: template.id, status: 'AVAILABLE', page_size: 1 }),
-        api.tasks.listTasks({ template_id: template.id, status: 'IN_PROGRESS', page_size: 1 }),
+        api.tasks.listTasks({ template_id: template.id, status: 'AVAILABLE', page_size: 200 }),
+        api.tasks.listTasks({ template_id: template.id, status: 'IN_PROGRESS', page_size: 200 }),
       ]);
-      const total = available.total + inProgress.total;
-      if (regenerateIdRef.current === template.id) setUnconsumedCount(total);
+      const rows = [...available.items, ...inProgress.items];
+      const willTerminate = rows.filter(row => !isScheduled(row, today)).length;
+      const scheduled = rows.filter(row => isScheduled(row, today)).length;
+      // 超过一页时不写死数字（宁可给通用文案，也不报一个偏小的数）
+      const truncated = available.total + inProgress.total > rows.length;
+      if (regenerateIdRef.current === template.id) {
+        setUnconsumedCount(truncated ? null : willTerminate);
+        setScheduledKeptCount(truncated ? null : scheduled);
+      }
     } catch {
-      if (regenerateIdRef.current === template.id) setUnconsumedCount(null); // 数不出来就不写死数字，文案给通用版
+      // 数不出来就不写死数字，文案给通用版
+      if (regenerateIdRef.current === template.id) {
+        setUnconsumedCount(null);
+        setScheduledKeptCount(null);
+      }
     }
   };
 
   /** regenerate 响应按 action 分支 toast（契约 §6A / Gin 注记）；
-   *  契约外值兜底处理。任务板重拉不看 action：后端先无条件终结 AVAILABLE+IN_PROGRESS
-   *  再生成，因此只要 terminalized_instance_ids 非空（含 exists/skipped_expired 分支）板就已过期 */
+   *  契约外值兜底处理。任务板重拉不看 action：后端终结池内实例后即生成，
+   *  因此只要 terminalized_instance_ids 非空（含 exists/skipped_expired 分支）板就已过期 */
   const regenerateToast = (result: TaskTemplateRegenerateResult) => {
     if (result.terminalized_instance_ids.length > 0) onInstancesChanged?.();
+    // 消费响应里的 scheduled_kept_count（后端新增；旧响应可能没这个字段 → ?? 0 兜底）
+    const scheduledKept = result.scheduled_kept_count ?? 0;
+    const keptLine = scheduledKept > 0
+      ? ' ' + t('taskTemplate.regenerateScheduledKept', { count: scheduledKept })
+      : '';
     if (result.action === 'created') {
       onToast(t('toast.templateRegeneratedTitle'),
-        t('toast.templateRegeneratedMsg', { count: result.terminalized_instance_ids.length }));
+        t('toast.templateRegeneratedMsg', { count: result.terminalized_instance_ids.length }) + keptLine);
     } else if (result.action === 'kept') {
-      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateKeptMsg'));
+      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateKeptMsg') + keptLine);
     } else if (result.action === 'exists') {
-      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateExistsMsg'));
+      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateExistsMsg') + keptLine);
     } else {
-      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateNoNewMsg'));
+      onToast(t('toast.templateRegeneratedTitle'), t('toast.templateRegenerateNoNewMsg') + keptLine);
     }
   };
 
@@ -433,11 +457,18 @@ const TaskTemplateManager: React.FC<TaskTemplateManagerProps> = ({
               <h4 className="font-bold text-slate-800">{t('taskTemplate.regenerateTitle')}</h4>
               <button onClick={() => setRegenerating(null)} aria-label={t('common.close')}><X size={16} /></button>
             </div>
-            <p className="text-sm text-slate-600 mb-4">
+            <p className="text-sm text-slate-600 mb-2">
               {unconsumedCount === null
                 ? t('taskTemplate.regenerateBodyPlain', { title: regenerating.title })
                 : t('taskTemplate.regenerateBody', { title: regenerating.title, count: unconsumedCount })}
             </p>
+            {/* 已排期到未来的实例不在终结范围内（DEV-50 审查 🟡5）：必须点名，
+                否则家长会以为"点一下把明天也清掉了"。数不出来时不显示，不瞎写数字。 */}
+            {scheduledKeptCount !== null && scheduledKeptCount > 0 && (
+              <p className="text-xs text-sky-700 bg-sky-50 border border-sky-200 rounded-lg p-2 mb-3">
+                {t('taskTemplate.regenerateScheduledKept', { count: scheduledKeptCount })}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <button onClick={() => setRegenerating(null)} className="px-4 py-2 text-slate-600 font-bold text-sm hover:bg-slate-100 rounded">{t('common.cancel')}</button>
               <button

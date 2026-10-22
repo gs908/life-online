@@ -391,8 +391,13 @@ export type TaskTemplateRegenerateAction =
 
 export interface TaskTemplateRegenerateResult {
   template_id: string;
-  /** 被终结（置 EXPIRED、押金退还）的实例 id 列表；PENDING_REVIEW 不在其中 */
+  /** 被终结（置 EXPIRED、押金退还）的实例 id 列表；PENDING_REVIEW 不在其中，
+   *  已排期到未来的实例自 DEV-50 审查 🟡5 起也不在其中 */
   terminalized_instance_ids: string[];
+  /** 已排期到未来、本次**不受影响**的实例（后端新增）。
+   *  声明为可选：旧响应没有这两个字段时前端按 0 / [] 兜底，合并先后顺序不影响可用性。 */
+  scheduled_kept_instance_ids?: string[];
+  scheduled_kept_count?: number;
   action: TaskTemplateRegenerateAction;
   /** 仅 action='created' 时非空 */
   new_instance: { id: string; generated_for_date: string; status: TaskStatus } | null;
