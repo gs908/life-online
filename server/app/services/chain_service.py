@@ -161,6 +161,8 @@ async def spawn_next_chain_step(
     )
     next_instance = ScnTaskInstance(
         family_id=completed.family_id,
+        # 赛季**继承链首实例**(DEV-50 的例外,已写进口径):链是连续的一段,
+        # 跨赛季断链没有意义;与"生成入口取当前激活赛季"有意不同。
         season_id=completed.season_id,
         template_id=next_template.id,
         creator_account_id=completed.creator_account_id,
@@ -169,12 +171,18 @@ async def spawn_next_chain_step(
         description=next_template.description,
         lore_snippet=next_template.lore_snippet,
         xp_reward=next_template.xp_reward,
+        # 难度快照(DEV-50):本路径不走生成器,必须自己快照 —— 漏掉会让链内
+        # 步骤的 difficulty 恒为 NULL(XP 倍率退化成 1.0),链内"逐步递进难度"
+        # 直接失效(由 test_chain_progressive_unlock_and_final_bonus 拦截)。
+        difficulty=next_template.difficulty,
         status=TaskStatus.AVAILABLE,
         deadline=expire_at,
         expire_at=expire_at,
         time_deposit=next_template.time_deposit,
         chain_index=index + 1,
         chain_total=total,
+        # 已知缺口(非本次引入):本路径不调 LLM,叙事沿用模板 lore、标 TEMPLATE;
+        # 与生成器产出的兄弟实例(content_mode=LLM)在叙事来源上不一致。
     )
     db.add(next_instance)
     await db.flush()

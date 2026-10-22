@@ -37,8 +37,10 @@ class ScnSeason(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
     family: Mapped["SysFamily"] = relationship(lazy="raise")
+    # 模板可跨赛季(DEV-50):FK 为 ON DELETE SET NULL,故此处**不能**用
+    # delete-orphan —— 删赛季只把模板的来源赛季置空,模板本身保留。
     task_templates: Mapped[list["ScnTaskTemplate"]] = relationship(
-        back_populates="season", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="season", cascade="save-update, merge", passive_deletes=True
     )
     task_instances: Mapped[list["ScnTaskInstance"]] = relationship(
         back_populates="season", cascade="all, delete-orphan", passive_deletes=True

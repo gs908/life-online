@@ -55,6 +55,12 @@ class ScnTaskInstance(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     lore_snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
     xp_reward: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    # 难度**快照**(DEV-50,docs/15 §12 P2):生成时从模板复制,审批算 XP 读本列
+    # (见 task_service._coop_final_xp)。不是"覆盖层"——可空仅因模板难度本身
+    # 可空(未评星),快照照抄 NULL;改模板难度**不会**移动未结算实例的 XP。
+    difficulty: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="难度 1-5 快照(生成时从模板复制);NULL=生成时模板未评星"
+    )
     status: Mapped[TaskStatus] = mapped_column(
         String(32), nullable=False, default=TaskStatus.AVAILABLE, index=True
     )

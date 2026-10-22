@@ -6,7 +6,9 @@
 - 赛季详情/更新/删除/激活对别的家庭的赛季一律返回 404(不泄露赛季是否存在于别的家庭)。
 - 孩子角色调用写接口(创建/更新/删除/激活)返回 403。
 - 历史统计接口返回每个赛季的任务总数/完成数/已发放 XP 总和,供 Web 管理台历史面板展示。
-- 赛季与任务模板/任务实例的关联规则:删除赛季会级联删除挂在它下面的任务模板与任务实例。
+- 赛季与任务模板/任务实例的关联规则(DEV-50):模板**不随赛季删除**(可跨赛季
+  资产,只解绑来源赛季);实例**仍随赛季删除**(任务不跨赛季);赛季下已有
+  COMPLETED/EXPIRED 实例时拒绝删除(资产守卫)。
 
 需要可连接的数据库(远程优先),不可达时该模块内用例会被 `db_ready` fixture 跳过。
 """
@@ -209,24 +211,67 @@ async def test_season_history_stats(
     assert row["total_xp"] == 42
 
 
-async def test_deleting_season_cascades_task_templates_and_instances(
+async def test_deleting_season_keeps_templates_and_deletes_instances(
     seeded_family: SeededFamily, db_session: AsyncSession
 ) -> None:
+    """DEV-50 关联规则变更:「模板可跨赛季,任务不跨赛季」。
+
+    - **模板保留**(可跨赛季复用的资产),只把来源赛季解绑(SET NULL);
+    - **实例仍随赛季删除**(任务不跨赛季),孩子的证据/参与记录一并级联删除。
+
+    本条取代旧断言"删赛季会连带删模板" —— 那正是业主指出的资产丢失问题。
+    """
     from app.services import season_service
+
+    template_id = seeded_family.task_template.id
+    instance_id = seeded_family.task_instance.id
 
     await season_service.delete_season(
         db_session, season_id=seeded_family.season.id, family_id=seeded_family.family.id
     )
 
-    remaining_templates = (
+    # 表里仍存在该行,身份映射会直接返回会话里已加载的对象(其 season_id 是
+    # SET NULL 之前的内存态),故用 populate_existing 强制以库内当前值覆盖。
+    remaining_template = (
         await db_session.execute(
-            select(ScnTaskTemplate).where(ScnTaskTemplate.id == seeded_family.task_template.id)
+            select(ScnTaskTemplate)
+            .where(ScnTaskTemplate.id == template_id)
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
-    remaining_instances = (
+    remaining_instance = (
         await db_session.execute(
-            select(ScnTaskInstance).where(ScnTaskInstance.id == seeded_family.task_instance.id)
+            select(ScnTaskInstance).where(ScnTaskInstance.id == instance_id)
         )
     ).scalar_one_or_none()
-    assert remaining_templates is None
-    assert remaining_instances is None
+    assert remaining_template is not None, "模板是可跨赛季资产,不应随赛季删除"
+    assert remaining_template.season_id is None, "只解绑来源赛季(SET NULL)"
+    assert remaining_instance is None, "实例仍随赛季删除(任务不跨赛季)"
+
+
+async def test_deleting_season_refused_when_growth_records_exist(
+    seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """DEV-50 资产守卫:赛季下已有 COMPLETED/EXPIRED 实例时拒绝删除(422)。
+
+    删赛季仍会带走该赛季全部实例、孩子的照片/视频证据与协作记录(CASCADE),
+    不可恢复;与 `delete_template` 对"成长记录是产品资产"的守卫同口径。
+    """
+    from app.common.exceptions import ValidationError
+    from app.services import season_service
+
+    seeded_family.task_instance.status = TaskStatus.COMPLETED
+    await db_session.commit()
+
+    with pytest.raises(ValidationError):
+        await season_service.delete_season(
+            db_session, season_id=seeded_family.season.id, family_id=seeded_family.family.id
+        )
+
+    # 拒绝后赛季仍在(整个操作未产生副作用)。
+    still_there = (
+        await db_session.execute(
+            select(ScnSeason).where(ScnSeason.id == seeded_family.season.id)
+        )
+    ).scalar_one_or_none()
+    assert still_there is not None

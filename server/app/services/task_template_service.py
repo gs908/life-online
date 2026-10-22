@@ -6,13 +6,18 @@
 from __future__ import annotations
 
 import logging
-from datetime import time
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.common.exceptions import NotFoundError, PermissionDeniedError, ValidationError
+from app.common.exceptions import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)
 from app.common.timeutil import today_bj, utcnow
 from app.models.enums import (
     CoinTransactionType,
@@ -30,6 +35,7 @@ from app.models.scn_task_template_trigger import ScnTaskTemplateTrigger
 from app.models.sys_child import SysChild
 from app.models.sys_family import SysFamily
 from app.schemas.task import (
+    TaskGenerateRequest,
     TaskTemplateCreate,
     TaskTemplateUpdate,
     TaskTriggerCreate,
@@ -41,6 +47,9 @@ log = logging.getLogger(__name__)
 
 # 收藏行在 scn_task_template_library 上的标记:家庭级收藏指向原始条目。
 _FAVORITE_OF_KEY = "favorite_of"
+
+# 「选模板 → 生成」允许的最远提前天数(DEV-50 契约):防误建远期实例。
+MANUAL_GENERATE_MAX_AHEAD_DAYS = 30
 
 
 def _enum_value(value) -> str:
@@ -123,8 +132,12 @@ async def create_template(
     押金与旧 create_task 路径同口径(DEV-34 块 C+D):创建时即由
     `coin_service.resolve_deposit` 解析落库(显式值 > 模板库 suggested_time_deposit
     > 按预计耗时 × 类型默认值),此后各环节直接读 `time_deposit` 字段。
+
+    DEV-50:模板可跨赛季 —— `season_id` 变为**可选**的"来源标签",提供时校验
+    归属与存在,不提供即无来源赛季(实例的实际赛季在生成时取激活赛季)。
     """
-    await _ensure_season(db, family_id=family_id, season_id=payload.season_id)
+    if payload.season_id is not None:
+        await _ensure_season(db, family_id=family_id, season_id=payload.season_id)
 
     # CHAIN 链式模板(DEV-36 块 F):链字段完整性校验;后续步骤(chain_order>1)
     # 不给默认触发规则,创建后不会长出实例(实例由链首投放 + 逐步解锁生成)。
@@ -299,6 +312,66 @@ async def activate_template(
     return template
 
 
+async def generate_instance_for_template(
+    db: AsyncSession,
+    *,
+    family_id: str,
+    template_id: str,
+    payload: TaskGenerateRequest,
+    today: date | None = None,
+    now: datetime | None = None,
+) -> tuple[ScnTaskInstance | None, str, bool]:
+    """「选模板 → 生成」服务编排(DEV-50):校验 + 落库。
+
+    返回 `(实例, 动作, overrides_applied)`。
+
+    日期校验一律以家庭本地时区 `today_bj()` 为基准(不能用 UTC 日期:北京时间
+    00:00-08:00 之间会差一天):
+    - 缺省 = 今天;
+    - `< 今天` → 422;
+    - `> 今天 + MANUAL_GENERATE_MAX_AHEAD_DAYS` → 422。
+
+    无激活赛季 / 模板已停用 → 409(见 `task_generator_service.manual_generate`)。
+    """
+    today = today or today_bj()
+    template = await get_family_template(db, template_id=template_id, family_id=family_id)
+
+    if template.deprecated_at is not None or not template.is_active:
+        raise ConflictError("该模板已停用,无法生成任务")
+
+    target_date = payload.target_date or today
+    if target_date < today:
+        raise ValidationError("目标日期不能早于今天")
+    if target_date > today + timedelta(days=MANUAL_GENERATE_MAX_AHEAD_DAYS):
+        raise ValidationError(f"目标日期最多提前 {MANUAL_GENERATE_MAX_AHEAD_DAYS} 天")
+
+    if payload.target_child_id is not None:
+        from app.services.task_service import _ensure_child
+
+        await _ensure_child(db, family_id=family_id, child_id=payload.target_child_id)
+
+    instance, action, applied = await task_generator_service.manual_generate(
+        db,
+        template,
+        target_date=target_date,
+        now=now,
+        difficulty=payload.difficulty,
+        time_deposit=payload.time_deposit,
+        xp_reward=payload.xp_reward,
+        target_child_id=payload.target_child_id,
+    )
+    if action == "no_season":
+        # 实例 season_id 非空且"任务不跨赛季":没有激活赛季就有没有可归属的对象,
+        # 没有中间态。转成 409 而不是让一个前端不认识的动作漏出去。
+        raise ConflictError("当前没有进行中的赛季,无法生成任务")
+    if action == "not_due":
+        # 理论上已被上面的"模板已停用"守卫拦住;留一道防御,避免任何漏网的
+        # 动作值流到前端(动作枚举只承诺 created/exists/rolled_forward/kept/
+        # skipped_expired)。
+        raise ConflictError("该模板当前不可生成任务")
+    return instance, action, applied
+
+
 # regenerate 的终结范围(Mars #2 / 产品拍板):只终结 AVAILABLE + IN_PROGRESS。
 # PENDING_REVIEW 是孩子已提交待审核的成果,必须保留审核机会(仍可 approve/reject);
 # 代价是待审核实例仍占用实例池槽位,存在时 generate 会返回 kept,本轮不新建实例
@@ -324,6 +397,11 @@ async def regenerate_template(
     调用方不得在 generate 之后再同步读 ORM 对象属性。
     """
     template = await get_family_template(db, template_id=template_id, family_id=family_id)
+    # DEV-50:无激活赛季时终结后也生不出新实例(实例必须有赛季归属)。先拦在
+    # 终结**之前** —— 否则会把旧实例置 EXPIRED、释放槽位,却什么都生成不出来,
+    # 留下一个"任务被清空"的半成品状态。
+    if await task_generator_service.active_season_id(db, family_id) is None:
+        raise ConflictError("当前没有进行中的赛季,无法重新生成任务")
     stmt = (
         select(ScnTaskInstance)
         .where(
@@ -497,10 +575,15 @@ async def toggle_favorite(
 
 async def apply_library_entry(
     db: AsyncSession, *, family_id: str, creator_id: str,
-    entry_id: str, season_id: str, target_child_id: str | None,
+    entry_id: str, season_id: str | None = None, target_child_id: str | None = None,
 ) -> ScnTaskTemplate:
-    """套用:用 suggested_* 播种一个新模板(挂默认触发规则),并立即跑一次生成。"""
-    await _ensure_season(db, family_id=family_id, season_id=season_id)
+    """套用:用 suggested_* 播种一个新模板(挂默认触发规则),并立即跑一次生成。
+
+    `season_id` 可选(DEV-50 同源口径:模板不绑赛季),与 `POST /scn/task-templates`
+    一致 —— 否则套用路径会继续造出被硬绑在单赛季上的模板。
+    """
+    if season_id is not None:
+        await _ensure_season(db, family_id=family_id, season_id=season_id)
     entry = await get_library_entry(db, entry_id)
     payload = TaskTemplateCreate(
         season_id=season_id,

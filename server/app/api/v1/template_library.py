@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from app.deps import CurrentUser, DBSession, GuildMasterOnly
 from app.schemas.common import ApiResponse, ok
 from app.schemas.task import TemplateLibraryApplyRequest, TemplateLibraryRead
-from app.services import task_template_service
+from app.services import season_service, task_template_service
 
 router = APIRouter(prefix="/scn/template-library", tags=["scn-template-library"])
 
@@ -89,4 +89,7 @@ async def apply_template_library_entry(
     )
     from app.api.v1.task_templates import _to_read
 
-    return ok({"template": _to_read(template).model_dump(mode="json")})
+    names = await season_service.season_names(db, [template.season_id])
+    return ok({
+        "template": _to_read(template, names.get(template.season_id)).model_dump(mode="json")
+    })

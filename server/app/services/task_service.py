@@ -1,9 +1,9 @@
 """任务服务:模板/实例 + 状态机 + 押金/退款 + 审批。"""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,12 +38,14 @@ from app.models.scn_task_template_library import ScnTaskTemplateLibrary
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.models.sys_upload import SysUpload
+from app.schemas.task import SNAPSHOT_FIELDS, TaskTuneRequest
 from app.services import (
     chain_service,
     coin_service,
     coop_service,
     privilege_service,
     proof_service,
+    task_generator_service,
     xp_service,
 )
 
@@ -61,6 +63,66 @@ def _deposit_of(task: ScnTaskInstance) -> int:
     """任务押金总额。`or` 会把家长刻意设的 0 押金变成 10,故用显式 None 判断
     (MR #10 审查建议 3)。"""
     return task.time_deposit if task.time_deposit is not None else 10
+
+
+def ensure_task_startable_today(task: ScnTaskInstance) -> None:
+    """未来日期的实例在到期前不可接取(DEV-50)。
+
+    列表过滤只解决"看不见";拿到/猜到 id 仍能直接接走一条"已排期到明天"的
+    任务,所以**接取入口必须有守卫** —— 否则"只能生成当天之后"形同虚设。
+
+    `generated_for_date` 为 NULL 的存量一次性任务不在此列(无逻辑日)。
+    """
+    if task.generated_for_date is not None and task.generated_for_date > today_bj():
+        raise ConflictError(f"该任务已排期到 {task.generated_for_date},尚未开始")
+
+
+async def tune_task(
+    db: AsyncSession, *, task_id: str, family_id: str, payload: TaskTuneRequest,
+) -> ScnTaskInstance:
+    """逐实例微调(DEV-50,`PATCH /scn/task-instances/{id}`)。
+
+    三个字段都是**快照**列:未提供 = 保持不变;显式 `null` 已在 schema 层 422。
+
+    只允许 `AVAILABLE`(未接取):一旦孩子接取,押金已扣、任务条件已对
+    孩子生效,再改会让退款/超时扣罚的结算口径漂移(按哪个值退?)。需要改
+    已接取任务请走"重新生成"这条重来路径。
+
+    `time_deposit` 与生成路径同源走 `coin_service.resolve_deposit`(clamp 类型
+    区间 + 封顶当日配额),避免微调绕过押金上限。
+    """
+    task = await get_task_for_update(db, task_id)
+    if task.family_id != family_id:
+        raise PermissionDeniedError("只能操作自己家庭的任务")
+    if task.status != TaskStatus.AVAILABLE:
+        raise ConflictError(
+            f"任务当前状态为 {_enum_value(task.status)},不可微调(仅未接取可调)"
+        )
+
+    data = payload.model_dump(exclude_unset=True)
+    for field in SNAPSHOT_FIELDS:
+        if field not in data:
+            continue
+        value = data[field]
+        if field == "time_deposit":
+            value = await coin_service.resolve_deposit(
+                db,
+                family_id=family_id,
+                task_type=_template_type_of(task),
+                explicit_deposit=value,
+                day=today_bj(),
+            )
+        setattr(task, field, value)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+def _template_type_of(task: ScnTaskInstance) -> TaskType:
+    """实例所属模板的类型;模板已被硬删(template_id SET NULL)时按 DAILY 兜底，
+    与读取层 `_template_value(t, "type", TaskType.DAILY)` 同口径。"""
+    template = task.template
+    return template.type if template is not None and template.type is not None else TaskType.DAILY
 
 
 async def get_task_for_update(db: AsyncSession, task_id: str) -> ScnTaskInstance:
@@ -103,86 +165,43 @@ async def _account_child(db: AsyncSession, user: SysAccount) -> SysChild:
 
 
 async def _ensure_task_refs(
-    db: AsyncSession, *, family_id: str, season_id: str, target_child_id: str | None
+    db: AsyncSession, *, family_id: str, season_id: str | None, target_child_id: str | None
 ) -> None:
-    season = await db.get(ScnSeason, season_id)
-    if not season:
-        raise NotFoundError(f"赛季 {season_id} 不存在")
-    if season.family_id != family_id:
-        raise PermissionDeniedError("只能在自己家庭的赛季中创建任务")
+    """校验赛季(可选,DEV-50 起模板不绑赛季)与目标孩子归属。"""
+    if season_id is not None:
+        season = await db.get(ScnSeason, season_id)
+        if not season:
+            raise NotFoundError(f"赛季 {season_id} 不存在")
+        if season.family_id != family_id:
+            raise PermissionDeniedError("只能在自己家庭的赛季中创建任务")
     if target_child_id is not None:
         await _ensure_child(db, family_id=family_id, child_id=target_child_id)
 
 
-async def create_task_template(
-    db: AsyncSession, *, family_id: str, creator_id: str, **kwargs
-) -> ScnTaskTemplate:
-    """只建模板、不投放实例(DEV-36 块 F)。
-
-    CHAIN 链的第 2..N 步用本入口创建:链式任务的实例由"链首投放 +
-    逐步解锁"生成,后续步骤模板不该在创建时就长出实例(详见 chain_service)。
-    """
-    season_id = kwargs["season_id"]
-    await _ensure_task_refs(
-        db,
-        family_id=family_id,
-        season_id=season_id,
-        target_child_id=kwargs.get("target_child_id"),
-    )
-    task_type = kwargs.get("type") or TaskType.DAILY
-    await chain_service.validate_chain_template(
-        db,
-        family_id=family_id,
-        task_type=task_type,
-        chain_key=kwargs.get("chain_key"),
-        chain_order=kwargs.get("chain_order", 1),
-        chain_total=kwargs.get("chain_total", 1),
-    )
-
-    template = ScnTaskTemplate(
-        family_id=family_id,
-        season_id=season_id,
-        creator_account_id=creator_id,
-        library_id=kwargs.get("library_id"),
-        target_child_id=kwargs.get("target_child_id"),
-        category=kwargs.get("category"),
-        title=kwargs["title"],
-        description=kwargs.get("description", ""),
-        lore_snippet=kwargs.get("lore_snippet"),
-        xp_reward=kwargs.get("xp_reward", 50),
-        type=task_type,
-        required_start_time=kwargs.get("required_start_time"),
-        reminder_message=kwargs.get("reminder_message"),
-        reminder_minutes_before=kwargs.get("reminder_minutes_before", 15),
-        time_deposit=kwargs.get("time_deposit", 10),
-        is_active=kwargs.get("is_active", True),
-        chain_key=kwargs.get("chain_key"),
-        chain_order=kwargs.get("chain_order", 1),
-        chain_total=kwargs.get("chain_total", 1),
-        estimated_minutes=kwargs.get("estimated_minutes"),
-        difficulty=kwargs.get("difficulty", 1),
-    )
-    db.add(template)
-    await db.commit()
-    await db.refresh(template)
-    return template
-
-
 async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kwargs) -> ScnTaskInstance:
-    """兼容旧 create_task API:同时创建模板与一条初始实例。
+    """【deprecated,DEV-50】兼容旧 create_task API:同时创建模板与一条初始实例。
+
+    已由「选模板 → 生成」(`POST /scn/task-templates/{id}/generate`)取代:
+    本入口一次成型、不支持目标日期与逐实例微调,且实例不写
+    `generated_for_date`(不参与池与同日幂等)。保留仅为兼容旧客户端。
 
     押金在创建时即由 `coin_service.resolve_deposit` 解析落库(显式值优先,
     否则按预计耗时 × 类型默认值),此后各环节直接用 `time_deposit` 字段,
     不再有 `or 10` 之类的写死兜底。
     """
     target_child_id = kwargs.pop("target_child_id", None) or kwargs.pop("target_user_id", None)
-    season_id = kwargs["season_id"]
+    # 模板的赛季是可选"来源标签"(DEV-50);实例的赛季取**当前激活赛季** ——
+    # 任务不跨赛季,实例 season_id 仍是 NOT NULL。
+    season_id = kwargs.get("season_id")
     await _ensure_task_refs(
         db,
         family_id=family_id,
         season_id=season_id,
         target_child_id=target_child_id,
     )
+    instance_season_id = await task_generator_service.active_season_id(db, family_id)
+    if instance_season_id is None:
+        raise ConflictError("当前没有进行中的赛季,无法创建任务")
     task_type = kwargs.get("type") or TaskType.DAILY
     chain_order = kwargs.get("chain_order", 1)
     if task_type == TaskType.CHAIN and chain_order != 1:
@@ -242,8 +261,9 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         chain_key=kwargs.get("chain_key"),
         chain_order=chain_order,
         chain_total=kwargs.get("chain_total", 1),
-        # docs/15:内容字段落到模板(叙事由生成器批量作业产出,本路径不调 LLM)
-        content_mode=kwargs.get("content_mode") or ContentMode.STATIC,
+        # docs/15:内容字段落到模板(叙事由生成器批量作业产出,本路径不调 LLM);
+        # DEV-50:缺省与 schema 层一致改为 LLM。
+        content_mode=kwargs.get("content_mode") or ContentMode.LLM,
         content_brief=kwargs.get("content_brief"),
     )
     db.add(template)
@@ -251,7 +271,7 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
 
     task = ScnTaskInstance(
         family_id=family_id,
-        season_id=season_id,
+        season_id=instance_season_id,
         template_id=template.id,
         creator_account_id=creator_id,
         target_child_id=target_child_id,
@@ -259,6 +279,8 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         description=template.description,
         lore_snippet=template.lore_snippet,
         xp_reward=template.xp_reward,
+        # 难度快照(DEV-50):与生成器同口径,审批算 XP 读实例值。
+        difficulty=template.difficulty,
         status=TaskStatus.AVAILABLE,
         deadline=kwargs.get("deadline"),
         expire_at=kwargs.get("expire_at") or kwargs.get("deadline"),
@@ -287,6 +309,7 @@ async def list_tasks(
     db: AsyncSession, *, family_id: str, season_id: str | None = None,
     status: TaskStatus | None = None, assignee_id: str | None = None,
     template_id: str | None = None,
+    generated_for_date_lte: date | None = None,
     offset: int = 0, limit: int | None = None,
 ) -> tuple[list[ScnTaskInstance], int]:
     stmt = select(ScnTaskInstance).where(ScnTaskInstance.family_id == family_id)
@@ -294,6 +317,16 @@ async def list_tasks(
         stmt = stmt.where(ScnTaskInstance.season_id == season_id)
     if status is not None:
         stmt = stmt.where(ScnTaskInstance.status == status)
+    if generated_for_date_lte is not None:
+        # DEV-50 可见性:未来日期的实例("已排期")在到期前不出现。
+        # **`IS NULL` 必须保留** —— 旧 POST /scn/tasks 一次性路径的存量行没有
+        # 逻辑日,漏掉会让这批任务静默消失。孩子端由路由按角色强制传今天。
+        stmt = stmt.where(
+            or_(
+                ScnTaskInstance.generated_for_date.is_(None),
+                ScnTaskInstance.generated_for_date <= generated_for_date_lte,
+            )
+        )
     if template_id is not None:
         # 模板维度筛实例(DEV-35):详情抽屉/重新生成确认弹窗数未消费实例用。
         stmt = stmt.where(ScnTaskInstance.template_id == template_id)
@@ -320,6 +353,8 @@ async def start_task(
         raise PermissionDeniedError("只能操作自己家庭的任务")
     if task.status != TaskStatus.AVAILABLE:
         raise ConflictError(f"任务当前状态为 {_enum_value(task.status)},不可接取")
+    # DEV-50:未来日期("已排期")的实例到期前不可接取。
+    ensure_task_startable_today(task)
     if task.target_child_id and task.target_child_id != child.id:
         raise PermissionDeniedError("该任务指定了其他接取人")
 
@@ -677,11 +712,16 @@ async def _approve_coop_participant(
 
 
 def _coop_final_xp(task: ScnTaskInstance, *, rating: int) -> int:
-    """聚合终结时的最终 XP(参数与整单审批同一套:难度/时间窗/链末加成)。"""
+    """聚合终结时的最终 XP(参数与整单审批同一套:难度/时间窗/链末加成)。
+
+    DEV-50:难度读**实例的难度快照**(`task.difficulty`),不再读模板 —— 这样
+    家长在生成后微调的星级才会生效,且后续改模板不会移动未结算实例的 XP
+    (docs/15 §12 P2)。快照由生成器写入,存量行由迁移回填。
+    """
     template = task.template
     required_start_time = template.required_start_time if template else None
     is_challenge = bool(template and template.type == TaskType.CHALLENGE)
-    difficulty = template.difficulty if template is not None else None
+    difficulty = task.difficulty
     return xp_service.calculate_xp(
         task.xp_reward,
         rating=rating,

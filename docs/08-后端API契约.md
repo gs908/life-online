@@ -189,13 +189,14 @@
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
-| GET | `/scn/task-instances?page&page_size&season_id&status&template_id&assignee_child_id` | 任务实例分页列表（`template_id` 供模板详情/重新生成确认数未消费实例，DEV-35） | 登录 |
+| GET | `/scn/task-instances?page&page_size&season_id&status&template_id&assignee_child_id&generated_for_date_lte` | 任务实例分页列表（`template_id` 供模板详情/重新生成确认数未消费实例，DEV-35）。**DEV-50 可见性：孩子端由服务端强制 `generated_for_date IS NULL OR <= 今天`（客户端参数不可覆盖）；管理端默认全量，可用 `generated_for_date_lte` 显式筛选** | 登录 |
 | GET | `/scn/task-instances/{task_id}` | 详情（限本家庭） | 登录 |
-| POST | `/scn/task-instances` | 创建模板并生成初始实例（CHAIN 仅链首步） | 父母 |
+| PATCH | `/scn/task-instances/{task_id}` | **逐实例微调（DEV-50）**：见 §6B | 父母 |
+| POST | `/scn/task-instances` | 创建模板并生成初始实例（CHAIN 仅链首步）。**DEV-50 起 deprecated**，改用 `POST /scn/task-templates/{id}/generate` | 父母（deprecated） |
 | POST | `/scn/task-templates` | 只建模板不投放实例（CHAIN 第 2..N 步，DEV-36） | 父母 |
 | DELETE | `/scn/task-instances/{task_id}` | 删除实例 | 父母 |
-| POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金；COOP 记 OWNER 参与者） | 登录 |
-| POST | `/scn/task-instances/{task_id}/join` | 加入 COOP：孩子均摊押金 / 家长亲子参与（DEV-36） | 登录 |
+| POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金；COOP 记 OWNER 参与者）。**DEV-50：`generated_for_date > 今天` 的"已排期"实例 409，未到期不可接取** | 登录 |
+| POST | `/scn/task-instances/{task_id}/join` | 加入 COOP：孩子均摊押金 / 家长亲子参与（DEV-36）。**DEV-50：同 `start` 的 409 日期守卫** | 登录 |
 | POST | `/scn/task-instances/{task_id}/submit` | 孩子提交证明（多证据，块 E） | 登录 |
 | POST | `/scn/task-instances/{task_id}/approve` | 父母审核（发 XP、退/扣币；链末 ×1.5、XP 均摊） | 父母 |
 | POST | `/scn/task-instances/{task_id}/abandon` | 孩子放弃（罚币） | 登录 |
@@ -279,7 +280,8 @@
 | PATCH | `/scn/task-templates/{id}` | 部分更新（triggers 整组替换；`target_child_id` 可改，置 null 清空指派） | 父母 |
 | POST | `/scn/task-templates/{id}/deprecate` | 废弃（停用+审计，既有实例不动） | 父母 |
 | POST | `/scn/task-templates/{id}/activate` | 重新启用并立即补生成 | 父母/管理端 |
-| POST | `/scn/task-templates/{id}/regenerate` | 终结可用/进行中实例并尝试生成 | 父母/管理端 |
+| POST | `/scn/task-templates/{id}/generate` | **选模板生成（DEV-50）**：见 §6B | 父母 |
+| POST | `/scn/task-templates/{id}/regenerate` | 终结可用/进行中实例并尝试生成（"推倒重来"，与上面的"再给某天加一条"承诺不同，不合并）。**DEV-50：无激活赛季时先拦在终结之前（409），避免清空实例却生不出来** | 父母/管理端 |
 | DELETE | `/scn/task-templates/{id}` | 硬删（**仅无 COMPLETED/EXPIRED 历史实例时可用**，否则 422 引导走 deprecate） | 管理端（家庭 owner） |
 | GET | `/scn/template-library?category&keyword&favorites_only` | 模板库列表（系统预置+家庭自建） | 登录 |
 | GET | `/scn/template-library/{id}` | 库条目详情 | 登录 |
@@ -287,9 +289,12 @@
 | POST | `/scn/template-library/{id}/apply` | 用 `suggested_*` 播种新模板并即时生成 | 父母 |
 
 **TaskTemplateCreate**（POST body；`triggers` 缺省时按类型补默认规则：DAILY/TIMED→`DAILY@00:00`，CHALLENGE→每周一 `CRON "0 0 * * 1"`，一次性/CHAIN/COOP 无默认）：
-`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?, type?, target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?, time_deposit?, is_active?, timed_mode?(NONE), deadline_time?, start_time?, duration_minutes?, pool_policy?(REUSE_UNTIL_CONSUMED), estimated_minutes?, difficulty?(1-5), content_mode?(STATIC), content_brief?, triggers?: [TaskTriggerCreate] }`
+`{ season_id?, library_id?, category?, title, description?, lore_snippet?, xp_reward?, type?, target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?, time_deposit?, is_active?, timed_mode?(NONE), deadline_time?, start_time?, duration_minutes?, pool_policy?(REUSE_UNTIL_CONSUMED), estimated_minutes?, difficulty?(1-5), content_mode?(LLM), content_brief?, triggers?: [TaskTriggerCreate] }`
 
-> **内容生成字段（docs/15，DEV-49）**：`content_mode`（`STATIC`|`LLM`，默认 `STATIC`）决定实例化时是否调 LLM 生成叙事；`content_brief` 为"任务要点"（LLM 叙事输入，空则生成器回落用 `description`）。`content_mode=LLM` 时叙事写入实例 `lore_snippet`、`content_source=LLM`；LLM 失败/能力关闭（`task_content.llm_enabled=false`）回落模板文本并标 `FALLBACK`，实例创建恒成功。`TaskInstanceRead`（TaskRead）只回 `content_source`，`generation_meta` 为内部数据不出接口。
+> **`season_id` 可选（DEV-50）**：模板**不绑赛季**（"模板可跨赛季，任务不跨赛季"）。它只是可选的**来源赛季标签**，生成实例时**不参与**——实例的 `season_id` 取生成当时的**激活赛季**。不传即无来源赛季。`POST /scn/template-library/{id}/apply` 同口径。FA 侧：删除赛季**不再连带删模板**（FK 由 `CASCADE` 改 `SET NULL`），模板只解绑来源赛季。
+
+> **内容生成字段（docs/15，DEV-49；DEV-50 调默认值）**：`content_mode`（`STATIC`|`LLM`，**默认 `LLM`**）决定实例化时是否调 LLM 生成叙事；`content_brief` 为"任务要点"（LLM 叙事输入，空则生成器回落用 `description`）。`content_mode=LLM` 时叙事写入实例 `lore_snippet`、`content_source=LLM`；LLM 失败/能力关闭（`task_content.llm_enabled=false`）回落模板文本并标 `FALLBACK`，实例创建恒成功。`TaskInstanceRead`（TaskRead）只回 `content_source`，`generation_meta` 为内部数据不出接口。
+> ⚠️ **默认翻转是行为变更**：新模板生成的实例会**真的调用 LLM**（有调用成本）。需要确定性文本的任务请显式传 `content_mode=STATIC`。DB 层 `server_default` 仍为 `STATIC`（docs/15 R1 的存量回填口径），翻转发生在应用层。
 
 **timed_mode 一致性（创建/更新 422）**：`DEADLINE` 需 `deadline_time`；`DURATION` 需 `start_time`+`duration_minutes`；`NONE` 三者皆空。PATCH 对合并后的完整模板复验。
 
@@ -297,7 +302,7 @@
 按 kind 校验（422）：`WEEKDAYS` 需非空 weekdays；`MONTHLY` 需 day_of_month；`CRON` 需合法 5 段表达式（校验与匹配同用 APScheduler 语义，day_of_week **0=周一**）；`ONCE` 需 starts_on（该日生成一次）。
 
 **TaskTriggerRead** = TaskTriggerCreate + `{ id, template_id, created_at, updated_at }`。
-**TaskTemplateRead** = TaskTemplateCreate 字段（去 season_id 语义不变）+ `{ id, family_id, season_id, creator_account_id, deprecated_at, deprecated_reason, triggers: [TaskTriggerRead], created_at, updated_at }`。
+**TaskTemplateRead** = TaskTemplateCreate 字段 + `{ id, family_id, season_id?(可空，来源赛季标签), season_name?(来源赛季名，DEV-50), creator_account_id, deprecated_at, deprecated_reason, triggers: [TaskTriggerRead], created_at, updated_at }`。
 **TaskTemplateDeprecate** `{ reason?: str(≤128) }`；**TaskTemplateRegenerate** `{}`（占位）。
 **TemplateLibraryApplyRequest** `{ season_id, target_child_id? }`。
 
@@ -316,6 +321,55 @@
 > - ~~模板级接口 `/scn/task-templates*`、模板库 `/scn/template-library*`~~（✅ DEV-35 已实现，见 §6A；`preview-deposit` 仍未实现）。
 > - ~~多证据提交(`proof_object_keys`、`TaskRead.proofs[]`)与证据接口(`/scn/task-instances/{id}/proofs`、`/scn/task-proofs/{id}`)~~ 已随块 E(DEV-33/DEV-37)实现合入,前端可对接。
 > - ~~清理接口 `POST /scn/evidence/purge(-preview)`(docs/07 A7.3)仍未实现~~（✅ DEV-44 已实现，见 §6「证据清理 `/scn/evidence`」；前端可对接）。
+
+## 6B. 选模板生成 + 逐实例微调（DEV-50，已实现）
+
+> 业主第 4 点："现在的任务和任务模板基本一致" —— 本组接口让生成变成**显式动作**（选模板 → 选日期 → 微调），并让数值可以**逐实例**调整而不动模板。
+> 与 `regenerate` 的分界：`regenerate` 是"终结未消费实例 + 重建"；本节是"为某一天生成一条"，不终结任何东西。
+
+**`POST /scn/task-templates/{template_id}/generate`**（父母）
+
+请求体 **TaskGenerateRequest**：
+`{ target_date?: "YYYY-MM-DD", difficulty?: 1-5, time_deposit?: >=0, xp_reward?: >=0, target_child_id?: str }`
+
+- `target_date` 缺省 = **家庭本地时区今天**（`today_bj()`，Asia/Shanghai；**不可用 UTC 日期**，否则北京时间 00:00–08:00 会差一天）；`< 今天` → **422**「目标日期不能早于今天」；`> 今天 + 30 天` → **422**「目标日期最多提前 30 天」。
+- **豁免模板触发规则**：家长显式选模板生成，不该被日历规则挡住（"每周一"的模板周三也能生成）。
+- **赛季取生成当时的激活赛季**；无激活赛季 → **409**「当前没有进行中的赛季，无法生成任务」。
+- 三个数值字段是**快照**：未传 = 用模板当前值；**显式 `null` → 422**（不静默忽略、也不转译成"去查模板值"）。
+- `time_deposit` 与模板创建同源过 `coin_service.resolve_deposit`（clamp 类型区间 → 封顶**目标日**配额；配额按星期几不同）。
+- 幂等：同一 `(模板, 目标日)` 已有实例则复用，**不覆盖、不重建**。
+
+响应 `ApiResponse[dict]`：
+`{ instance_id?, action, generated_for_date?, status?, difficulty?, time_deposit?, xp_reward?, content_source?, season_name?, overrides_applied }`
+
+| `action` | 含义 |
+|---|---|
+| `created` | 新建成功（**唯一会写入覆盖值**的动作） |
+| `exists` | 该日期已有实例，复用既有行 |
+| `rolled_forward` | 既有未消费实例跨天顺延到今天（仅目标日 = 今天时可能） |
+| `kept` | 既有实例处于 IN_PROGRESS/PENDING_REVIEW，保持不动 |
+| `skipped_expired` | 限时任务且目标日的截止时刻已过，跳过生成 |
+
+> `overrides_applied` **只有 `created` 时为 true** —— 其余动作复用既有实例、不写入覆盖值。显式回传是为了避免"传了覆盖值却被静默丢弃"，前端应据此把用户引导到下面的 `PATCH`。
+> 入参 `target_date`（意图）与出参 `generated_for_date`（事实，沿用实例列名）**刻意不同名**。
+
+**`PATCH /scn/task-instances/{task_id}`**（父母）
+
+请求体 **TaskTuneRequest**：`{ difficulty?: 1-5, time_deposit?: >=0, xp_reward?: >=0 }`
+
+- 三个字段都是**快照**且**语义同构**：`exclude_unset` —— 未提供 = 保持不变；**显式 `null` → 422**。
+  「恢复模板值」由前端取模板当前值后**作为具体数字**提交 —— 不应由后端把 `null` 转译成"去查模板值"，那会把"一次性填入"伪装成"持续跟随模板"，让家长误以为以后改模板会同步到该实例。
+- 仅 **`AVAILABLE`（未接取）** 可调：接取后押金已扣、任务条件已对孩子生效，再改会让退款/超时扣罚的结算口径漂移（409）。需要改已接取任务请走 `regenerate`。
+- 实例的 `season_id` **不可改**（任务不跨赛季），故不在契约中。
+- `time_deposit` 同样过 `resolve_deposit`（clamp + 封顶当日配额），避免微调绕过押金上限。
+
+> **难度快照的语义（docs/15 §12 P2）**：`scn_task_instance.difficulty` 是**生成即定值**的快照，审批算 XP 读它（`task_service._coop_final_xp`）。因此**改模板难度不会追溯影响已生成的未结算实例**，只影响此后新生成的。这正是 P2 增设该列要防的追溯。
+
+**`POST /scn/task-templates/preview-deposit`（DEV-50 增参）**：请求体增可选 `for_date?: "YYYY-MM-DD"`（缺省 = 今天）。封顶依赖的"当日配额"**按星期几不同**（`ScnTimeConfig.exceptions`），为未来日期生成时用今天的配额算上限会失真 —— 目标日期变化时应重新调用。入参 `{ type, estimated_minutes?, time_deposit?, difficulty?, for_date? }`；难度不影响押金（仅透传）。
+
+**TaskRead（实例读）DEV-50 增补**：`season_name?`（实例所属赛季名，模板可跨赛季后用于分辨）；`difficulty` 改为**直读实例快照**（不再从模板穿读，否则微调读不回来）。`generation_meta` 仍不出接口。
+
+---
 
 ## 7. 动态主题样式 `/scn/theme-styles`
 

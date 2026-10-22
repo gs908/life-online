@@ -24,8 +24,13 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     family_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sys_family.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    season_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("scn_season.id", ondelete="CASCADE"), nullable=False, index=True
+    # 赛季(DEV-50:「模板可跨赛季,任务不跨赛季」)——
+    # 可空 + ON DELETE SET NULL:模板存的是与赛季无关的任务实质,赛季只是可选
+    # 的"来源标签";实例的实际归属赛季在**生成时**取当时的激活赛季
+    # (见 task_generator_service)。CASCADE 下删赛季会连带抹掉模板(可跨赛季
+    # 复用的资产),故改为 SET NULL。
+    season_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("scn_season.id", ondelete="SET NULL"), nullable=True, index=True
     )
     creator_account_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("sys_account.id", ondelete="SET NULL"), nullable=True
@@ -81,13 +86,17 @@ class ScnTaskTemplate(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     # ---- 任务内容生成(docs/15 §5)----
     # LLM 只写叙事,任务实质由模板决定:实例的 title/description/xp_reward 等
     # 保持模板原文,叙事只写入实例 lore_snippet。
+    # DEV-50:默认值由 STATIC 翻转为 LLM —— 口径是"生成任务时要调用 LLM 结合
+    # 赛季背景完成动态内容生成",故新模板默认调 LLM(content_brief 为输入,
+    # 空则回落 description)。留 STATIC 作为逐模板退出口(如"口算 4 页"这类
+    # 不需要叙事的任务);全局开关仍是 settings.task_content.llm_enabled。
     content_mode: Mapped[ContentMode] = mapped_column(
-        String(16), nullable=False, default=ContentMode.STATIC, comment="内容生成模式:STATIC/LLM"
+        String(16), nullable=False, default=ContentMode.LLM, comment="内容生成模式:STATIC/LLM"
     )
     # 任务要点:任务实质中不变的部分,LLM 叙事生成的输入;为空时生成器回落用 description。
     content_brief: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    season: Mapped["ScnSeason"] = relationship(back_populates="task_templates", lazy="raise")
+    season: Mapped["ScnSeason | None"] = relationship(back_populates="task_templates", lazy="raise")
     # 模板读接口恒带触发规则,selectin 避免 lazy="raise" 踩雷。
     triggers: Mapped[list["ScnTaskTemplateTrigger"]] = relationship(
         back_populates="template",

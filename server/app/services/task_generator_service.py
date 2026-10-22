@@ -27,7 +27,7 @@ import logging
 from datetime import date, datetime, time, timedelta
 
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -48,7 +48,7 @@ from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_template import ScnTaskTemplate
 from app.models.scn_task_template_trigger import ScnTaskTemplateTrigger
 from app.models.sys_child import SysChild
-from app.services import ai_service
+from app.services import ai_service, coin_service, season_service
 
 log = logging.getLogger(__name__)
 
@@ -164,15 +164,38 @@ def compute_expire_at(template: ScnTaskTemplate, day: date) -> datetime | None:
     return None
 
 
+async def active_season_id(db: AsyncSession, family_id: str) -> str | None:
+    """家庭当前激活赛季的 id;无则 None。
+
+    DEV-50「模板可跨赛季,任务不跨赛季」:模板已与赛季解绑,实例的实际赛季取
+    **生成当时**的激活赛季 —— 叙事背景(叙事主题)同理。无激活赛季时实例没有
+    可归属的对象(实例 `season_id` 仍是 NOT NULL),自动生成跳过、手动生成 409。
+    """
+    season = await season_service.get_active_season(db, family_id)
+    return season.id if season is not None else None
+
+
 async def _latest_unconsumed(
-    db: AsyncSession, template_id: str,
+    db: AsyncSession, template_id: str, *, today: date,
 ) -> ScnTaskInstance | None:
-    """模板最近一条未消费实例;无则 None。"""
+    """模板最近一条**在池内**的未消费实例;无则 None。
+
+    池口径(DEV-50):`generated_for_date IS NULL OR <= today`。**未来日期的实例
+    一律视为「已排期」,不入池、不占槽、不被顺延** —— 家长可以为明天预生成,
+    既不会占掉今天的槽位,也不会被夜间作业提前拉回今天。D1(同一模板同一时刻
+    最多 1 条未消费实例)语义不变,只是"池"不再包含未来实例。
+
+    `IS NULL` 保留旧 `POST /scn/tasks` 一次性路径的存量行(无逻辑日),口径同前。
+    """
     stmt = (
         select(ScnTaskInstance)
         .where(
             ScnTaskInstance.template_id == template_id,
             ScnTaskInstance.status.in_(UNCONSUMED_STATUSES),
+            or_(
+                ScnTaskInstance.generated_for_date.is_(None),
+                ScnTaskInstance.generated_for_date <= today,
+            ),
         )
         .order_by(
             ScnTaskInstance.generated_for_date.desc().nulls_last(),
@@ -194,13 +217,18 @@ async def _get_instance_for_date(
 
 
 async def _load_content_context(
-    db: AsyncSession, template: ScnTaskTemplate,
+    db: AsyncSession, template: ScnTaskTemplate, *, season_id: str | None,
 ) -> tuple[str, int]:
-    """叙事生成的上下文要素(docs/15 R18):返回 (赛季主题, 孩子等级)。"""
+    """叙事生成的上下文要素(docs/15 R18):返回 (赛季主题, 孩子等级)。
+
+    `season_id` 是**生成当时**的激活赛季(DEV-50),不是模板的来源赛季 —— 业主
+    口径是"生成任务时结合**当季**背景",取模板的旧赛季会直接违背它。
+    """
     topic = ""
-    season = await db.get(ScnSeason, template.season_id)
-    if season is not None:
-        topic = season.narrative_context or ""
+    if season_id is not None:
+        season = await db.get(ScnSeason, season_id)
+        if season is not None:
+            topic = season.narrative_context or ""
     child_level = 1
     if template.target_child_id is not None:
         child = await db.get(SysChild, template.target_child_id)
@@ -210,7 +238,7 @@ async def _load_content_context(
 
 
 async def _prepare_content(
-    db: AsyncSession, template: ScnTaskTemplate, *, day: date,
+    db: AsyncSession, template: ScnTaskTemplate, *, day: date, season_id: str | None,
 ) -> tuple[str | None, str, dict | None]:
     """按模板 content_mode 准备实例叙事内容(docs/15 §6)。
 
@@ -250,7 +278,7 @@ async def _prepare_content(
     try:
         # 上下文加载纳入同一 try(Mars 🟡1):赛季/孩子查询失败也回落 FALLBACK,
         # 不让实例创建失败(R13)。失败时保留默认值 ("", 1) 继续生成。
-        topic, child_level = await _load_content_context(db, template)
+        topic, child_level = await _load_content_context(db, template, season_id=season_id)
         narrative, meta = await ai_service.generate_task_narrative(
             content_brief=brief,
             topic=topic,
@@ -285,15 +313,27 @@ async def _prepare_content(
 async def _insert_instance(
     db: AsyncSession, template: ScnTaskTemplate, day: date,
     *,
+    season_id: str,
     lore_snippet: str | None = None,
     content_source: str = ContentSource.TEMPLATE.value,
     generation_meta: dict | None = None,
+    difficulty: int | None = None,
+    xp_reward: int | None = None,
+    time_deposit: int | None = None,
+    target_child_id: str | None = None,
 ) -> tuple[ScnTaskInstance, bool]:
-    """插入当日实例;撞唯一索引(并发兜底)时回滚并取回既有行。
+    """插入目标日实例;撞唯一索引(并发兜底)时回滚并取回既有行。
 
     lore_snippet/content_source/generation_meta 由调用方在写库前备好
     (LLM 必须在写库之前调用,叙事存普通字符串,R10)。缺省即 STATIC
     口径:复制模板 lore_snippet、标 TEMPLATE。
+
+    `season_id` 由调用方解析后传入(DEV-50:生成当时的**激活赛季**,不再是
+    `template.season_id` —— 模板已与赛季解绑)。
+
+    三个数值字段是**快照**(DEV-50):`None` = 生成时取模板当前值;非 None =
+    本次生成显式覆盖(「选模板 → 生成」表单可带覆盖值)。三者语义同构,都由
+    这里一次落库,之后可经 `PATCH /scn/task-instances/{id}` 独立调整。
 
     返回 (实例, 是否新建)。兜底取回既有行时 created=False(可能是并发方
     刚插入的 AVAILABLE 行,也可能是当日已消费的 COMPLETED/EXPIRED 行),
@@ -301,25 +341,26 @@ async def _insert_instance(
     """
     template_id = template.id
     family_id = template.family_id
-    season_id = template.season_id
     creator_account_id = template.creator_account_id
-    target_child_id = template.target_child_id
     expire_at = compute_expire_at(template, day)
     instance = ScnTaskInstance(
         family_id=family_id,
         season_id=season_id,
         template_id=template_id,
         creator_account_id=creator_account_id,
-        target_child_id=target_child_id,
+        target_child_id=target_child_id or template.target_child_id,
         title=template.title,
         description=template.description,
         lore_snippet=template.lore_snippet if lore_snippet is None else lore_snippet,
-        xp_reward=template.xp_reward,
+        xp_reward=template.xp_reward if xp_reward is None else xp_reward,
+        # 难度快照:生成即定值,审批算 XP 读本列。**不回落模板** —— 否则改模板
+        # 会移动未结算实例的 XP,正是 docs/15 §12 P2 要防的追溯。
+        difficulty=template.difficulty if difficulty is None else difficulty,
         status=TaskStatus.AVAILABLE,
         deadline=expire_at,  # 限时任务 deadline 与过期时刻同源;非限时恒 NULL
         expire_at=expire_at,
         generated_for_date=day,
-        time_deposit=template.time_deposit,
+        time_deposit=template.time_deposit if time_deposit is None else time_deposit,
         content_source=content_source,
         generation_meta=generation_meta,
     )
@@ -349,33 +390,54 @@ async def generate_for_template(
     today: date | None = None,
     now: datetime | None = None,
     force: bool = False,
+    manual: bool = False,
+    difficulty: int | None = None,
+    time_deposit: int | None = None,
+    xp_reward: int | None = None,
+    target_child_id: str | None = None,
 ) -> tuple[ScnTaskInstance | None, str]:
     """对单个模板执行一次生成;返回 (实例, 动作)。
 
-    动作: created / rolled_forward / kept / exists / not_due / skipped_expired。
+    动作: created / rolled_forward / kept / exists / not_due /
+    skipped_expired / no_season。
     force=True 跳过 generate_at 时刻检查(模板创建/改规则/激活后立即补一次生成),
     仍要求有规则命中 today 且在生效区间。
+    manual=True(DEV-50) **完全豁免触发规则** —— 业主口径是"选模板 → 生成"这一
+    家长显式动作,不该被日历规则限制(否则"每周一"的模板周三手动也生成不了)。
+    手动生成走 `manual_generate`(还要支持目标日期与覆盖值),这里是自动路径。
+
+    无激活赛季时返回 no_season:实例 season_id 非空且**任务不跨赛季**,没有
+    可归属的对象。自动路径跳过(不阻断整轮),手动路径由调用方转 409。
     """
     today = today or today_bj()
     now = now or now_bj()
 
     if template.deprecated_at is not None or not template.is_active:
         return None, "not_due"
-    due = any(
-        trigger_due(g, today=today, now=now)
-        or (
-            force
-            and g.is_active
-            and (g.starts_on is None or today >= g.starts_on)
-            and (g.ends_on is None or today <= g.ends_on)
-            and trigger_matches_day(g, today)
+    if manual:
+        due = True
+    else:
+        due = any(
+            trigger_due(g, today=today, now=now)
+            or (
+                force
+                and g.is_active
+                and (g.starts_on is None or today >= g.starts_on)
+                and (g.ends_on is None or today <= g.ends_on)
+                and trigger_matches_day(g, today)
+            )
+            for g in template.triggers
         )
-        for g in template.triggers
-    )
     if not due:
         return None, "not_due"
 
-    existing = await _latest_unconsumed(db, template.id)
+    # DEV-50:实例赛季取"生成当时的激活赛季";先取普通值(后续 rollback 会
+    # expire 会话内对象)。
+    season_id = await active_season_id(db, template.family_id)
+    if season_id is None:
+        return None, "no_season"
+
+    existing = await _latest_unconsumed(db, template.id, today=today)
     if existing is not None:
         if existing.generated_for_date == today:
             # 同触发日重复执行 / 多组规则同日命中:按模板去重,恒 1 条。
@@ -417,13 +479,18 @@ async def generate_for_template(
     # 仅新建路径到这里 —— rolled_forward/exists/kept/not_due/skipped_expired
     # 均不调 LLM(R11),顺延任务保留首次生成的叙事。
     lore_snippet, content_source, generation_meta = await _prepare_content(
-        db, template, day=today,
+        db, template, day=today, season_id=season_id,
     )
     instance, created = await _insert_instance(
         db, template, today,
+        season_id=season_id,
         lore_snippet=lore_snippet,
         content_source=content_source,
         generation_meta=generation_meta,
+        difficulty=difficulty,
+        time_deposit=time_deposit,
+        xp_reward=xp_reward,
+        target_child_id=target_child_id,
     )
     await db.commit()
     if not created:
@@ -431,6 +498,93 @@ async def generate_for_template(
         # COMPLETED/EXPIRED)——如实报告"已存在",不冒充新建。
         return instance, "exists"
     return instance, "created"
+
+
+async def manual_generate(
+    db: AsyncSession,
+    template: ScnTaskTemplate,
+    *,
+    target_date: date,
+    now: datetime | None = None,
+    difficulty: int | None = None,
+    time_deposit: int | None = None,
+    xp_reward: int | None = None,
+    target_child_id: str | None = None,
+) -> tuple[ScnTaskInstance | None, str, bool]:
+    """「选模板 → 生成」的落库路径(DEV-50)。
+
+    与自动路径的差异:**豁免触发规则**、目标日期由调用方校验后传入(≥ 今天)、
+    可携带三个快照字段的覆盖值。
+
+    返回 `(实例, 动作, overrides_applied)`。动作沿用自动路径的枚举。
+    `overrides_applied` **只在 `created` 时为 True** —— 其余动作都是"复用既有
+    实例",按前端预检文案「该日期已有任务实例,将直接使用该实例(不覆盖、
+    不重建)」不对既有实例写入。显式回传是为了避免"传了覆盖值却被静默丢弃",
+    前端据此把用户引导到 `PATCH /scn/task-instances/{id}`。
+
+    `time_deposit` 覆盖值走与模板创建同源的 `coin_service.resolve_deposit`
+    (显式值 → clamp 类型区间 → 封顶当日配额),`day` 取**目标日期** —— 配额按
+    星期几不同,用今天的配额去卡周末会算错。
+    """
+    now = now or now_bj()
+    today = today_bj()
+
+    if time_deposit is not None:
+        time_deposit = await coin_service.resolve_deposit(
+            db,
+            family_id=template.family_id,
+            task_type=template.type,
+            explicit_deposit=time_deposit,
+            day=target_date,
+        )
+
+    if target_date == today:
+        # 目标日 == 今天:直接复用自动路径的全部池语义(顺延/保持/生成即过期),
+        # 只是豁免触发规则。一处实现,避免两份池逻辑漂移。
+        instance, action = await generate_for_template(
+            db, template, today=today, now=now, manual=True,
+            difficulty=difficulty, time_deposit=time_deposit,
+            xp_reward=xp_reward, target_child_id=target_child_id,
+        )
+        return instance, action, action == "created"
+
+    # 目标日 > 今天(未来):**不查池**。未来实例不入池、不占槽(池谓词见
+    # `_latest_unconsumed`),所以"为明天预生成"不会被今天的在途任务挡住,
+    # 也不会把今天的任务顺延到明天。
+    if template.deprecated_at is not None or not template.is_active:
+        return None, "not_due", False
+    season_id = await active_season_id(db, template.family_id)
+    if season_id is None:
+        return None, "no_season", False
+
+    existing = await _get_instance_for_date(db, template.id, target_date)
+    if existing is not None:
+        return existing, "exists", False
+
+    # 未来日期的限时任务若截止时刻已过(如把 20:00 截止的模板生成到若干天前,
+    # 或目标日 == 今天但已过点)不允许出条 —— 与自动路径同一守卫。
+    expire_at = compute_expire_at(template, target_date)
+    if expire_at is not None and expire_at <= now:
+        return None, "skipped_expired", False
+
+    lore_snippet, content_source, generation_meta = await _prepare_content(
+        db, template, day=target_date, season_id=season_id,
+    )
+    instance, created = await _insert_instance(
+        db, template, target_date,
+        season_id=season_id,
+        lore_snippet=lore_snippet,
+        content_source=content_source,
+        generation_meta=generation_meta,
+        difficulty=difficulty,
+        time_deposit=time_deposit,
+        xp_reward=xp_reward,
+        target_child_id=target_child_id,
+    )
+    await db.commit()
+    if not created:
+        return instance, "exists", False
+    return instance, "created", True
 
 
 async def run_generation(
@@ -450,6 +604,8 @@ async def run_generation(
     stats = {
         "created": 0, "rolled_forward": 0, "kept": 0, "exists": 0,
         "not_due": 0, "skipped_expired": 0, "errors": 0,
+        # DEV-50:该家庭没有激活赛季 —— 实例无可归属赛季(任务不跨赛季),跳过。
+        "no_season": 0,
         "llm_generated": 0, "fallback": 0,  # docs/15 R27
     }
     due = await due_templates(db, today=today, now=now)
@@ -485,9 +641,11 @@ async def run_generation(
 # __all__ 与 utcnow 重导出说明:utcnow 供调度器/测试构造 aware 时刻,不参与自然日判定。
 __all__ = [
     "UNCONSUMED_STATUSES",
+    "active_season_id",
     "compute_expire_at",
     "due_templates",
     "generate_for_template",
+    "manual_generate",
     "run_generation",
     "trigger_due",
     "trigger_matches_day",

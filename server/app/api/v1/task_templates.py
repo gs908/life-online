@@ -1,4 +1,4 @@
-"""任务模板路由:模板级 CRUD / 生命周期 / 再生成(docs/12 块 A)。
+"""任务模板路由:模板级 CRUD / 生命周期 / 再生成 / 选模板生成(docs/12 块 A)。
 
 与 /scn/task-instances(实例状态机)分界:这里只操作模板与触发规则,
 POST 只建模板+规则,不再强制建实例(创建后由生成器按需即时生成)。
@@ -12,6 +12,7 @@ from app.deps import CurrentUser, DBSession, GuildMasterOnly
 from app.models.enums import TaskType
 from app.schemas.common import ApiResponse, ok
 from app.schemas.task import (
+    TaskGenerateRequest,
     TaskTemplateCreate,
     TaskTemplateDeprecate,
     TaskTemplateRead,
@@ -19,7 +20,7 @@ from app.schemas.task import (
     TaskTemplateUpdate,
     TaskTriggerRead,
 )
-from app.services import task_template_service
+from app.services import season_service, task_template_service
 
 router = APIRouter(prefix="/scn/task-templates", tags=["scn-task-templates"])
 
@@ -41,11 +42,13 @@ def _trigger_read(t) -> TaskTriggerRead:
     )
 
 
-def _to_read(t) -> TaskTemplateRead:
+def _to_read(t, season_name: str | None = None) -> TaskTemplateRead:
     return TaskTemplateRead(
         id=t.id,
         family_id=t.family_id,
         season_id=t.season_id,
+        # 来源赛季名(DEV-50):模板可跨赛季后,「来源赛季:{name}」弱提示靠它显示。
+        season_name=season_name,
         creator_account_id=t.creator_account_id,
         library_id=t.library_id,
         target_child_id=t.target_child_id,
@@ -100,7 +103,8 @@ async def list_task_templates(
         is_active=is_active,
         template_type=type.value if type is not None else None,
     )
-    return ok([_to_read(t) for t in items])
+    names = await season_service.season_names(db, [t.season_id for t in items])
+    return ok([_to_read(t, names.get(t.season_id)) for t in items])
 
 
 @router.post("", response_model=ApiResponse[TaskTemplateRead], summary="创建任务模板(父母)")
@@ -120,7 +124,8 @@ async def get_task_template(
     template = await task_template_service.get_family_template(
         db, template_id=template_id, family_id=user.family_id,
     )
-    return ok(_to_read(template))
+    names = await season_service.season_names(db, [template.season_id])
+    return ok(_to_read(template, names.get(template.season_id)))
 
 
 @router.patch("/{template_id}", response_model=ApiResponse[TaskTemplateRead], summary="更新任务模板(父母)")
@@ -186,6 +191,65 @@ async def regenerate_task_template(
             "generated_for_date": str(fresh.generated_for_date),
             "status": fresh.status,
         } if (fresh is not None and action == "created") else None,
+    })
+
+
+@router.post(
+    "/{template_id}/generate",
+    response_model=ApiResponse[dict],
+    summary="选模板生成任务(父母):指定目标日期,可覆盖难度/押金/经验值",
+)
+async def generate_task_instance(
+    template_id: str, body: TaskGenerateRequest, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[dict]:
+    """「选模板 → 生成 → 微调 → 落库」的生成入口(DEV-50)。
+
+    与 `/{id}/regenerate` 的分界:`regenerate` 是"终结未消费实例 + 重建",
+    确认文案与幂等语义都建立在"将终结 N 条"上;本入口是"为某一天生成一条",
+    两者对用户的承诺不同,不合并。
+
+    - `target_date` 缺省 = 今天;`< 今天` / `> 今天 + 30 天` → 422(一律按
+      家庭本地时区 `today_bj()` 判定);
+    - **豁免模板触发规则** —— 家长显式选模板生成,不该被日历规则挡住;
+    - 实例赛季取**生成当时的激活赛季**,无激活赛季 → 409;
+    - 三个数值字段未传 = 用模板值(快照),显式 `null` → 422;
+    - 幂等:同一 (模板, 目标日) 已有实例则复用,不覆盖、不重建。
+
+    出参回显实例的**生效值**,并带 `overrides_applied` —— 只有 `created` 时才
+    真正写入覆盖值;其余动作复用既有实例,显式回传避免"传了覆盖值却被静默
+    丢弃",前端据此把用户引导到 `PATCH /scn/task-instances/{id}`。
+    """
+    instance, action, overrides_applied = await task_template_service.generate_instance_for_template(
+        db, family_id=user.family_id, template_id=template_id, payload=body,
+    )
+    if instance is None:
+        # not_due(模板已停用)/ skipped_expired:没有产物,如实回报动作。
+        return ok({
+            "instance_id": None,
+            "action": action,
+            "generated_for_date": None,
+            "status": None,
+            "difficulty": None,
+            "time_deposit": None,
+            "xp_reward": None,
+            "content_source": None,
+            "season_name": None,
+            "overrides_applied": overrides_applied,
+        })
+    names = await season_service.season_names(db, [instance.season_id])
+    return ok({
+        "instance_id": instance.id,
+        "action": action,
+        "generated_for_date": (
+            str(instance.generated_for_date) if instance.generated_for_date else None
+        ),
+        "status": instance.status,
+        "difficulty": instance.difficulty,
+        "time_deposit": instance.time_deposit,
+        "xp_reward": instance.xp_reward,
+        "content_source": instance.content_source,
+        "season_name": names.get(instance.season_id),
+        "overrides_applied": overrides_applied,
     })
 
 

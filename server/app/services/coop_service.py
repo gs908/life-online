@@ -171,6 +171,11 @@ async def join_task(db: AsyncSession, *, task_id: str, user: SysAccount) -> ScnT
         raise ValidationError("只有 COOP 协作任务支持加入")
     if status_value != TaskStatus.IN_PROGRESS.value:
         raise ConflictError("任务当前状态不可加入(需主接取人先接取)")
+    # DEV-50:未来日期("已排期")的实例到期前不可参与。start 已有守卫,这里是
+    # 第二道 —— 防止任何让实例绕过 start 进入 IN_PROGRESS 的路径带出漏洞。
+    from app.services.task_service import ensure_task_startable_today
+
+    ensure_task_startable_today(task)
 
     if any(p.account_id == user.id for p in task.participants):
         raise ConflictError("你已是该任务的参与者")

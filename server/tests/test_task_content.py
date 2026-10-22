@@ -250,7 +250,8 @@ async def test_context_load_failure_falls_back(db_session, seeded, monkeypatch):
     fake = FakeNarrativeClient()
     _patch_llm(monkeypatch, fake)
 
-    async def _boom(db, template):
+    async def _boom(db, template, *, season_id=None):
+        # DEV-50:叙事上下文改取"生成当时的激活赛季",多一个 season_id 关键字参数。
         raise RuntimeError("context load failed")
 
     monkeypatch.setattr(task_generator_service, "_load_content_context", _boom)
@@ -422,20 +423,34 @@ def _run_alembic(target: str) -> None:
     command.upgrade(cfg, target)
 
 
-def _alembic_downgrade_one() -> None:
-    """回滚一版:显式定位 head 的 down_revision(不依赖相对目标 "-1" 解析)。"""
+# docs/15 内容列迁移的 revision id。T8 要验证的是**它**可回滚,所以显式定位到
+# 它的 down_revision —— 不能用"回滚 head 一版":DEV-50 的迁移叠在它之后,
+# 那时"head 的 down_revision"已是内容列迁移本身,断言会打错目标。
+_CONTENT_COLUMNS_REVISION = "e2f6a8c4b7d9"
+
+
+def _alembic_downgrade_to(target: str) -> None:
+    """回滚到指定 revision(不依赖相对目标 "-1" 解析)。"""
     from alembic.config import Config
-    from alembic.script import ScriptDirectory
 
     from alembic import command
 
     server_root = Path(__file__).resolve().parents[1]
     cfg = Config(str(server_root / "alembic.ini"))
     cfg.set_main_option("script_location", str(server_root / "alembic"))
-    script = ScriptDirectory.from_config(cfg)
-    head = script.get_current_head()
-    target = script.get_revision(head).down_revision
     command.downgrade(cfg, target)
+
+
+def _content_columns_down_revision() -> str:
+    """内容列迁移的 down_revision(= 回滚一版内容列要到达的目标)。"""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    server_root = Path(__file__).resolve().parents[1]
+    cfg = Config(str(server_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(server_root / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
+    return script.get_revision(_CONTENT_COLUMNS_REVISION).down_revision
 
 
 def _column_exists(table: str, column: str) -> bool:
@@ -498,7 +513,8 @@ async def test_t8_migration_upgrade_downgrade_with_defaults(db_session, seeded):
     # 释放会话上的隐式事务/表锁,避免阻塞迁移连接的 DDL。
     await db_session.rollback()
     try:
-        await asyncio.to_thread(_alembic_downgrade_one)  # downgrade:回滚一版
+        # downgrade:回滚到内容列迁移之前(顺带覆盖 DEV-50 迁移自身的可回滚性)。
+        await asyncio.to_thread(_alembic_downgrade_to, _content_columns_down_revision())
         assert not _column_exists("scn_task_template", "content_mode")
         assert not _column_exists("scn_task_instance", "content_source")
     finally:

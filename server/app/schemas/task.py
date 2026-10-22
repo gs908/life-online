@@ -22,6 +22,26 @@ from app.models.enums import (
 
 Weekday = Annotated[int, Field(ge=0, le=6)]
 
+# 逐实例微调的三个字段(DEV-50):全是**快照**列 —— 生成时写入模板当前值,
+# 之后可独立调整。三个字段语义完全同构,故共用同一条"显式 null 一律拒绝"规则。
+SNAPSHOT_FIELDS = ("difficulty", "time_deposit", "xp_reward")
+
+
+def reject_explicit_null(model, fields=SNAPSHOT_FIELDS) -> None:
+    """三个快照字段不接受显式 `null`(→ 422)。
+
+    用 `model_fields_set` 区分"未提供"与"显式 null":未提供 = 保持不变(或生成
+    时用模板值);显式 `null` = 客户端 bug。**不静默忽略、也不静默转译成
+    "去查模板值"** —— 后者会把"一次性填入"伪装成"持续跟随",让家长误以为
+    以后改模板会同步。宁可让 bug 暴露成字段级 422。
+
+    "恢复模板值"的正确做法由前端完成:取模板当前值,作为具体数字提交。
+    """
+    provided = getattr(model, "model_fields_set", set())
+    for name in fields:
+        if name in provided and getattr(model, name) is None:
+            raise ValueError(f"{name} 不可为空;如需恢复模板值,请显式提交模板当前值")
+
 
 def validate_timed_mode(
     mode: str | TimedMode | None,
@@ -115,7 +135,9 @@ class TaskTriggerRead(BaseModel):
 
 
 class TaskTemplateCreate(BaseModel):
-    season_id: str
+    # 可空(DEV-50):模板可跨赛季,赛季只是可选"来源标签";实际归属赛季在
+    # 生成时取当时的激活赛季。
+    season_id: str | None = None
     library_id: str | None = None
     category: TaskCategory | None = None
     title: str
@@ -144,8 +166,10 @@ class TaskTemplateCreate(BaseModel):
     estimated_minutes: int | None = Field(default=None, ge=1, le=24 * 60)
     # 难度 1-5(DEV-34 块 C 语义,块 A 契约可空 = 未评星):只影响 XP,不影响押金
     difficulty: int | None = Field(default=None, ge=1, le=5)
-    # ---- 任务内容生成(docs/15 R24)----
-    content_mode: ContentMode = ContentMode.STATIC
+    # ---- 任务内容生成(docs/15 R24;DEV-50 默认值翻转)----
+    # 默认 LLM:口径是"生成任务时要调用 LLM 结合赛季背景完成动态内容生成"。
+    # 需要确定性文本的任务可显式传 STATIC 退出。
+    content_mode: ContentMode = ContentMode.LLM
     # 任务要点:LLM 叙事生成的输入;为空时生成器回落用 description
     content_brief: str | None = None
     triggers: list[TaskTriggerCreate] = Field(default_factory=list)
@@ -159,7 +183,11 @@ class TaskTemplateCreate(BaseModel):
 class TaskTemplateRead(BaseModel):
     id: str
     family_id: str
-    season_id: str
+    # 可空(DEV-50):模板可跨赛季,season_id 只是可选"来源标签"。
+    season_id: str | None = None
+    # 来源赛季名(前端「来源赛季:{name}」弱提示用);season_id 为空时为 None。
+    # 由后端一并返回,避免前端再拉一次赛季列表自己做 map。
+    season_name: str | None = None
     creator_account_id: str | None = None
     library_id: str | None = None
     target_child_id: str | None = None
@@ -184,7 +212,7 @@ class TaskTemplateRead(BaseModel):
     chain_total: int
     estimated_minutes: int | None = None
     difficulty: int | None = None
-    content_mode: ContentMode = ContentMode.STATIC
+    content_mode: ContentMode = ContentMode.LLM
     content_brief: str | None = None
     deprecated_at: datetime | None = None
     deprecated_reason: str | None = None
@@ -232,6 +260,50 @@ class TaskTemplateRegenerate(BaseModel):
     """终结未消费实例并立即生成;当前无参数,占位以便后续扩展(如指定日期)。"""
 
 
+class TaskGenerateRequest(BaseModel):
+    """「选模板 → 生成」入参(DEV-50)。
+
+    - `target_date` 缺省 = 家庭本地时区今天;服务端校验"仅允许 ≥ 今天"与
+      上限(见 task_template_service.MANUAL_GENERATE_MAX_AHEAD_DAYS)。
+      入参叫 `target_date`(意图:为哪一天生成),出参回显 `generated_for_date`
+      (事实:实例的逻辑日),刻意不同名。
+    - 三个可覆盖字段**未提供 = 用模板值**(快照);**显式 `null` → 422**。
+      生成路径不存在"清除覆盖"的动作 —— 新建实例没有可清除的覆盖。
+    - `target_child_id` 缺省 = 用模板值;显式 `null` 在此语义为"不指定"。
+    """
+
+    target_date: date | None = None
+    difficulty: int | None = Field(default=None, ge=1, le=5)
+    time_deposit: int | None = Field(default=None, ge=0)
+    xp_reward: int | None = Field(default=None, ge=0)
+    target_child_id: str | None = None
+
+    @model_validator(mode="after")
+    def _check_snapshots(self) -> "TaskGenerateRequest":
+        reject_explicit_null(self)
+        return self
+
+
+class TaskTuneRequest(BaseModel):
+    """逐实例微调入参(DEV-50,`PATCH /scn/task-instances/{id}`)。
+
+    三个字段都是**快照**,语义同构:`exclude_unset` —— 未提供 = 保持不变;
+    显式 `null` → 422(见 `reject_explicit_null`)。「恢复模板值」由前端取模板
+    当前值后作为具体数字提交。
+
+    实例的 `season_id` **不可改**(任务不跨赛季),故不在本契约中。
+    """
+
+    difficulty: int | None = Field(default=None, ge=1, le=5)
+    time_deposit: int | None = Field(default=None, ge=0)
+    xp_reward: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _check_snapshots(self) -> "TaskTuneRequest":
+        reject_explicit_null(self)
+        return self
+
+
 class TaskCreate(TaskTemplateCreate):
     """兼容旧创建接口:创建模板并生成一条初始实例。"""
     target_user_id: str | None = None
@@ -274,6 +346,9 @@ class TaskRead(BaseModel):
     id: str
     family_id: str
     season_id: str
+    # 实例所属赛季名(DEV-50):模板可跨赛季后,实例列表只靠 season_id 分不清
+    # 属于哪个赛季;由后端一并返回,避免前端自己 map。
+    season_name: str | None = None
     template_id: str | None = None
     creator_account_id: str | None = None
     target_child_id: str | None = None
@@ -364,11 +439,17 @@ class TaskAbandonRequest(BaseModel):
 
 
 class TaskDepositPreviewRequest(BaseModel):
-    """管理端表单实时预览押金:难度 + 预计耗时 -> 押金。难度不影响押金,仅为表单完整性透传。"""
+    """管理端表单实时预览押金:难度 + 预计耗时 -> 押金。难度不影响押金,仅为表单完整性透传。
+
+    `for_date`(DEV-50):封顶依赖的"当日配额"按**星期几**不同
+    (`coin_service.compute_daily_allowance` 读 `ScnTimeConfig.exceptions.day_of_week`),
+    所以为未来日期生成时,拿今天的配额算出的上限会失真。缺省 = 今天。
+    """
     type: TaskType = TaskType.DAILY
     estimated_minutes: int | None = Field(default=None, ge=1, le=24 * 60)
     time_deposit: int | None = Field(default=None, ge=0)
     difficulty: int | None = Field(default=None, ge=1, le=5)
+    for_date: date | None = None
 
 
 class TaskDepositPreviewResponse(BaseModel):
@@ -396,5 +477,6 @@ class TemplateLibraryRead(BaseModel):
 
 
 class TemplateLibraryApplyRequest(BaseModel):
-    season_id: str
+    # DEV-50:与 POST /scn/task-templates 同源口径 —— 模板不绑赛季,套用时可省。
+    season_id: str | None = None
     target_child_id: str | None = None

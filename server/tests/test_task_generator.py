@@ -309,7 +309,9 @@ async def test_concurrent_insert_real_integrity_error_fallback(db_session, seede
         # 删除 B 会话对该行的身份映射,保证下面 flush 走 INSERT 而非复用,
         # 从而真实撞上数据库唯一索引。
         session_b.expire_all()
-        loser, created = await task_generator_service._insert_instance(session_b, template, TODAY)
+        loser, created = await task_generator_service._insert_instance(
+            session_b, template, TODAY, season_id=template.season_id,
+        )
         assert created is False  # 兜底回捞,非新建
         assert loser.id == winner.id  # 撞库回捞:A 的行被返回
     assert await _count_instances(db_session, template.id) == 1

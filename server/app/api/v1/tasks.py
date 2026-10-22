@@ -1,11 +1,14 @@
 """任务路由:模板 + 实例 CRUD 与状态机操作 + 任务证据(DEV-33 块 E)。"""
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
+from app.common.timeutil import today_bj
 from app.deps import CurrentUser, DBSession, GuildMasterOnly
-from app.models.enums import TaskStatus, TaskType
+from app.models.enums import TaskStatus, TaskType, UserRole
 from app.models.scn_task_proof import ScnTaskProof
 from app.schemas.common import ApiResponse, PageQuery, PageResult, ok
 from app.schemas.task import (
@@ -18,13 +21,24 @@ from app.schemas.task import (
     TaskRead,
     TaskRejectRequest,
     TaskSubmitRequest,
+    TaskTuneRequest,
 )
-from app.services import coin_service, coop_service, proof_service, task_service
+from app.services import (
+    coin_service,
+    coop_service,
+    proof_service,
+    season_service,
+    task_service,
+)
 from app.services.upload_service import build_access_url
 
 router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
 templates_router = APIRouter(prefix="/scn/task-templates", tags=["scn-task-templates"])
 proofs_router = APIRouter(prefix="/scn/task-proofs", tags=["scn-task-proofs"])
+
+
+def _enum_value(value) -> str:
+    return value.value if hasattr(value, "value") else str(value)
 
 
 def _template_value(t, name: str, default=None):
@@ -74,7 +88,9 @@ async def _load_proofs(db, task_ids: list[str]) -> dict[str, list[ScnTaskProof]]
     return proofs
 
 
-def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
+def _to_read(
+    t, proofs: list[ScnTaskProof] | None = None, season_name: str | None = None,
+) -> TaskRead:
     # 块 E(证据)+ 块 F(参与者)语义合并:两条读取口径共存于同一 TaskRead。
     proofs = proofs or []
     proof_reads = [_proof_to_read(p) for p in proofs]
@@ -101,6 +117,7 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
         id=t.id,
         family_id=t.family_id,
         season_id=t.season_id,
+        season_name=season_name,
         template_id=t.template_id,
         creator_account_id=t.creator_account_id,
         target_child_id=t.target_child_id,
@@ -116,7 +133,9 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
         expire_at=t.expire_at,
         generated_for_date=t.generated_for_date,
         required_start_time=_template_value(t, "required_start_time"),
-        difficulty=_template_value(t, "difficulty", 2),
+        # DEV-50:难度**快照**,直读实例,不再从模板穿读 —— 否则家长微调的
+        # 星级读不回来。存量行由迁移回填;NULL = 生成时模板未评星。
+        difficulty=t.difficulty,
         estimated_minutes=_template_value(t, "estimated_minutes"),
         proof_url=proof_url,
         proofs=proof_reads,
@@ -144,7 +163,12 @@ def _to_read(t, proofs: list[ScnTaskProof] | None = None) -> TaskRead:
 
 
 async def _to_read_with_proofs(db, t) -> TaskRead:
-    return _to_read(t, await proof_service.list_proofs(db, task_instance_id=t.id))
+    names = await season_service.season_names(db, [t.season_id])
+    return _to_read(
+        t,
+        await proof_service.list_proofs(db, task_instance_id=t.id),
+        names.get(t.season_id),
+    )
 
 
 @router.get("", response_model=ApiResponse[PageResult[TaskRead]], summary="任务实例列表")
@@ -157,17 +181,33 @@ async def list_tasks(
     template_id: str | None = Query(default=None),
     assignee_child_id: str | None = Query(default=None),
     assignee_id: str | None = Query(default=None),
+    generated_for_date_lte: date | None = Query(
+        default=None,
+        description="只返回该逻辑日及以前的实例(管理端可选筛选;孩子端由服务端强制取今天)",
+    ),
 ) -> ApiResponse[PageResult[TaskRead]]:
+    """任务实例列表。
+
+    **DEV-50 可见性:孩子端由服务端强制过滤,不信客户端参数。**
+    "已排期到明天"的实例在到期前不该出现在孩子的任务板上 —— 这是权限边界,
+    前端过滤可被绕过;而且前端"拉 N 条再筛"会被未来实例挤占窗口、把当天任务
+    挤掉。管理端默认看全量(家长要能看见自己排期的任务),另给可选
+    `generated_for_date_lte` 做显式筛选。
+    """
     query = PageQuery(page=page, page_size=page_size)
+    is_child = _enum_value(user.role) == UserRole.ADVENTURER.value
+    visible_until = today_bj() if is_child else generated_for_date_lte
     items, total = await task_service.list_tasks(
         db, family_id=user.family_id,
         season_id=season_id, status=status, assignee_id=assignee_child_id or assignee_id,
         template_id=template_id,
+        generated_for_date_lte=visible_until,
         offset=query.offset, limit=query.page_size,
     )
     proofs_map = await _load_proofs(db, [t.id for t in items])
+    names_map = await season_service.season_names(db, [t.season_id for t in items])
     return ok(PageResult(
-        items=[_to_read(t, proofs_map.get(t.id)) for t in items],
+        items=[_to_read(t, proofs_map.get(t.id), names_map.get(t.season_id)) for t in items],
         total=total,
         page=query.page,
         page_size=query.page_size,
@@ -183,15 +223,51 @@ async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiRespons
     return ok(await _to_read_with_proofs(db, t))
 
 
-@router.post("", response_model=ApiResponse[TaskRead], summary="创建任务模板并生成初始实例(父母)")
+@router.post(
+    "",
+    response_model=ApiResponse[TaskRead],
+    summary="创建任务模板并生成初始实例(父母)",
+    deprecated=True,
+)
 async def create_task(
     body: TaskCreate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
+    """【deprecated,DEV-50】一次成型:建模板 + 建一条实例。
+
+    已由「选模板 → 生成」取代(`POST /scn/task-templates` 建模板 /
+    `POST /scn/task-templates/{id}/generate` 按目标日期生成)。本入口不支持
+    目标日期与逐实例微调,且实例不写 `generated_for_date`(不参与实例池与同日
+    幂等)。保留仅为兼容旧客户端,新前端请勿使用。
+    """
     data = body.model_dump()
     t = await task_service.create_task(
         db, family_id=user.family_id, creator_id=user.id, **data,
     )
     return ok(_to_read(t))
+
+
+@router.patch(
+    "/{task_id}",
+    response_model=ApiResponse[TaskRead],
+    summary="微调任务实例(父母):难度 / 押金 / 经验值",
+)
+async def tune_task(
+    task_id: str, body: TaskTuneRequest, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[TaskRead]:
+    """逐实例微调(DEV-50)。
+
+    三个字段都是**快照**,语义同构:`exclude_unset` —— 未提供 = 保持不变;
+    显式 `null` → 422(「恢复模板值」由前端取模板当前值后作为数字提交,
+    因为 `xp_reward` / `time_deposit` 是 `NOT NULL`、根本没有 NULL 态,写 null
+    既是约束违例、也会把"一次性填入"伪装成"持续跟随模板")。
+
+    实例的 `season_id` 不可改(任务不跨赛季),故不在契约中。
+    仅 `AVAILABLE`(未接取)可调:接取后押金已扣,再改会让退款/超时结算口径漂移。
+    """
+    t = await task_service.tune_task(
+        db, task_id=task_id, family_id=user.family_id, payload=body,
+    )
+    return ok(await _to_read_with_proofs(db, t))
 
 
 # 注:DEV-36 块 F 的"只建模板不投放实例"入口(POST /scn/task-templates,
@@ -323,7 +399,10 @@ async def delete_proof(
 async def preview_deposit(
     body: TaskDepositPreviewRequest, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskDepositPreviewResponse]:
-    allowance = await coin_service.compute_daily_allowance(db, user.family_id, coin_service.today_bj())
+    # DEV-50:配额按**星期几**不同(ScnTimeConfig.exceptions),为未来日期生成时
+    # 必须按目标日的配额算封顶,否则会拿工作日的上限去卡周末。
+    day = body.for_date or coin_service.today_bj()
+    allowance = await coin_service.compute_daily_allowance(db, user.family_id, day)
     time_deposit, capped = coin_service.compute_deposit_detail(
         task_type=body.type,
         estimated_minutes=body.estimated_minutes,
