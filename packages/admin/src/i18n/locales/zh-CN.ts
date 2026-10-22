@@ -365,6 +365,12 @@ const zhCN = {
     errDateTooFar: '目标日期最多提前 {{days}} 天',
     beyondSeasonEnd: '{{date}} 已超出本赛季「{{name}}」（至 {{end}}），生成的任务仍归属本赛季。',
     dateHasInstance: '{{date}} 已有任务实例，将直接使用该实例（不覆盖、不重建）。',
+    // 无产物动作（skipped_expired）：不能套成功框，也不能报"已排期到 null"
+    resultSkippedTitle: '本次未生成任务',
+    // 复用了既有实例、且该实例没有归属日（链式实例 generated_for_date 为 NULL）
+    resultReused: '已复用既有实例',
+    // 消费后端回传的 overrides_applied：非 created 动作不会写入覆盖值，不能静默丢弃
+    overridesNotApplied: '本次未写入你的改动（复用了既有实例）。要改这条实例的数值，请用任务上的「微调」。',
     submit: '生成任务',
     failed: '生成失败，请重试',
     deployedToday: '已投放（今天可接取）',
@@ -384,6 +390,8 @@ const zhCN = {
     fillBack: '按模板当前值填回',
     fillBackHint: '填入模板当前值，之后修改模板不会同步。',
     fillBackUnavailable: '模板已删除，无法取回模板值',
+    // 模板未评星（difficulty 为 null）：没有值可填，写 0 会被后端 ge=1 拒绝
+    fillBackNoTemplateValue: '模板未评星，没有可填回的值',
     fillBackFailed: '取模板当前值失败',
     adjusted: '已调整',
     unrated: '未评星',

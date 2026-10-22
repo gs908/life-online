@@ -344,6 +344,11 @@ export interface TaskTemplateRead {
   lore_snippet: string | null;
   xp_reward: number;
   type: TaskType;
+  // CHAIN 链式（DEV-36 块 F）：第 2..N 步模板不该有手动生成入口
+  //（实例由"链首投放 + 逐步解锁"产生），故列表按 chain_order 隐藏「生成」。
+  chain_key: string | null;
+  chain_order: number;
+  chain_total: number;
   required_start_time: string | null;
   reminder_message: string | null;
   reminder_minutes_before: number;
@@ -440,16 +445,22 @@ export type TaskGenerateAction =
   | 'skipped_expired';
 
 export interface TaskGenerateResult {
-  /** 命中/新建的实例 id（skipped_expired 时为 null） */
+  /** 命中/新建的实例 id；`skipped_expired` 等**无产物动作时为 null** */
   instance_id: string | null;
   action: TaskGenerateAction;
-  generated_for_date: string;
-  /** 三个字段的生效值（快照） */
+  /** ⚠️ 无产物动作（`skipped_expired`）时后端该分支 8 个字段全为 null ——
+   *  类型必须如实可空，否则前端会算出 "已排期到 null" 这种句子 */
+  generated_for_date: string | null;
+  status: TaskStatus | null;
+  /** 三个字段的生效值（快照）；无产物时为 null */
   difficulty: number | null;
-  time_deposit: number;
-  xp_reward: number;
-  content_source: ContentSource;
+  time_deposit: number | null;
+  xp_reward: number | null;
+  content_source: ContentSource | null;
   season_name: string | null;
+  /** **只有 `created` 才真正写入覆盖值**；其余动作复用既有实例，覆盖值不会被应用。
+   *  后端显式回传，前端据此把用户引导到 `PATCH /scn/task-instances/{id}`。 */
+  overrides_applied: boolean;
 }
 
 /** 微调实例（契约 §6B，`PATCH /scn/task-instances/{id}`）

@@ -91,13 +91,19 @@ const TuneTaskModal: React.FC<TuneTaskModalProps> = ({ isOpen, onClose, task, on
     try {
       const fresh = (await loadTemplate(task.template_id)) ?? template;
       if (!fresh) throw new Error('template unavailable');
-      const next =
-        field === 'difficulty'
-          ? fresh.difficulty ?? 0
-          : field === 'time_deposit'
-            ? fresh.time_deposit
-            : fresh.xp_reward;
-      setValues(prev => ({ ...prev, [field]: next }));
+      // ⚠️ 模板未评星时 difficulty 是 null，难度没有"空值"可提交（后端 ge=1）：
+      // 写 0 必然 422，故直接不动值并说明（Mars 审查 🔴）
+      if (field === 'difficulty') {
+        if (fresh.difficulty === null || fresh.difficulty < 1) {
+          onToast(t('toast.actionFailedTitle'), t('tune.fillBackNoTemplateValue'));
+          return;
+        }
+        setValues(prev => ({ ...prev, difficulty: fresh.difficulty as number }));
+      } else if (field === 'time_deposit') {
+        setValues(prev => ({ ...prev, time_deposit: fresh.time_deposit }));
+      } else {
+        setValues(prev => ({ ...prev, xp_reward: fresh.xp_reward }));
+      }
       setDirty(prev => ({ ...prev, [field]: true }));
     } catch (error) {
       onToast(t('toast.actionFailedTitle'), error instanceof ApiError ? error.message : t('tune.fillBackFailed'));
@@ -109,7 +115,10 @@ const TuneTaskModal: React.FC<TuneTaskModalProps> = ({ isOpen, onClose, task, on
   const handleSubmit = async () => {
     // 只放改过的字段；没有任何改动就不发请求（未提供 = 保持不变）
     const body: TaskInstancePatch = {};
-    if (dirty.difficulty && values.difficulty !== null) body.difficulty = values.difficulty;
+    // 结构上兜住"永不发出非法难度"：后端 ge=1
+    if (dirty.difficulty && values.difficulty !== null && values.difficulty >= 1) {
+      body.difficulty = values.difficulty;
+    }
     if (dirty.time_deposit) body.time_deposit = values.time_deposit;
     if (dirty.xp_reward) body.xp_reward = values.xp_reward;
     if (Object.keys(body).length === 0) {
@@ -169,6 +178,8 @@ const TuneTaskModal: React.FC<TuneTaskModalProps> = ({ isOpen, onClose, task, on
             onChange={changeField}
             onFillBack={fillBack}
             fillingBack={fillingBack}
+            // 模板未取到 / 未评星时难度「填回」置灰：无值可填，写 0 会被 ge=1 拒绝
+            fillBackDisabled={{ difficulty: template === null || template.difficulty === null }}
             previewDate={task.generated_for_date ?? today}
             disabled={submitting}
           />
