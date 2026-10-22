@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../../services/api';
 import type { SeasonRead, ThemeId } from '../../services/api';
 import { THEMES } from '../../constants/themes';
-import { Palette, ScrollText, Check, X, Plus, Pencil, Trash2, Zap, CalendarDays } from 'lucide-react';
+import { Palette, ScrollText, Check, X, Plus, Pencil, Trash2, Zap, CalendarDays, Archive } from 'lucide-react';
 
 interface SeasonConfigModalProps {
   isOpen: boolean;
@@ -59,7 +59,8 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null); // 请求级错误（conflict 等）
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({}); // 422 内联纠错
-  const [confirmTarget, setConfirmTarget] = useState<{ action: 'activate' | 'delete'; season: SeasonRead } | null>(null);
+  /** 'deactivate' = 下线赛季（PATCH is_active=false）：删除有资产守卫时的替代出路（契约 §6B） */
+  const [confirmTarget, setConfirmTarget] = useState<{ action: 'activate' | 'delete' | 'deactivate'; season: SeasonRead } | null>(null);
   const [acting, setActing] = useState(false);
 
   useEffect(() => {
@@ -177,18 +178,39 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({
     try {
       if (action === 'activate') {
         await api.seasons.activateSeason(season.id);
+      } else if (action === 'deactivate') {
+        // 下线 = 停用但保留全部资产（实例与模板都不动）
+        await api.seasons.updateSeason(season.id, { is_active: false });
       } else {
         await api.seasons.deleteSeason(season.id);
       }
       await onRefresh();
       onToast(
-        t(action === 'activate' ? 'seasonConfig.activatedToast' : 'seasonConfig.deletedToast'),
-        t(action === 'activate' ? 'seasonConfig.activatedToastMsg' : 'seasonConfig.deletedToastMsg', { name: season.name }),
+        t(
+          action === 'activate'
+            ? 'seasonConfig.activatedToast'
+            : action === 'deactivate'
+              ? 'seasonConfig.deactivatedToast'
+              : 'seasonConfig.deletedToast',
+        ),
+        t(
+          action === 'activate'
+            ? 'seasonConfig.activatedToastMsg'
+            : action === 'deactivate'
+              ? 'seasonConfig.deactivatedToastMsg'
+              : 'seasonConfig.deletedToastMsg',
+          { name: season.name },
+        ),
       );
       setConfirmTarget(null);
     } catch (error) {
-      // 冲突/权限等在确认弹层位置就地呈现，不关闭弹层
-      setFormError(describeError(error));
+      // 资产守卫 422：该赛季已有完成/过期任务 —— 就地呈现，并把出路（下线赛季）指出来
+      const base = describeError(error);
+      setFormError(
+        error instanceof ApiError && error.httpStatus === 422
+          ? `${base} ${t('seasonConfig.deleteBlockedHint')}`
+          : base,
+      );
       setConfirmTarget(null);
     } finally {
       setActing(false);
@@ -395,6 +417,15 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({
                       >
                         <Pencil size={12} /> {t('seasonConfig.edit')}
                       </button>
+                      {/* 下线赛季：停用但保留全部资产 —— 删除有资产守卫时的正解（契约 §6B） */}
+                      {season.is_active && (
+                        <button
+                          onClick={() => { setFormError(null); setConfirmTarget({ action: 'deactivate', season }); }}
+                          className="px-3 py-1.5 bg-amber-50 text-amber-700 text-xs font-bold rounded-lg hover:bg-amber-100 flex items-center gap-1"
+                        >
+                          <Archive size={12} /> {t('seasonConfig.deactivate')}
+                        </button>
+                      )}
                       <button
                         onClick={() => { setFormError(null); setConfirmTarget({ action: 'delete', season }); }}
                         className="px-3 py-1.5 bg-red-50 text-red-600 text-xs font-bold rounded-lg hover:bg-red-100 flex items-center gap-1"
@@ -421,31 +452,58 @@ const SeasonConfigModal: React.FC<SeasonConfigModalProps> = ({
         </div>
       </div>
 
-      {/* 激活 / 删除确认层 */}
+      {/* 激活 / 下线 / 删除确认层 */}
       {confirmTarget && (
         <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <div className="bg-white rounded-xl w-full max-w-sm p-5 shadow-2xl animate-in fade-in zoom-in duration-150">
-            <h4 className={`font-bold text-base mb-2 flex items-center gap-2 ${confirmTarget.action === 'delete' ? 'text-red-600' : 'text-blue-700'}`}>
+            <h4 className={`font-bold text-base mb-2 flex items-center gap-2 ${
+              confirmTarget.action === 'delete'
+                ? 'text-red-600'
+                : confirmTarget.action === 'deactivate'
+                  ? 'text-amber-700'
+                  : 'text-blue-700'
+            }`}>
               {confirmTarget.action === 'delete' ? <Trash2 size={16} /> : <Zap size={16} />}
-              {t(confirmTarget.action === 'delete' ? 'seasonConfig.deleteConfirmTitle' : 'seasonConfig.activateConfirmTitle')}
+              {t(
+                confirmTarget.action === 'delete'
+                  ? 'seasonConfig.deleteConfirmTitle'
+                  : confirmTarget.action === 'deactivate'
+                    ? 'seasonConfig.deactivateConfirmTitle'
+                    : 'seasonConfig.activateConfirmTitle',
+              )}
             </h4>
             <p className="text-sm text-slate-600 mb-4">
               {t(
                 confirmTarget.action === 'delete'
                   ? 'seasonConfig.deleteConfirmBody'
-                  : 'seasonConfig.activateConfirmBody',
+                  : confirmTarget.action === 'deactivate'
+                    ? 'seasonConfig.deactivateConfirmBody'
+                    : 'seasonConfig.activateConfirmBody',
                 { name: confirmTarget.season.name },
               )}
             </p>
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 flex-wrap">
               <button onClick={() => setConfirmTarget(null)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded-lg text-sm">
                 {t('common.cancel')}
               </button>
+              {/* 删除的出路：资产守卫 422 时不必撞墙 —— 直接切到「下线赛季」 */}
+              {confirmTarget.action === 'delete' && (
+                <button
+                  onClick={() => setConfirmTarget({ action: 'deactivate', season: confirmTarget.season })}
+                  className="px-4 py-2 bg-amber-100 text-amber-800 font-bold rounded-lg text-sm hover:bg-amber-200"
+                >
+                  {t('seasonConfig.switchToDeactivate')}
+                </button>
+              )}
               <button
                 onClick={handleConfirmAction}
                 disabled={acting}
                 className={`px-4 py-2 text-white font-bold rounded-lg text-sm disabled:opacity-50 ${
-                  confirmTarget.action === 'delete' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
+                  confirmTarget.action === 'delete'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : confirmTarget.action === 'deactivate'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-blue-600 hover:bg-blue-700'
                 }`}
               >
                 {acting ? t('seasonConfig.saving') : t('common.confirm')}

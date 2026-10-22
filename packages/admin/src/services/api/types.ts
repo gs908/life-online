@@ -51,6 +51,12 @@ export type TimedMode = 'NONE' | 'DEADLINE' | 'DURATION';
 /** 实例池策略（契约 §6A，决策 D1） */
 export type PoolPolicy = 'REUSE_UNTIL_CONSUMED' | 'NEW_EACH_PERIOD';
 
+/** 模板叙事方式（docs/15 R24）：STATIC = 用模板原文；LLM = 实例化时结合当季背景调 LLM */
+export type ContentMode = 'STATIC' | 'LLM';
+
+/** 实例叙事来源（docs/15 R25）：TEMPLATE = 模板原文；LLM = 生成成功；FALLBACK = 失败回落 */
+export type ContentSource = 'TEMPLATE' | 'LLM' | 'FALLBACK';
+
 export type ThemeId = 'DEFAULT' | 'FROSTBOUND' | 'INFERNO' | 'SYLVAN' | 'CYBERPUNK';
 
 export type UploadPurpose = 'avatar' | 'task_proof' | 'season_banner' | 'other';
@@ -205,6 +211,8 @@ export interface TaskRead {
   id: string;
   family_id: string;
   season_id: string;
+  /** 实例所属赛季名（契约 §6B）：模板跨赛季后，实例列表靠它分辨归属赛季 */
+  season_name: string | null;
   template_id: string | null;
   creator_account_id: string | null;
   target_child_id: string | null; // 指派对象（child_id），null=可任接
@@ -218,8 +226,11 @@ export interface TaskRead {
   status: TaskStatus;
   deadline: string | null;
   expire_at: string | null;
-  /** 生成器产出实例的逻辑日（契约 §6A）；一次性手工任务为 null */
+  /** 生成器产出实例的逻辑日（契约 §6A）；一次性手工任务为 null。
+   *  > 今天 = 已排期（孩子端不可见、不可接取），任务板按它加角标 */
   generated_for_date: string | null;
+  /** 实例快照难度（契约 §6B）；null = 生成时模板未评星 */
+  difficulty: number | null;
   required_start_time: string | null; // "HH:MM:SS"
   proof_url: string | null; // 展示用（过渡：= proofs[0].url，读取以 proofs 为准）
   proofs: TaskProofRead[]; // 全部证据（DEV-33 块 E）
@@ -260,7 +271,9 @@ export interface TaskTriggerRead extends TaskTriggerCreate {
 }
 
 export interface TaskTemplateCreate {
-  season_id: string;
+  /** 来源赛季标签（契约 §6B）：**可选**。有激活赛季时带上、没有则省略 ——
+   *  模板不绑赛季（可跨赛季复用），该字段只作溯源展示，不参与生成。 */
+  season_id?: string;
   library_id?: string;
   category?: TaskCategory;
   title: string;
@@ -282,6 +295,9 @@ export interface TaskTemplateCreate {
   start_time?: string; // "HH:MM"
   duration_minutes?: number; // 15-480，15 的倍数（后端约束 >=1）
   pool_policy?: PoolPolicy; // 默认 REUSE_UNTIL_CONSUMED
+  // ---- 任务内容生成（docs/15 R24）：模板只存与赛季无关的任务实质 ----
+  content_mode?: ContentMode; // 叙事方式；后端默认 LLM（新口径：生成时结合赛季背景）
+  content_brief?: string | null; // 任务要点：LLM 叙事的输入；留空回落 description（R19）
   /** 缺省时后端按类型补默认规则（DAILY/TIMED→DAILY@00:00，CHALLENGE→每周一 CRON）；一次性不传 */
   triggers?: TaskTriggerCreate[];
 }
@@ -307,13 +323,18 @@ export interface TaskTemplateUpdate {
   pool_policy?: PoolPolicy;
   estimated_minutes?: number | null;
   difficulty?: number | null;
+  content_mode?: ContentMode;
+  content_brief?: string | null;
   triggers?: TaskTriggerCreate[];
 }
 
 export interface TaskTemplateRead {
   id: string;
   family_id: string;
-  season_id: string;
+  /** 来源赛季标签；null = 创建时无激活赛季（模板不绑赛季，可跨赛季复用） */
+  season_id: string | null;
+  /** 来源赛季名（契约 §6B）：列表弱提示用，避免前端自建赛季映射 */
+  season_name: string | null;
   creator_account_id: string | null;
   library_id: string | null;
   target_child_id: string | null;
@@ -335,6 +356,8 @@ export interface TaskTemplateRead {
   pool_policy: PoolPolicy;
   estimated_minutes: number | null;
   difficulty: number | null;
+  content_mode: ContentMode;
+  content_brief: string | null;
   deprecated_at: string | null;
   deprecated_reason: string | null;
   triggers: TaskTriggerRead[];
@@ -382,7 +405,10 @@ export interface TaskDepositPreviewRequest {
   type: TaskType;
   estimated_minutes?: number; // 1–1440
   time_deposit?: number; // 显式押金，0 = 免押
-  difficulty?: number; // 1–5
+  difficulty?: number; // 1–5（不影响押金，仅为表单完整性透传）
+  /** 押金封顶依赖「当日配额」，而配额按星期几不同（time_config.exceptions）：
+   *  生成到未来日期时用今天算会失真，故必须带上目标日期（契约 §6B） */
+  for_date?: string; // YYYY-MM-DD，缺省 = 后端按当天
 }
 
 export interface TaskDepositPreviewResponse {
@@ -391,11 +417,58 @@ export interface TaskDepositPreviewResponse {
   capped_by_allowance: boolean;
 }
 
+/** 选模板 → 生成（契约 §6B，`POST /scn/task-templates/{id}/generate`）
+ *
+ * 三条硬规则，前端必须遵守：
+ * - 三个覆盖字段**未传 = 用模板当前值**（生成即快照）；
+ * - **任何字段显式传 `null` 一律 422** —— 生成路径不存在"清除覆盖"的动作；
+ * - 只提交用户真的改过的字段（dirty tracking），没动过的不要放进 body。 */
+export interface TaskGenerateRequest {
+  target_date?: string; // YYYY-MM-DD；缺省 = 家庭本地时区今天
+  difficulty?: number; // 1-5
+  time_deposit?: number; // >= 0
+  xp_reward?: number; // >= 0
+  target_child_id?: string;
+}
+
+/** 手工生成的动作枚举（契约 §6B）。未来实例不入池，重复生成同一未来日期走 exists */
+export type TaskGenerateAction =
+  | 'created'
+  | 'exists'
+  | 'rolled_forward'
+  | 'kept'
+  | 'skipped_expired';
+
+export interface TaskGenerateResult {
+  /** 命中/新建的实例 id（skipped_expired 时为 null） */
+  instance_id: string | null;
+  action: TaskGenerateAction;
+  generated_for_date: string;
+  /** 三个字段的生效值（快照） */
+  difficulty: number | null;
+  time_deposit: number;
+  xp_reward: number;
+  content_source: ContentSource;
+  season_name: string | null;
+}
+
+/** 微调实例（契约 §6B，`PATCH /scn/task-instances/{id}`）
+ *
+ * 三个字段**都是快照**：未提供 = 保持不变；**显式 `null` 一律 422**（已无「跟随模板」语义）。
+ * 「恢复默认」= 前端取模板当前值后提交具体数字。实例 `season_id` 不可改。 */
+export interface TaskInstancePatch {
+  difficulty?: number; // 1-5
+  time_deposit?: number; // >= 0
+  xp_reward?: number; // >= 0
+}
+
 export interface TaskListQuery extends PageQuery {
   season_id?: string;
   status?: TaskStatus;
   assignee_child_id?: string;
   template_id?: string; // DEV-35：模板详情/重新生成确认数未消费实例
+  /** 管理端可选的显式筛选；孩子端由**服务端按角色强制**附加，不靠前端传参（契约 §6B） */
+  generated_for_date_lte?: string; // YYYY-MM-DD
 }
 
 /** 提交证明（DEV-33 块 E 多证据）：先逐个 POST /sys/uploads(purpose=task_proof) 拿 object_key */

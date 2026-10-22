@@ -5,7 +5,8 @@ import type { TaskRead, SeasonRead, PrivilegeRead, RedemptionRead } from '../../
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
-import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap } from 'lucide-react';
+import { isScheduled } from '../../utils/date';
+import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, CalendarClock } from 'lucide-react';
 
 interface ParentDashboardProps {
   childUser: User;
@@ -26,6 +27,12 @@ interface ParentDashboardProps {
   onOpenSeasonConfig: () => void;
   onViewHistory: () => void;
   onOpenAddModal: () => void;
+  /** 选模板 → 生成（契约 §6B）：任务板顶部入口（先选模板再填目标日期） */
+  onOpenGenerate: () => void;
+  /** 微调已生成实例的难度/押金/经验值 */
+  onTuneTask: (id: string) => void;
+  /** 家庭本地时区的今天，YYYY-MM-DD：用于区分「已投放」与「已排期」 */
+  today: string;
   onRecordUsage: (privilege: PrivilegeRead) => void;
   onReviewTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
@@ -50,6 +57,9 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onOpenSeasonConfig,
   onViewHistory,
   onOpenAddModal,
+  onOpenGenerate,
+  onTuneTask,
+  today,
   onRecordUsage,
   onReviewTask,
   onDeleteTask,
@@ -57,6 +67,11 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onViewCoinLogs
 }) => {
   const { t } = useTranslation();
+
+  // 已排期（generated_for_date > 今天）与已投放分开呈现：前者孩子端看不到、也不能接取，
+  // 混在「可接取」里会让家长误判成"孩子没做"（契约 §6B 防误判）。
+  const scheduledTasks = availableTasks.filter(task => isScheduled(task, today));
+  const deployedTasks = availableTasks.filter(task => !isScheduled(task, today));
 
   return (
     <div className="space-y-6">
@@ -101,6 +116,12 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
              className="bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-100 transition-colors"
           >
              <Archive size={16} /> {t('parent.history')}
+          </button>
+          <button
+            onClick={onOpenGenerate}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-lg shadow-green-600/20"
+          >
+            <CalendarClock size={16} /> {t('generateTask.entry')}
           </button>
           <button
             onClick={onOpenAddModal}
@@ -211,7 +232,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
           <h3 className="text-lg font-bold text-slate-700 mb-4">{t('parent.availableQuestsBoard')}</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {availableTasks.map(task => (
+            {deployedTasks.map(task => (
               <QuestCard
                 key={task.id}
                 task={task}
@@ -220,9 +241,40 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 onSubmit={() => { }}
                 onApprove={() => { }}
                 onDelete={onDeleteTask}
+                onTune={onTuneTask}
               />
             ))}
+            {deployedTasks.length === 0 && (
+              <p className="text-slate-400 text-sm col-span-2 bg-slate-50 p-4 rounded border border-dashed text-center">
+                {t('parent.noAvailableQuests')}
+              </p>
+            )}
           </div>
+
+          {/* 已排期（未来日期，孩子端不可见也不可接取）：单列一组 + 角标，防"误判为生成失败" */}
+          {scheduledTasks.length > 0 && (
+            <>
+              <h3 className="text-lg font-bold text-slate-700 mb-3 mt-8">
+                {t('parent.scheduledQuests')}{' '}
+                <span className="text-xs font-normal text-slate-400">{t('parent.scheduledQuestsHint')}</span>
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {scheduledTasks.map(task => (
+                  <QuestCard
+                    key={task.id}
+                    task={task}
+                    role={UserRole.PARENT}
+                    scheduled
+                    onAccept={() => { }}
+                    onSubmit={() => { }}
+                    onApprove={() => { }}
+                    onDelete={onDeleteTask}
+                    onTune={onTuneTask}
+                  />
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

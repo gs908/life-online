@@ -8,7 +8,8 @@ import { Bell } from 'lucide-react';
 // API Client（阶段②赛季 + 阶段③任务链路均已接入后端）
 import { api, ApiError } from './services/api';
 import type { AddTaskSubmit } from './components/modals/AddTaskModal';
-import type { TaskCreate, TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserPrivilegeRead, TaskTemplateRead } from './services/api';
+import type { TaskCreate, TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserPrivilegeRead, TaskTemplateRead, TaskGenerateResult } from './services/api';
+import { localToday } from './utils/date';
 
 // Auth（阶段①：登录态与家庭上下文）
 import { useAuth } from './auth/AuthContext';
@@ -25,6 +26,8 @@ import type { TaskTemplateCategoryIntent } from './components/taskTemplateUtils'
 
 // Modals
 import AddTaskModal from './components/modals/AddTaskModal';
+import GenerateTaskModal from './components/modals/GenerateTaskModal';
+import TuneTaskModal from './components/modals/TuneTaskModal';
 import SubmitTaskModal from './components/modals/SubmitTaskModal';
 import ReviewTaskModal from './components/modals/ReviewTaskModal';
 import AbandonQuestModal from './components/modals/AbandonQuestModal';
@@ -99,6 +102,15 @@ const App: React.FC = () => {
   const [addModalDefaultCategory, setAddModalDefaultCategory] = useState<TaskTemplateCategoryIntent>('once');
   const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templatesRefreshSignal, setTemplatesRefreshSignal] = useState(0);
+
+  // 契约 §6B：选模板 → 生成（含目标日期与微调）+ 生成后微调
+  const [isGenerateOpen, setIsGenerateOpen] = useState(false);
+  /** 从模板行进入时已定模板；null = 从任务板进入，弹窗内先选模板 */
+  const [generateTemplate, setGenerateTemplate] = useState<TaskTemplateRead | null>(null);
+  /** 生成成功 → 模板详情抽屉的「最近实例」重拉（否则生成完看不到结果） */
+  const [instancesRefreshSignal, setInstancesRefreshSignal] = useState(0);
+  const [tuningTask, setTuningTask] = useState<TaskRead | null>(null);
+  const today = useMemo(() => localToday(), []);
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [pendingQuestId, setPendingQuestId] = useState<string | null>(null);
@@ -260,11 +272,37 @@ const App: React.FC = () => {
     setEditingTemplate(null);
   };
 
+  // 选模板 → 生成（契约 §6B）：template 非空 = 从模板行进入；null = 从任务板进入先选模板
+  const openGenerateModal = (template: TaskTemplateRead | null) => {
+    setGenerateTemplate(template);
+    setIsGenerateOpen(true);
+  };
+
+  /** 生成成功（含 action='exists' 命中既有实例）：回显由弹窗负责，这里只负责刷新与 toast */
+  const handleGenerated = async (result: TaskGenerateResult) => {
+    const deployed = result.generated_for_date <= today;
+    toast(
+      t('toast.taskGeneratedTitle'),
+      deployed
+        ? t('toast.taskGeneratedDeployedMsg', { date: result.generated_for_date })
+        : t('toast.taskGeneratedScheduledMsg', { date: result.generated_for_date }),
+    );
+    setInstancesRefreshSignal(signal => signal + 1);
+    await loadBoard();
+  };
+
   const startQuest = async (id: string) => {
     try {
       await api.tasks.startTask(id); // 后端扣押金；余额不足时抛 validation_error
       await Promise.all([loadBoard(), refreshUser()]);
     } catch (error) {
+      // 已排期守卫（契约 §6B）：未来日期的实例孩子端列表看不到，直接按 id 接取会被 409 拒绝。
+      // 正常路径撞不到，一旦触发即说明列表陈旧 → 按业务提示呈现并重拉列表。
+      if (error instanceof ApiError && error.httpStatus === 409) {
+        toast(t('toast.startFailedTitle'), error.message);
+        await loadBoard();
+        return;
+      }
       showApiError(error, t('toast.startFailedTitle'));
     }
   };
@@ -498,12 +536,13 @@ const App: React.FC = () => {
                      />
                  ) : parentView === 'templates' ? (
                      <TaskTemplateManager
-                        seasonId={activeSeason?.id ?? ''}
                         canHardDelete={Boolean(family && user && family.family.owner_id === user.id)}
                         onToast={showToast}
                         onOpenCreate={() => openCreateModal('daily')}
                         onEditTemplate={openEditModal}
+                        onOpenGenerate={(template) => openGenerateModal(template)}
                         refreshSignal={templatesRefreshSignal}
+                        instancesRefreshSignal={instancesRefreshSignal}
                         onInstancesChanged={loadBoard}
                      />
                  ) : (
@@ -524,6 +563,9 @@ const App: React.FC = () => {
                         onOpenSeasonConfig={() => setIsSeasonConfigModalOpen(true)}
                         onViewHistory={() => setShowSeasonHistory(true)}
                         onOpenAddModal={() => openCreateModal('once')}
+                        onOpenGenerate={() => openGenerateModal(null)}
+                        onTuneTask={(id) => setTuningTask(tasks.find(item => item.id === id) ?? null)}
+                        today={today}
                         onRecordUsage={handleRecordUsage}
                         onReviewTask={(id) => { setSelectedTaskId(id); setIsReviewModalOpen(true); }}
                         onDeleteTask={handleDeleteTask}
@@ -541,12 +583,29 @@ const App: React.FC = () => {
         isOpen={isAddModalOpen}
         onClose={closeAddModal}
         onSubmit={handleTemplateAction}
-        narrativeContext={activeSeason?.narrative_context ?? ''}
         seasonId={activeSeason?.id ?? ''}
-        childLevel={childUser.level}
         submitting={templateActionBusy}
         editingTemplate={editingTemplate}
         defaultCategory={addModalDefaultCategory}
+      />
+
+      {/* 契约 §6B：选模板 → 生成（目标日期 + 三项微调） */}
+      <GenerateTaskModal
+        isOpen={isGenerateOpen}
+        onClose={() => { setIsGenerateOpen(false); setGenerateTemplate(null); }}
+        initialTemplate={generateTemplate}
+        activeSeason={activeSeason}
+        onGenerated={handleGenerated}
+        onToast={showToast}
+      />
+
+      {/* 契约 §6B：生成后微调（PATCH /scn/task-instances/{id}） */}
+      <TuneTaskModal
+        isOpen={tuningTask !== null}
+        onClose={() => setTuningTask(null)}
+        task={tuningTask}
+        onSaved={loadBoard}
+        onToast={showToast}
       />
 
       <SubmitTaskModal
