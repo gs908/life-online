@@ -89,7 +89,10 @@ async def tune_task(
     已接取任务请走"重新生成"这条重来路径。
 
     `time_deposit` 与生成路径同源走 `coin_service.resolve_deposit`(clamp 类型
-    区间 + 封顶当日配额),避免微调绕过押金上限。
+    区间 + 封顶当日配额),避免微调绕过押金上限。封顶用的"当日配额"取**实例的
+    目标日**(`generated_for_date`,NULL 时回落今天)—— 配额按星期几不同,用今天
+    的配额去卡一条排期在周末的实例会算错,与 `preview-deposit` 的 `for_date`
+    是同一条理由。
     """
     task = await get_task_for_update(db, task_id)
     if task.family_id != family_id:
@@ -110,7 +113,7 @@ async def tune_task(
                 family_id=family_id,
                 task_type=_template_type_of(task),
                 explicit_deposit=value,
-                day=today_bj(),
+                day=task.generated_for_date or today_bj(),
             )
         setattr(task, field, value)
     await db.commit()

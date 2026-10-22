@@ -16,7 +16,7 @@
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import time, timedelta
 
 import pytest
 import pytest_asyncio
@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.timeutil import today_bj
 from app.dev.seed import SeededFamily, cleanup_family, seed_basic_family
-from app.models.enums import ContentMode, TaskStatus, TaskType
+from app.models.enums import ContentMode, TaskStatus, TaskType, TimedMode
 from app.models.scn_task_instance import ScnTaskInstance
 from app.models.scn_task_template import ScnTaskTemplate
 from app.services import auth_service
@@ -255,11 +255,12 @@ async def test_tune_task_sets_snapshot_fields(
     assert (data["difficulty"], data["time_deposit"], data["xp_reward"]) == (5, 15, 90)
 
 
+@pytest.mark.parametrize("field", ["difficulty", "time_deposit", "xp_reward"])
 async def test_tune_task_rejects_explicit_null(
-    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily, field: str,
 ):
-    """三个字段都是快照,显式 null 一律 422 —— 不静默忽略、也不静默转译成
-    "去查模板值"(那会把"一次性填入"伪装成"持续跟随模板")。"""
+    """三个字段**都**是快照,显式 null 一律 422 —— 不静默忽略、也不静默转译成
+    "去查模板值"(那会把"一次性填入"伪装成"持续跟随模板")。三字段逐个覆盖。"""
     from app.services import task_generator_service
 
     template = await _make_template(db_session, seeded)
@@ -268,10 +269,11 @@ async def test_tune_task_rejects_explicit_null(
     )
     resp = await api_client.patch(
         f"/api/v1/scn/task-instances/{instance.id}",
-        json={"xp_reward": None},
+        json={field: None},
         headers=_headers(seeded.parent),
     )
     assert resp.status_code == 422, resp.text
+    assert field in resp.text
 
 
 async def test_tune_task_rejected_after_start(
@@ -390,6 +392,214 @@ async def test_child_cannot_start_scheduled_future_instance(
 
 
 # ---- 9. 模板列表:season_name ----
+
+
+# ---- 10. 审查 🟡4:链式第 2..N 步不可手动生成 ----
+
+
+async def test_generate_rejected_for_chain_step_after_first(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """链式第 2..N 步模板没有触发规则,自动路径不碰,但手动路径会绕开逐步解锁:
+
+    - 今天生成:会把 `generated_for_date IS NULL` 的链式实例捞进池、盖上今天
+      的日期,使它此后受"仅当天可接取"约束;
+    - 未来日期:直接建平行实例,绕过"上一步完成才解锁下一步"。
+    投放链步只由 `chain_service.spawn_next_chain_step` 负责 → 409。
+    """
+    step2 = await _make_template(
+        db_session, seeded, title="链第二步", type=TaskType.CHAIN,
+        chain_key="fix-chain", chain_order=2, chain_total=3,
+    )
+    resp = await api_client.post(
+        f"/api/v1/scn/task-templates/{step2.id}/generate",
+        json={}, headers=_headers(seeded.parent),
+    )
+    assert resp.status_code == 409, resp.text
+    assert "链" in resp.text
+
+    # 链首(order=1)不受影响。
+    step1 = await _make_template(
+        db_session, seeded, title="链首", type=TaskType.CHAIN,
+        chain_key="fix-chain-2", chain_order=1, chain_total=2,
+    )
+    ok_resp = await api_client.post(
+        f"/api/v1/scn/task-templates/{step1.id}/generate",
+        json={}, headers=_headers(seeded.parent),
+    )
+    assert ok_resp.status_code == 200, ok_resp.text
+
+
+# ---- 11. 审查 🟡3:详情接口对孩子端同一条可见性边界 ----
+
+
+async def test_child_cannot_read_scheduled_future_instance_detail(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """列表那半边是按权限边界做的(服务端强制),详情必须同口径;否则"看不见"
+    只做了一半。孩子读到未来实例 → 404(不泄露它存在,与跨家庭口径一致)。"""
+    from app.services import task_generator_service
+
+    template = await _make_template(db_session, seeded)
+    future, _a, _p = await task_generator_service.manual_generate(
+        db_session, template, target_date=today_bj() + timedelta(days=1),
+    )
+    path = f"/api/v1/scn/task-instances/{future.id}"
+
+    child = await api_client.get(path, headers=_headers(seeded.child_account))
+    assert child.status_code == 404, child.text
+
+    parent = await api_client.get(path, headers=_headers(seeded.parent))
+    assert parent.status_code == 200, parent.text
+
+    # 今天及以前的实例对孩子照常可见。
+    inst_today, _a, _p = await task_generator_service.manual_generate(
+        db_session, template, target_date=today_bj(),
+    )
+    ok_child = await api_client.get(
+        f"/api/v1/scn/task-instances/{inst_today.id}", headers=_headers(seeded.child_account),
+    )
+    assert ok_child.status_code == 200, ok_child.text
+
+
+# ---- 12. 审查 🟡5:regenerate 不终结"已排期到未来"的实例 ----
+
+
+async def test_regenerate_skips_scheduled_future_instances(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """预排期引入后,池能同时装下当天 + 多条未来实例;一次确认不该把明天排好的
+    任务一起清掉。终结范围收窄为 `IS NULL OR <= today`,并回报未终结的条数供
+    前端点名。"""
+    from app.services import task_generator_service
+
+    template = await _make_template(db_session, seeded, time_deposit=5)
+    today_inst, _a, _p = await task_generator_service.manual_generate(
+        db_session, template, target_date=today_bj(),
+    )
+    future_inst, _a, _p = await task_generator_service.manual_generate(
+        db_session, template, target_date=today_bj() + timedelta(days=2),
+    )
+
+    resp = await api_client.post(
+        f"/api/v1/scn/task-templates/{template.id}/regenerate",
+        json={}, headers=_headers(seeded.parent),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert today_inst.id in data["terminalized_instance_ids"]
+    assert future_inst.id not in data["terminalized_instance_ids"]
+    assert data["scheduled_kept_instance_ids"] == [future_inst.id]
+    assert data["scheduled_kept_count"] == 1
+
+    row = (
+        await db_session.execute(
+            select(ScnTaskInstance)
+            .where(ScnTaskInstance.id == future_inst.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert row.status == TaskStatus.AVAILABLE  # 未被终结
+    assert row.generated_for_date == today_bj() + timedelta(days=2)  # 日期未被改写
+
+
+# ---- 13. 审查顺手项:extra="forbid" ----
+
+
+async def test_requests_reject_unknown_fields(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """多余字段一律 422,不静默忽略 —— 否则客户端把 `season_id` 塞进 PATCH
+    会以为"改成功了"(实例赛季本来不可改)。"""
+    from app.services import task_generator_service
+
+    template = await _make_template(db_session, seeded)
+    instance, _action = await task_generator_service.generate_for_template(
+        db_session, template, manual=True,
+    )
+    patch = await api_client.patch(
+        f"/api/v1/scn/task-instances/{instance.id}",
+        json={"difficulty": 3, "season_id": seeded.season.id},
+        headers=_headers(seeded.parent),
+    )
+    assert patch.status_code == 422, patch.text
+
+    gen = await api_client.post(
+        f"/api/v1/scn/task-templates/{template.id}/generate",
+        json={"chain_order": 99}, headers=_headers(seeded.parent),
+    )
+    assert gen.status_code == 422, gen.text
+
+
+# ---- 14. 审查顺手项:微调押金封顶取实例的目标日 ----
+
+
+async def test_tune_deposit_cap_uses_instance_target_day(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """配额按星期几不同,封顶必须按**实例的目标日**算 —— 拿今天的配额去卡一条
+    排期在低配额日的实例会算错。"""
+    from app.models.scn_time_config_exception import ScnTimeConfigException
+    from app.services import coin_service, task_generator_service
+
+    target = today_bj() + timedelta(days=1)
+    # 该表口径 0=周日..6=周六;Python weekday() 是 0=周一..6=周日。
+    target_dow_table = (target.weekday() + 1) % 7
+    # 本家庭的 time_config 可能已被前面的押金解析建出来了 —— 取而不是新建,
+    # 否则撞 ix_scn_time_config_family_id 唯一索引。
+    cfg = await coin_service.get_or_create_time_config(db_session, seeded.family.id)
+    db_session.add(ScnTimeConfigException(
+        time_config_id=cfg.id, day_of_week=target_dow_table, coin_amount=10,
+    ))
+    await db_session.commit()
+
+    template = await _make_template(db_session, seeded, time_deposit=10)
+    instance, _a, _p = await task_generator_service.manual_generate(
+        db_session, template, target_date=target,
+    )
+
+    # DAILY 区间 [5,20];目标日配额 10 → 封顶 floor(10*0.5)=5。
+    resp = await api_client.patch(
+        f"/api/v1/scn/task-instances/{instance.id}",
+        json={"time_deposit": 20}, headers=_headers(seeded.parent),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["time_deposit"] == 5
+
+    # 反证:同样 20 押金、但实例归属今天(配额 100 → 封顶 50)时不被压到 5。
+    today_inst, _a, _p = await task_generator_service.manual_generate(
+        db_session, template, target_date=today_bj(),
+    )
+    resp_today = await api_client.patch(
+        f"/api/v1/scn/task-instances/{today_inst.id}",
+        json={"time_deposit": 20}, headers=_headers(seeded.parent),
+    )
+    assert resp_today.status_code == 200, resp_today.text
+    assert resp_today.json()["data"]["time_deposit"] == 20
+
+
+async def test_generate_skipped_expired_returns_all_null_fields(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """限时模板当天截止时刻已过 → 不产出实例。该分支的 7 个字段全为 null
+    (审查 🟡2 的运行时事实,前端据此单独出文案,不能套绿色成功框)。"""
+    template = await _make_template(
+        db_session, seeded,
+        timed_mode=TimedMode.DEADLINE, deadline_time=time(0, 1),
+    )
+    resp = await api_client.post(
+        f"/api/v1/scn/task-templates/{template.id}/generate",
+        json={}, headers=_headers(seeded.parent),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["action"] == "skipped_expired"
+    for key in (
+        "instance_id", "generated_for_date", "status", "difficulty",
+        "time_deposit", "xp_reward", "content_source", "season_name",
+    ):
+        assert data[key] is None, f"{key} 应为 null"
+    assert data["overrides_applied"] is False
 
 
 def test_template_default_content_mode_flipped_to_llm():

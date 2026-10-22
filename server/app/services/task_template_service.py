@@ -338,6 +338,19 @@ async def generate_instance_for_template(
 
     if template.deprecated_at is not None or not template.is_active:
         raise ConflictError("该模板已停用,无法生成任务")
+    # DEV-50(审查 🟡4):链式第 2..N 步模板**不可手动生成**。它们没有触发规则
+    # 所以自动路径不碰,但手动路径会绕开链的逐步解锁:
+    #   - 今天生成:`_latest_unconsumed` 会把 `generated_for_date IS NULL` 的链式
+    #     实例(由 spawn_next_chain_step 建、不写该列)捞进池,走 roll_forward
+    #     给它盖上今天的日期 —— 它本来"哪一天都能接",盖完就受"仅当天可接取"
+    #     约束了;
+    #   - 未来日期:直接建一条平行实例,绕过"上一步完成才解锁下一步"。
+    # 链步的投放只由 `chain_service.spawn_next_chain_step` 负责。
+    if _enum_value(template.type) == TaskType.CHAIN.value and (template.chain_order or 1) > 1:
+        raise ConflictError(
+            "链式任务的第 2 步起由上一步完成自动解锁,不能手动生成;"
+            "如需投放请操作链首模板"
+        )
 
     target_date = payload.target_date or today
     if target_date < today:
@@ -381,7 +394,8 @@ REGENERATE_TERMINAL_STATUSES = (TaskStatus.AVAILABLE, TaskStatus.IN_PROGRESS)
 
 async def regenerate_template(
     db: AsyncSession, *, family_id: str, template_id: str,
-) -> tuple[str, list[str], ScnTaskInstance | None, str]:
+    today: date | None = None,
+) -> tuple[str, list[str], list[str], ScnTaskInstance | None, str]:
     """再生成:终结 AVAILABLE/IN_PROGRESS 实例(状态机语义同过期),随后尝试生成新实例。
 
     - PENDING_REVIEW 不终结(保留审核机会,见 REGENERATE_TERMINAL_STATUSES);
@@ -389,13 +403,20 @@ async def regenerate_template(
       孩子未违反任何约定(截止未必到),与 task_service.expire_overdue_tasks
       的"超时退 50%/扣罚 50%"(DEV-34 块 C+D,孩子错过截止)是两条口径,
       互不回退;
+    - **已排期到未来的实例不终结**(DEV-50 审查 🟡5):终结范围原本按"池里恒 1 条"
+      设计,预排期之后池能同时装下当天 + 多条未来实例,一次确认会把明天/后天
+      排好的任务一起清掉 —— 那是"点一下把明天也清掉"的用户可见意外。只终结
+      `generated_for_date IS NULL OR <= today` 的那些(与池谓词同一口径)。
+      `generated_for_date IS NULL` 含链式步骤实例(由 spawn_next_chain_step 建,
+      不写这一列),它们照旧参与终结。
     - SELECT 带 with_for_update(Mars #3):防止与孩子接取/提交/家长审核并发时
       双花押金或覆盖状态。
 
-    返回 (template_id, 终结的实例 id 列表, 新实例或 None, 生成动作);
-    id 均为普通字符串 —— 生成兜底的 rollback 会 expire 会话对象,
-    调用方不得在 generate 之后再同步读 ORM 对象属性。
+    返回 `(template_id, 终结的实例 id 列表, 未终结的已排期实例 id 列表,
+    新实例或 None, 生成动作)`;id 均为普通字符串 —— 生成兜底的 rollback 会
+    expire 会话对象,调用方不得在 generate 之后再同步读 ORM 对象属性。
     """
+    today = today or today_bj()
     template = await get_family_template(db, template_id=template_id, family_id=family_id)
     # DEV-50:无激活赛季时终结后也生不出新实例(实例必须有赛季归属)。先拦在
     # 终结**之前** —— 否则会把旧实例置 EXPIRED、释放槽位,却什么都生成不出来,
@@ -410,7 +431,19 @@ async def regenerate_template(
         )
         .with_for_update()
     )
-    terminalized = list((await db.execute(stmt)).scalars().all())
+    # 一次取全(含锁),再按目标日切分 —— 避免两次查询在锁定语义上各说各话。
+    candidates = list((await db.execute(stmt)).scalars().all())
+    scheduled_kept_ids = [
+        i.id
+        for i in candidates
+        if i.generated_for_date is not None and i.generated_for_date > today
+    ]
+    terminalized = [
+        i
+        for i in candidates
+        if i.generated_for_date is None or i.generated_for_date <= today
+    ]
+    del candidates
     now = utcnow()
     for instance in terminalized:
         if instance.status == TaskStatus.IN_PROGRESS and instance.assignee_child_id:
@@ -437,7 +470,7 @@ async def regenerate_template(
     fresh, action = await task_generator_service.generate_for_template(
         db, template, force=True,
     )
-    return template_id, terminalized_ids, fresh, action
+    return template_id, terminalized_ids, scheduled_kept_ids, fresh, action
 
 
 async def delete_template(

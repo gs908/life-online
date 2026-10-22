@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 from typing import Annotated
 
 from apscheduler.triggers.cron import CronTrigger
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.models.enums import (
     ContentMode,
     ContentSource,
@@ -270,7 +270,13 @@ class TaskGenerateRequest(BaseModel):
     - 三个可覆盖字段**未提供 = 用模板值**(快照);**显式 `null` → 422**。
       生成路径不存在"清除覆盖"的动作 —— 新建实例没有可清除的覆盖。
     - `target_child_id` 缺省 = 用模板值;显式 `null` 在此语义为"不指定"。
+
+    `extra="forbid"`(DEV-50 审查):多传字段直接 422。静默忽略会掩盖客户端 bug
+    —— 例如往 PATCH 里塞 `season_id`(实例赛季不可改)会被无声吞掉,客户端以为
+    改成功了。
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     target_date: date | None = None
     difficulty: int | None = Field(default=None, ge=1, le=5)
@@ -292,7 +298,11 @@ class TaskTuneRequest(BaseModel):
     当前值后作为具体数字提交。
 
     实例的 `season_id` **不可改**(任务不跨赛季),故不在本契约中。
+    `extra="forbid"`:多传字段(如 `season_id`)一律 422,不静默忽略 —— 否则
+    客户端会以为"改成功了"。
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     difficulty: int | None = Field(default=None, ge=1, le=5)
     time_deposit: int | None = Field(default=None, ge=0)

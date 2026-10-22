@@ -348,11 +348,14 @@ async def test_regenerate_terminalizes_and_creates_fresh(db_session, seeded):
         db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
     )
     old = await _make_instance(db_session, template, day=TODAY)
-    tpl_id, terminalized_ids, fresh, action = await task_template_service.regenerate_template(
-        db_session, family_id=seeded.family.id, template_id=template.id,
+    tpl_id, terminalized_ids, scheduled_kept, fresh, action = (
+        await task_template_service.regenerate_template(
+            db_session, family_id=seeded.family.id, template_id=template.id,
+        )
     )
     assert tpl_id == template.id
     assert terminalized_ids == [old.id]
+    assert scheduled_kept == []  # 没有已排期到未来的实例
     await db_session.refresh(old)
     assert old.status == TaskStatus.EXPIRED
     assert old.generated_for_date is None  # 池槽位已释放
@@ -375,8 +378,10 @@ async def test_regenerate_preserves_pending_review(db_session, seeded):
     reviewing = await _make_instance(
         db_session, template, day=YESTERDAY, status=TaskStatus.PENDING_REVIEW,
     )
-    _tpl, terminalized, fresh, action = await task_template_service.regenerate_template(
-        db_session, family_id=seeded.family.id, template_id=template.id,
+    _tpl, terminalized, _scheduled_kept, fresh, action = (
+        await task_template_service.regenerate_template(
+            db_session, family_id=seeded.family.id, template_id=template.id,
+        )
     )
     assert terminalized == [available.id]  # 只终结 AVAILABLE
     await db_session.refresh(reviewing)
@@ -393,8 +398,10 @@ async def test_regenerate_preserves_pending_review(db_session, seeded):
     reviewing_today = await _make_instance(
         db_session, template2, day=TODAY, status=TaskStatus.PENDING_REVIEW,
     )
-    _tpl, terminalized2, fresh2, action2 = await task_template_service.regenerate_template(
-        db_session, family_id=seeded.family.id, template_id=template2.id,
+    _tpl, terminalized2, _sk2, fresh2, action2 = (
+        await task_template_service.regenerate_template(
+            db_session, family_id=seeded.family.id, template_id=template2.id,
+        )
     )
     assert terminalized2 == []
     assert action2 in ("exists", "kept")

@@ -20,7 +20,13 @@
    改 CASCADE → SET NULL 是资产保护:`CASCADE` 下 `DELETE /scn/seasons/{id}`
    会连带抹掉该赛季全部模板,而模板是可跨赛季复用的资产。
 
-   expand-only + 可回滚:只放宽约束、只增列,不改既有列类型与数据。
+   `upgrade` 是 expand-only:只放宽约束、只增列,**不改任何既有列的类型**;
+   唯一的数据写入是给**新增列**回填(既有的 `season_id` 值一律不动)。
+
+   ⚠️ **`downgrade` 会写既有数据**:要恢复 `season_id NOT NULL`,必须先把
+   `season_id IS NULL` 的行回填成"该家庭最早的赛季";该家庭已无任何赛季时
+   无法补齐,此时显式报错并整体回滚(PG 的 DDL 在同一事务内)。所以本迁移
+   的"可回滚"是有条件的 —— 按本文档判断可回滚性时请把这一条算进去。
 
 Revision ID: d1f7b3c9e4a2
 Revises: e2f6a8c4b7d9

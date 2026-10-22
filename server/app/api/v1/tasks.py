@@ -216,10 +216,23 @@ async def list_tasks(
 
 @router.get("/{task_id}", response_model=ApiResponse[TaskRead], summary="任务实例详情")
 async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiResponse[TaskRead]:
+    """任务实例详情。
+
+    **DEV-50 可见性(审查 🟡3):详情与列表同一条边界。** 列表那半边是服务端按
+    角色强制的,详情若只靠"id 不可猜"就是同一件事只做了一半。虽然当前没有可
+    证实的外泄路径(id 不可猜、通知不带实例 id),但既然另半边是按权限边界做
+    的,就没有理由留着不对称:孩子读到"已排期到未来"的实例 → 404(不泄露它
+    存在,与跨家庭一律 404 同口径)。
+    """
     t = await task_service.get_task(db, task_id)
     if t.family_id != user.family_id:
         from app.common.exceptions import PermissionDeniedError
         raise PermissionDeniedError("只能查看自己家庭的任务")
+    if _enum_value(user.role) == UserRole.ADVENTURER.value:
+        scheduled = t.generated_for_date is not None and t.generated_for_date > today_bj()
+        if scheduled:
+            from app.common.exceptions import NotFoundError
+            raise NotFoundError(f"任务 {task_id} 不存在")
     return ok(await _to_read_with_proofs(db, t))
 
 
