@@ -285,8 +285,13 @@ const App: React.FC = () => {
    *  不判空会算出 `null <= today` 恒 false，进而说「已排期到 null」。 */
   const handleGenerated = async (result: TaskGenerateResult) => {
     const date = result.generated_for_date;
-    if (date === null) {
+    // 判空口径与弹窗回显**完全一致**：先看 instance_id（无产物），再看日期
+    // （复用的链式实例 instance_id 非空但 generated_for_date 为 NULL）。
+    // 只看日期会让 toast 说「未生成」、而弹窗绿框说「已复用既有实例」——两处说反话。
+    if (result.instance_id === null) {
       toast(t('toast.taskGeneratedTitle'), t('generateTask.resultSkipped'));
+    } else if (date === null) {
+      toast(t('toast.taskGeneratedTitle'), t('generateTask.resultReused'));
     } else if (date <= today) {
       toast(t('toast.taskGeneratedTitle'), t('toast.taskGeneratedDeployedMsg', { date }));
     } else {
