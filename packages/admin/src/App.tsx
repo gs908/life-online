@@ -26,7 +26,6 @@ import type { TaskTemplateCategoryIntent } from './components/taskTemplateUtils'
 
 // Modals
 import AddTaskModal from './components/modals/AddTaskModal';
-import GenerateTaskModal from './components/modals/GenerateTaskModal';
 import TuneTaskModal from './components/modals/TuneTaskModal';
 import SubmitTaskModal from './components/modals/SubmitTaskModal';
 import ReviewTaskModal from './components/modals/ReviewTaskModal';
@@ -106,10 +105,7 @@ const App: React.FC = () => {
   const [templatesRefreshSignal, setTemplatesRefreshSignal] = useState(0);
 
   // 契约 §6B：选模板 → 生成（含目标日期与微调）+ 生成后微调
-  const [isGenerateOpen, setIsGenerateOpen] = useState(false);
-  /** 从模板行进入时已定模板；null = 从任务板进入，弹窗内先选模板 */
-  const [generateTemplate, setGenerateTemplate] = useState<TaskTemplateRead | null>(null);
-  /** 生成成功 → 模板详情抽屉的「最近实例」重拉（否则生成完看不到结果） */
+  /** 由 AddTaskModal 新建非 once 模板后的生成成功回调（DEV-51） */
   const [instancesRefreshSignal, setInstancesRefreshSignal] = useState(0);
   const [tuningTask, setTuningTask] = useState<TaskRead | null>(null);
   // 每次渲染取一次（纯字符串计算）：不要用 useMemo([]) 冻结在挂载那一刻，
@@ -278,18 +274,20 @@ const App: React.FC = () => {
 
   // 选模板 → 生成（契约 §6B）：template 非空 = 从模板行进入；null = 从任务板进入先选模板
   const openGenerateModal = (template: TaskTemplateRead | null) => {
-    setGenerateTemplate(template);
-    setIsGenerateOpen(true);
+    // DEV-51：合并到 AddTaskModal 后不再单独打开弹窗；任务板入口直接打开新建弹窗并默认 daily
+    if (template) {
+      // 已选模板场景：直接生成（旧路径保留入口，但此处走 AddTaskModal 的 onSubmitGenerated）
+      setAddModalDefaultCategory('daily');
+      setIsAddModalOpen(true);
+      return;
+    }
+    setAddModalDefaultCategory('daily');
+    setIsAddModalOpen(true);
   };
 
-  /** 生成成功（含 action='exists' 命中既有实例）：回显由弹窗负责，这里只负责刷新与 toast。
-   *  ⚠️ `generated_for_date` 可为 null（skipped_expired 无产物；复用的链式实例也可能是 NULL）——
-   *  不判空会算出 `null <= today` 恒 false，进而说「已排期到 null」。 */
-  const handleGenerated = async (result: TaskGenerateResult) => {
+  /** 新建模板后生成的成功回调（DEV-51） */
+  const handleGeneratedFromCreate = async (result: TaskGenerateResult) => {
     const date = result.generated_for_date;
-    // 判空口径与弹窗回显**完全一致**：先看 instance_id（无产物），再看日期
-    // （复用的链式实例 instance_id 非空但 generated_for_date 为 NULL）。
-    // 只看日期会让 toast 说「未生成」、而弹窗绿框说「已复用既有实例」——两处说反话。
     if (result.instance_id === null) {
       toast(t('toast.taskGeneratedTitle'), t('generateTask.resultSkipped'));
     } else if (date === null) {
@@ -597,19 +595,13 @@ const App: React.FC = () => {
         onClose={closeAddModal}
         onSubmit={handleTemplateAction}
         seasonId={activeSeason?.id ?? ''}
+        childLevel={childUser?.level ?? 1}
         submitting={templateActionBusy}
         editingTemplate={editingTemplate}
         defaultCategory={addModalDefaultCategory}
-      />
-
-      {/* 契约 §6B：选模板 → 生成（目标日期 + 三项微调） */}
-      <GenerateTaskModal
-        isOpen={isGenerateOpen}
-        onClose={() => { setIsGenerateOpen(false); setGenerateTemplate(null); }}
-        initialTemplate={generateTemplate}
-        activeSeason={activeSeason}
-        onGenerated={handleGenerated}
+        onSubmitGenerated={handleGeneratedFromCreate}
         onToast={showToast}
+        today={today}
       />
 
       {/* 契约 §6B：生成后微调（PATCH /scn/task-instances/{id}） */}
