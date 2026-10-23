@@ -290,7 +290,6 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
           {/* Weekly Task View (replaces historical quest log) */}
           <WeeklyTaskView
             tasks={[...completedTasks, ...pendingTasks, ...availableTasks]}
-            childUser={childUser}
             currentTheme={currentTheme}
             onAcceptAttempt={onAcceptAttempt}
             onSubmit={onSubmit}

@@ -1,16 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TaskRead } from '../../services/api';
-import { UserRole } from '../../types';
 import type { SeasonTheme } from '../../types';
-import { THEMES } from '../../constants/themes';
-import QuestCard from '../QuestCard';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import { localToday } from '../../utils/date';
 
 interface WeeklyTaskViewProps {
   tasks: TaskRead[];
-  childUser: { childId: string | null };
   currentTheme: SeasonTheme;
   onAcceptAttempt: (id: string) => void;
   onSubmit: (id: string) => void;
@@ -23,13 +19,6 @@ type DayCell = {
   isToday: boolean;
   tasks: TaskRead[];
 };
-
-const TIME_SLOTS = [
-  { key: 'morning', label: '上午' },
-  { key: 'afternoon', label: '下午' },
-  { key: 'evening', label: '晚上' },
-  { key: 'anytime', label: '不限时' },
-];
 
 function getTimeSlot(task: TaskRead): string {
   if (task.type === 'TIMED' && task.required_start_time) {
@@ -71,7 +60,6 @@ function getStatusDot(status: string) {
 
 const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
   tasks,
-  childUser,
   currentTheme,
   onAcceptAttempt,
   onSubmit,
@@ -98,11 +86,10 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
       const d = new Date(weekStart);
       d.setDate(weekStart.getDate() + i);
       const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const dayIndex = d.getDay(); // 0=Sun
       const dayLabels = [t('days.0'), t('days.1'), t('days.2'), t('days.3'), t('days.4'), t('days.5'), t('days.6')];
       result.push({
         date: dateStr,
-        label: dayLabels[dayIndex],
+        label: dayLabels[d.getDay()],
         isToday: dateStr === today,
         tasks: [], // populated below
       });
@@ -146,7 +133,6 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
   const goToCurrentWeek = () => setWeekOffset(0);
 
   const isPastWeek = weekOffset < 0;
-  const isFutureWeek = weekOffset > 0;
 
   return (
     <div className="space-y-4">
@@ -176,7 +162,6 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
           </button>
           <button
             onClick={nextWeek}
-            disabled={isFutureWeek}
             className="p-1.5 rounded-lg hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             aria-label={t('weeklyView.nextWeek')}
           >
@@ -185,7 +170,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
         </div>
       </div>
 
-      {/* Week Grid - responsive: desktop = 7 columns, mobile = scrollable */}
+      {/* Week Grid - responsive: desktop = 7 columns, mobile = card view */}
       <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border-2 border-slate-200 overflow-hidden">
         {/* Day Headers */}
         <div className="grid grid-cols-7 border-b-2 border-slate-200">
