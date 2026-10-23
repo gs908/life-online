@@ -275,6 +275,16 @@ const zhCN = {
     nextPage: '下一页',
     questLog: '任务日志（历史）',
   },
+  weeklyView: {
+    title: '周任务视图',
+    prevWeek: '上一周',
+    nextWeek: '下一周',
+    currentWeek: '本周',
+    today: '今天',
+    tasks: '个任务',
+    noTasks: '暂无任务',
+    legend: '类型图例',
+  },
   stats: {
     title: '公会统计中心',
     completed: '已完成',
