@@ -26,6 +26,8 @@ interface SubmitTaskModalProps {
 
 /** 提交任务证明（DEV-33 块 E 多证据）：多选图片+视频、逐个预览/删除、整体上传进度 */
 const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSubmit, submitting }) => {
+  if (!isOpen) return null;
+
   const { t } = useTranslation();
   const [proofs, setProofs] = useState<ProofItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -33,20 +35,16 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
 
   // object URL 生命周期跟随弹窗：关闭/重置时统一回收
   useEffect(() => {
-    if (isOpen) {
-      setProofs([]);
-      setError(null);
-      setProgress(null);
-    }
+    setProofs([]);
+    setError(null);
+    setProgress(null);
     return () => {
       setProofs((prev) => {
         prev.forEach((p) => URL.revokeObjectURL(p.previewUrl));
         return [];
       });
     };
-  }, [isOpen]);
-
-  if (!isOpen) return null;
+  }, []);
 
   const acceptType = 'image/*,video/*';
 
