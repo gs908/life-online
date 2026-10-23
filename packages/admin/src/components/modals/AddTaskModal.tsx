@@ -402,48 +402,6 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
             <button onClick={onClose} aria-label={t('common.close')}><X /></button>
           </div>
           <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
-              <div>
-                <div className="text-xs font-bold text-slate-600 mb-1.5">{t('addTask.narrativeMode')}</div>
-                <div role="radiogroup" aria-label={t('addTask.narrativeMode')} className="flex gap-1.5">
-                  {(['LLM', 'STATIC'] as const).map(mode => (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="radio"
-                      aria-checked={contentMode === mode}
-                      tabIndex={contentMode === mode ? 0 : -1}
-                      onClick={() => setContentMode(mode)}
-                      className={`text-xs px-3 py-1.5 rounded-full border font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
-                        contentMode === mode
-                          ? 'bg-slate-900 text-white border-slate-900'
-                          : 'bg-white border-slate-200 text-slate-500 hover:border-slate-400'
-                      }`}
-                    >
-                      {t(`addTask.narrativeModeValue.${mode}`)}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  {contentMode === 'LLM' ? t('addTask.narrativeModeLlmHint') : t('addTask.narrativeModeStaticHint')}
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-600 block" htmlFor="add-task-brief">
-                  {t('addTask.contentBrief')}
-                </label>
-                <textarea
-                  id="add-task-brief"
-                  value={contentBrief}
-                  onChange={event => setContentBrief(event.target.value)}
-                  placeholder={t('addTask.contentBriefPlaceholder')}
-                  maxLength={500}
-                  className="w-full border border-slate-200 rounded-lg p-2 h-16 text-sm"
-                />
-                <p className="text-[11px] text-slate-400">{t('addTask.contentBriefHint')}</p>
-              </div>
-            </div>
 
             <div>
               <div className="text-xs font-bold text-slate-600 mb-1.5">{t('taskTemplate.taskCategory')}</div>
@@ -1096,48 +1054,6 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
           <button onClick={onClose} aria-label={t('common.close')}><X /></button>
         </div>
         <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
-            <div>
-              <div className="text-xs font-bold text-slate-600 mb-1.5">{t('addTask.narrativeMode')}</div>
-              <div role="radiogroup" aria-label={t('addTask.narrativeMode')} className="flex gap-1.5">
-                {(['LLM', 'STATIC'] as const).map(mode => (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    aria-checked={contentMode === mode}
-                    tabIndex={contentMode === mode ? 0 : -1}
-                    onClick={() => setContentMode(mode)}
-                    className={`text-xs px-3 py-1.5 rounded-full border font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 ${
-                      contentMode === mode
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white border-slate-200 text-slate-500 hover:border-slate-400'
-                    }`}
-                  >
-                    {t(`addTask.narrativeModeValue.${mode}`)}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                {contentMode === 'LLM' ? t('addTask.narrativeModeLlmHint') : t('addTask.narrativeModeStaticHint')}
-              </p>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-600 block" htmlFor="add-task-brief">
-                {t('addTask.contentBrief')}
-              </label>
-              <textarea
-                id="add-task-brief"
-                value={contentBrief}
-                onChange={event => setContentBrief(event.target.value)}
-                placeholder={t('addTask.contentBriefPlaceholder')}
-                maxLength={500}
-                className="w-full border border-slate-200 rounded-lg p-2 h-16 text-sm"
-              />
-              <p className="text-[11px] text-slate-400">{t('addTask.contentBriefHint')}</p>
-            </div>
-          </div>
 
           <div>
             <div className="text-xs font-bold text-slate-600 mb-1.5">{t('taskTemplate.taskCategory')}</div>
