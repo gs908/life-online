@@ -272,6 +272,16 @@ const enUS = {
     nextPage: 'Next Page',
     questLog: 'Quest Log (History)',
   },
+  weeklyView: {
+    title: 'Weekly Tasks',
+    prevWeek: 'Previous Week',
+    nextWeek: 'Next Week',
+    currentWeek: 'This Week',
+    today: 'Today',
+    tasks: 'tasks',
+    noTasks: 'No tasks',
+    legend: 'Type Legend',
+  },
   stats: {
     title: 'Guild Statistics Center',
     completed: 'Completed',
