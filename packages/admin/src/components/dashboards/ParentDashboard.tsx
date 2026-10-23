@@ -6,7 +6,7 @@ import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
 import { isScheduled } from '../../utils/date';
-import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, CalendarClock } from 'lucide-react';
+import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, CalendarClock, Gift } from 'lucide-react';
 
 interface ParentDashboardProps {
   childUser: User;
@@ -38,6 +38,8 @@ interface ParentDashboardProps {
   onDeleteTask: (id: string) => void;
   onOpenTimeConfig: () => void;
   onViewCoinLogs: () => void;
+  /** 打开权益设置弹窗 */
+  onOpenPrivilegeConfig: () => void;
 }
 
 const ParentDashboard: React.FC<ParentDashboardProps> = ({
@@ -64,7 +66,8 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onReviewTask,
   onDeleteTask,
   onOpenTimeConfig,
-  onViewCoinLogs
+  onViewCoinLogs,
+  onOpenPrivilegeConfig
 }) => {
   const { t } = useTranslation();
 
@@ -98,6 +101,12 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
              className="bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-100 transition-colors"
           >
              <Clock size={16} /> {t('parent.coins')}
+          </button>
+          <button
+             onClick={onOpenPrivilegeConfig}
+             className="bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-100 transition-colors"
+          >
+             <Gift size={16} /> {t('parent.privilegeConfig')}
           </button>
           <button
              onClick={onViewCoinLogs}
@@ -190,6 +199,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
             loading={privilegesLoading}
             isAdmin={true}
             onRecordUsage={onRecordUsage}
+            onOpenConfig={onOpenPrivilegeConfig}
           />
         </div>
 

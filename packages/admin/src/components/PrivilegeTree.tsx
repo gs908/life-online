@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PrivilegeRead } from '../services/api';
-import { Lock, Unlock, Star, ScrollText } from 'lucide-react';
+import { Lock, Unlock, Star, ScrollText, Settings } from 'lucide-react';
 
 interface PrivilegeTreeProps {
   /** 特权模板树（GET /scn/privileges/templates，后端已按 level_required 排序；docs/09 V2） */
@@ -13,6 +13,8 @@ interface PrivilegeTreeProps {
   loading?: boolean;
   isAdmin?: boolean;
   onRecordUsage?: (privilege: PrivilegeRead) => void;
+  /** 打开权益配置弹窗（家长端设置入口） */
+  onOpenConfig?: () => void;
 }
 
 const PrivilegeTree: React.FC<PrivilegeTreeProps> = ({
@@ -21,7 +23,8 @@ const PrivilegeTree: React.FC<PrivilegeTreeProps> = ({
   currentLevel,
   loading,
   isAdmin,
-  onRecordUsage
+  onRecordUsage,
+  onOpenConfig,
 }) => {
   const { t } = useTranslation();
   const unlockedSet = new Set(unlockedTemplateIds);
@@ -31,6 +34,15 @@ const PrivilegeTree: React.FC<PrivilegeTreeProps> = ({
       <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
         <Star className="text-yellow-500" />
         {t('privilege.title')}
+        {isAdmin && onOpenConfig && (
+          <button
+            onClick={onOpenConfig}
+            className="ml-auto text-xs text-slate-400 hover:text-blue-600 flex items-center gap-1 transition-colors"
+            title={t('privilegeConfig.title')}
+          >
+            <Settings size={14} /> {t('privilegeConfig.title')}
+          </button>
+        )}
       </h3>
       {loading && templates.length === 0 ? (
         <p className="text-sm text-slate-400 italic text-center py-4">{t('common.loading')}</p>

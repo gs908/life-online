@@ -34,6 +34,7 @@ import AbandonQuestModal from './components/modals/AbandonQuestModal';
 import TimeConfigModal from './components/modals/TimeConfigModal';
 import CoinLogsModal from './components/modals/CoinLogsModal';
 import SeasonConfigModal from './components/modals/SeasonConfigModal';
+import PrivilegeConfigModal from './components/modals/PrivilegeConfigModal';
 
 const App: React.FC = () => {
   const { t } = useTranslation();
@@ -94,6 +95,7 @@ const App: React.FC = () => {
   const [isTimeConfigModalOpen, setIsTimeConfigModalOpen] = useState(false);
   const [isCoinLogsOpen, setIsCoinLogsOpen] = useState(false);
   const [isSeasonConfigModalOpen, setIsSeasonConfigModalOpen] = useState(false);
+  const [isPrivilegeConfigOpen, setIsPrivilegeConfigOpen] = useState(false);
 
   // 父母端视图 Tab（DEV-35：任务板 / 任务模板管理，Miss.D「独立 Tab」）
   const [parentView, setParentView] = useState<'board' | 'templates'>('board');
@@ -581,6 +583,7 @@ const App: React.FC = () => {
                         onDeleteTask={handleDeleteTask}
                         onOpenTimeConfig={() => setIsTimeConfigModalOpen(true)}
                         onViewCoinLogs={() => setIsCoinLogsOpen(true)}
+                        onOpenPrivilegeConfig={() => setIsPrivilegeConfigOpen(true)}
                      />
                  )}
              </div>
@@ -665,6 +668,14 @@ const App: React.FC = () => {
           await loadSeasons();
           await loadBoard();
         }}
+        onToast={showToast}
+      />
+
+      <PrivilegeConfigModal
+        isOpen={isPrivilegeConfigOpen}
+        onClose={() => setIsPrivilegeConfigOpen(false)}
+        templates={privilegeTemplates}
+        onSaved={(next) => setPrivilegeTemplates(next)}
         onToast={showToast}
       />
     </div>
