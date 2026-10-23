@@ -105,7 +105,13 @@ const GenerateTaskModal: React.FC<GenerateTaskModalProps> = ({
     api.taskTemplates
       .listTemplates()
       .then(items => {
-        if (!cancelled) setTemplates(items.filter(item => item.is_active));
+        if (cancelled) return;
+        // 启用中、且不是 CHAIN 第 2..N 步：链后续步骤由"链首投放 + 逐步解锁"产生，
+        // 手动生成会绕过解锁（后端 409 兜底，但不该让家长点到才撞错）。
+        // 与 TaskTemplateManager 行内按钮的过滤口径保持一致。
+        setTemplates(
+          items.filter(item => item.is_active && !(item.type === 'CHAIN' && item.chain_order > 1)),
+        );
       })
       .catch(() => {
         if (!cancelled) setTemplates([]);

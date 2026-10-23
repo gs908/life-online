@@ -167,6 +167,8 @@ const zhCN = {
     regenerateTitle: '重新生成实例？',
     regenerateBody: '将终结「{{title}}」的 {{count}} 条可用/进行中实例（进行中的退还押金）；待审核中的实例不受影响，仍可继续审核。**已做过的微调会一并丢弃**（新实例回到模板当前值）——只想改数值请改用任务上的「微调」。',
     regenerateBodyPlain: '将终结「{{title}}」的可用/进行中实例（进行中的退还押金）；待审核中的实例不受影响，仍可继续审核。**已做过的微调会一并丢弃**（新实例回到模板当前值）——只想改数值请改用任务上的「微调」。',
+    // DEV-50 审查 🟡5：预排期之后，一次 regenerate 不再连带清掉未来的实例，必须点名
+    regenerateScheduledKept: '已排期到未来的 {{count}} 条不受影响。',
     regenerateConfirm: '确认重新生成',
     deleteTitle: '删除该模板？',
     deleteBody: '「{{title}}」及其下全部触发规则与任务实例将被硬删除，操作不可恢复。',

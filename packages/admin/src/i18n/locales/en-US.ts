@@ -166,6 +166,7 @@ const enUS = {
     regenerateTitle: 'Regenerate instances?',
     regenerateBody: '{{count}} available/in-progress instance(s) of "{{title}}" will be terminated (in-progress deposits refunded); instances pending review are unaffected and can still be reviewed. **Any tuning you made is discarded** (new instances fall back to the template\'s current values) — use "Tune" on a quest if you only want to change numbers.',
     regenerateBodyPlain: 'Available/in-progress instances of "{{title}}" will be terminated (in-progress deposits refunded); instances pending review are unaffected and can still be reviewed. **Any tuning you made is discarded** (new instances fall back to the template\'s current values) — use "Tune" on a quest if you only want to change numbers.',
+    regenerateScheduledKept: '{{count}} instance(s) scheduled for a future date are unaffected.',
     regenerateConfirm: 'Regenerate',
     deleteTitle: 'Delete this template?',
     deleteBody: '"{{title}}" plus all of its trigger rules and task instances will be permanently deleted. This cannot be undone.',
