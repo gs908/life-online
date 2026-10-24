@@ -24,20 +24,22 @@ interface SubmitTaskModalProps {
   submitting?: boolean;
 }
 
-/** 提交任务证明（DEV-33 块 E 多证据）：多选图片+视频、逐个预览/删除、整体上传进度 */
+/**
+ * 提交任务证明（DEV-33 块 E 多证据）：多选图片+视频、逐个预览/删除、整体上传进度。
+ *
+ * 注意：本组件由 App.tsx 无条件渲染（始终挂载），所有 hooks 必须在
+ * `if (!isOpen) return null` 之前无条件调用。否则 React 在 isOpen 状态变化时
+ * 检测到 hooks 数量不一致，抛出内部错误（React 19.x manifest 为
+ * "Expected static flag was missing"）。
+ */
 const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSubmit, submitting }) => {
-  if (!isOpen) return null;
-
   const { t } = useTranslation();
   const [proofs, setProofs] = useState<ProofItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
 
-  // object URL 生命周期跟随弹窗：关闭/重置时统一回收
+  // 组件卸载时统一回收 object URL
   useEffect(() => {
-    setProofs([]);
-    setError(null);
-    setProgress(null);
     return () => {
       setProofs((prev) => {
         prev.forEach((p) => URL.revokeObjectURL(p.previewUrl));
@@ -45,6 +47,17 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
       });
     };
   }, []);
+
+  // 打开弹窗时重置状态
+  useEffect(() => {
+    if (isOpen) {
+      setProofs([]);
+      setError(null);
+      setProgress(null);
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
 
   const acceptType = 'image/*,video/*';
 
