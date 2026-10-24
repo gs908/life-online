@@ -27,10 +27,17 @@ interface SubmitTaskModalProps {
 /**
  * 提交任务证明（DEV-33 块 E 多证据）：多选图片+视频、逐个预览/删除、整体上传进度。
  *
- * 注意：所有 hooks 必须在 `if (!isOpen) return null` 之前无条件调用
- * （App.tsx 始终渲染本组件，不通过 `{isOpen && ...}` 条件渲染），
- * 否则 React 在 isOpen 变化时会检测到 hooks 数量不一致，抛出
- * "Expected static flag was missing" 内部错误（React 19.x）。
+ * React 19.x 约束（"Expected static flag was missing" 踩坑记录）：
+ * 1. 本组件由 App.tsx 无条件渲染（始终挂载），所有 hooks 必须在
+ *    `if (!isOpen) return null` 之前无条件调用，否则 React 在 isOpen 变化时
+ *    检测到 hooks 数量不一致，抛出 "Expected static flag was missing"。
+ * 2. `useEffect([isOpen])` 中在 isOpen=true 时调 setState 会在 React 19.2
+ *    并发渲染下损坏 fiber 静态标记（commit 帧内调 setState）。重置逻辑改为
+ *    在 cleanup（isOpen true→false）里执行。
+ * 3. `reportProgressRef.current` 在 `isOpen=false` 时必须置为 no-op，
+ *    否则 App.tsx 的 `handleSubmitTask` 在 `setIsSubmitModalOpen(false)` 后
+ *    仍可能触发 ref 里的 `setProgress`，对已"null 渲染"的组件调 setState
+ *    同样导致 React 19.x fiber 损坏。
  */
 const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSubmit, submitting }) => {
   const { t } = useTranslation();
@@ -38,14 +45,19 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
 
-  /** ref 镜像 proofs 列表，供 unmount 时的 cleanup 回收 object URL，避免对已卸载组件调 setState */
+  /** ref 镜像 proofs 列表，供 unmount cleanup 回收 object URL（不触发 setState） */
   const proofsRef = useRef<ProofItem[]>([]);
 
-  /** ref 镜像 setProgress 包装，让 App 的 reportProgress 回调始终引用最新的 setter（防 unmount 后调用） */
+  /**
+   * ref 镜像 setProgress 包装。
+   * 关键：isOpen=false 时置为 no-op，防止 App 侧异步回调在 modal 已关闭后仍触发 setProgress。
+   */
   const reportProgressRef = useRef<(p: number) => void>(() => {});
-  reportProgressRef.current = (p: number) => setProgress(Math.min(100, Math.max(0, p)));
+  reportProgressRef.current = isOpen
+    ? (p: number) => setProgress(Math.min(100, Math.max(0, p)))
+    : () => {};
 
-  // object URL 生命周期：组件卸载时统一回收（ref 路径，不触发 setState）
+  /** 组件完全卸载时统一回收 object URL */
   useEffect(() => {
     return () => {
       proofsRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl));
@@ -53,14 +65,21 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
     };
   }, []);
 
-  // 打开弹窗时重置状态
+  /**
+   * isOpen true→false（弹窗关闭）时 cleanup 执行：
+   * 重置 proofs/error/progress 为初始值，下次打开时自动是干净状态。
+   * 不在 effect 体内（isOpen false→true）调 setState。
+   */
   useEffect(() => {
     if (isOpen) {
+      proofsRef.current = proofs;
+    }
+    return () => {
       setProofs([]);
       proofsRef.current = [];
       setError(null);
       setProgress(null);
-    }
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
