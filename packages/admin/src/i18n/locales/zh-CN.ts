@@ -284,6 +284,8 @@ const zhCN = {
     tasks: '个任务',
     noTasks: '暂无任务',
     legend: '类型图例',
+    allChildren: '全部',
+    filterByChild: '按孩子筛选',
   },
   stats: {
     title: '公会统计中心',

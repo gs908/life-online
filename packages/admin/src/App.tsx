@@ -582,6 +582,7 @@ const App: React.FC = () => {
                         onOpenTimeConfig={() => setIsTimeConfigModalOpen(true)}
                         onViewCoinLogs={() => setIsCoinLogsOpen(true)}
                         onOpenPrivilegeConfig={() => setIsPrivilegeConfigOpen(true)}
+                        adventurers={family?.adventurers ?? []}
                      />
                  )}
              </div>

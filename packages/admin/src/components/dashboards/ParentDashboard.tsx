@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, UserRole, SeasonTheme } from '../../types';
-import type { TaskRead, SeasonRead, PrivilegeRead, RedemptionRead } from '../../services/api';
+import type { TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserRead } from '../../services/api';
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
+import WeeklyTaskView from './WeeklyTaskView';
+import type { WeeklyViewChild } from './WeeklyTaskView';
 import { isScheduled } from '../../utils/date';
 import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, Gift } from 'lucide-react';
 
@@ -40,6 +42,8 @@ interface ParentDashboardProps {
   onViewCoinLogs: () => void;
   /** 打开权益设置弹窗 */
   onOpenPrivilegeConfig: () => void;
+  /** 家庭全部冒险者（家长端多孩子周视图：头像区分 + 筛选）；空数组 = 无孩子可筛选 */
+  adventurers: UserRead[];
 }
 
 const ParentDashboard: React.FC<ParentDashboardProps> = ({
@@ -67,9 +71,27 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onDeleteTask,
   onOpenTimeConfig,
   onViewCoinLogs,
-  onOpenPrivilegeConfig
+  onOpenPrivilegeConfig,
+  adventurers
 }) => {
   const { t } = useTranslation();
+
+  // 多孩子周视图：选中的孩子（null = 全部）
+  const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
+
+  const childOptions = useMemo<WeeklyViewChild[]>(
+    () =>
+      adventurers
+        .filter((a) => a.child_id !== null)
+        .map((a) => ({ childId: a.child_id as string, name: a.name, avatar: a.avatar })),
+    [adventurers],
+  );
+
+  // 家长端周视图展示「历史完成任务」（孩子端为全量执行视图，家长端聚焦已完成历史）
+  const completedTasks = useMemo(
+    () => tasks.filter((task) => task.status === 'COMPLETED'),
+    [tasks],
+  );
 
   // 已排期（generated_for_date > 今天）与已投放分开呈现：前者孩子端看不到、也不能接取，
   // 混在「可接取」里会让家长误判成"孩子没做"（契约 §6B 防误判）。
@@ -199,6 +221,18 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
         {/* RIGHT COLUMN: TASK MANAGEMENT */}
         <div className="lg:col-span-2">
+          {/* 周视图：按周查看全部孩子的历史完成任务（多孩子头像区分 + 点击筛选） */}
+          <div className="mb-6 bg-white p-4 rounded-xl shadow-md border border-slate-200">
+            <WeeklyTaskView
+              tasks={completedTasks}
+              currentTheme={currentTheme}
+              variant="light"
+              children={childOptions}
+              selectedChildId={selectedChildId}
+              onChildSelected={setSelectedChildId}
+            />
+          </div>
+
           {/* Active Quest Monitoring */}
           {activeQuest && (
             <div className="mb-6">
