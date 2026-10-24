@@ -167,6 +167,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
 
   // 创建模板后进入生成步骤的本地状态
   const [createdTemplateId, setCreatedTemplateId] = useState<string | null>(null);
+  /** 从任务板入口选模板（与 GenerateTaskModal 对齐）；已定模板时不展示下拉 */
+  const [templates, setTemplates] = useState<TaskTemplateRead[] | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [targetDate, setTargetDate] = useState<string>(today);
   const [tuneValues, setTuneValues] = useState<TuneValues>(EMPTY_VALUES);
   const [tuneDirty, setTuneDirty] = useState<Record<TuneField, boolean>>(EMPTY_DIRTY);
@@ -191,6 +194,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     setTuneValues(EMPTY_VALUES);
     setTuneDirty(EMPTY_DIRTY);
     setCreatedTemplateId(null);
+    setTemplates(null);
+    setSelectedTemplateId('');
     if (editingTemplate) {
       setCategory(categoryOf(editingTemplate));
       setNewTaskTitle(editingTemplate.title);
@@ -229,13 +234,35 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     }
   }, [isOpen, editingTemplate, defaultCategory, today]);
 
+  // 任务板入口（未定模板）：打开弹窗时拉一次可用模板列表；已定模板或编辑态不走
+  useEffect(() => {
+    if (!isOpen || createdTemplateId || editingTemplate) return;
+    let cancelled = false;
+    api.taskTemplates
+      .listTemplates()
+      .then(items => {
+        if (cancelled) return;
+        // 启用中、且不是 CHAIN 第 2..N 步（与 TaskTemplateManager 行内按钮口径一致）
+        setTemplates(
+          items.filter(item => item.is_active && !(item.type === 'CHAIN' && item.chain_order > 1)),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, createdTemplateId, editingTemplate]);
+
   // 进入生成步骤后预检：该模板在目标日期是否已有实例（中性提示用）
   useEffect(() => {
-    if (!isOpen || !createdTemplateId || !targetDate) return;
+    const tmplId = createdTemplateId ?? selectedTemplateId;
+    if (!isOpen || !tmplId || !targetDate) return;
     let cancelled = false;
     setDateHasInstance(null);
     api.tasks
-      .listTasks({ template_id: createdTemplateId, page_size: 200 })
+      .listTasks({ template_id: tmplId, page_size: 200 })
       .then(page => {
         if (!cancelled) {
           setDateHasInstance(page.items.some(task => task.generated_for_date === targetDate));
@@ -247,7 +274,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, createdTemplateId, targetDate]);
+  }, [isOpen, createdTemplateId, selectedTemplateId, targetDate]);
 
   // Esc 关闭（模板编辑与生成步骤都要响应）
   useEffect(() => {
@@ -351,7 +378,10 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   };
 
   const handleGenerateSubmit = async () => {
-    if (!createdTemplateId || dateError) return;
+    if (dateError) return;
+    // 已选模板路径：用下拉选中的模板（任务板入口场景）；否则走新建模板路径（从模板管理进入场景）
+    const templateId = createdTemplateId ?? selectedTemplateId;
+    if (!templateId || dateError) return;
     setGenerateError(null);
     setGenerating(true);
     const body: TaskGenerateRequest = { target_date: targetDate };
@@ -362,7 +392,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     if (tuneDirty.xp_reward) body.xp_reward = tuneValues.xp_reward;
     setSentOverrides(Object.keys(body).some(key => key !== 'target_date'));
     try {
-      const generated = await api.taskTemplates.generateTemplate(createdTemplateId, body);
+      const generated = await api.taskTemplates.generateTemplate(templateId, body);
       setGenerateResult(generated);
       onSubmitGenerated?.(generated);
     } catch (error) {
@@ -817,6 +847,44 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
           </div>
 
           <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+            {/* 任务板入口（未选模板）：先选模板；模板管理入口（已定模板）时隐藏 */}
+            {!createdTemplateId && (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                <div className="text-xs font-bold text-slate-600 mb-1.5">{t('generateTask.pickTemplate')}</div>
+                {!templates ? (
+                  <p className="text-xs text-slate-400">{t('common.loading')}</p>
+                ) : templates.length === 0 ? (
+                  <p className="text-xs text-slate-500">{t('generateTask.noTemplates')}</p>
+                ) : (
+                  <select
+                    value={selectedTemplateId}
+                    onChange={event => {
+                      setSelectedTemplateId(event.target.value);
+                      setGenerateResult(null);
+                      setDateHasInstance(null);
+                      const tmpl = templates.find(item => item.id === event.target.value);
+                      if (tmpl) {
+                        setTuneValues({
+                          difficulty: tmpl.difficulty,
+                          time_deposit: tmpl.time_deposit,
+                          xp_reward: tmpl.xp_reward,
+                        });
+                        setTuneDirty(EMPTY_DIRTY);
+                      }
+                    }}
+                    aria-label={t('generateTask.pickTemplate')}
+                    className="border rounded-lg p-2 text-sm w-full border-slate-200"
+                  >
+                    <option value="">{t('generateTask.pickTemplatePlaceholder')}</option>
+                    {templates.map(item => (
+                      <option key={item.id} value={item.id}>
+                        {item.title}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-bold text-slate-800">{newTaskTitle.trim()}</span>
               <span className="text-[11px] text-slate-400">
