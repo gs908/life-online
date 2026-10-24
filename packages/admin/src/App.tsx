@@ -614,6 +614,7 @@ const App: React.FC = () => {
       />
 
       <SubmitTaskModal
+        key={`submit-task-modal-${isSubmitModalOpen ? "open" : "closed"}`}
         isOpen={isSubmitModalOpen}
         onClose={() => setIsSubmitModalOpen(false)}
         onSubmit={handleSubmitTask}

@@ -41,9 +41,11 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
   /** ref 镜像 proofs 列表，供 unmount 时的 cleanup 回收 object URL，避免对已卸载组件调 setState */
   const proofsRef = useRef<ProofItem[]>([]);
 
-  /** ref 镜像 setProgress 包装，让 App 的 reportProgress 回调始终引用最新的 setter（防 unmount 后调用） */
+  /** ref 镜像 setProgress 包装。isOpen=false 时置为 no-op，防止 App 侧异步回调在 modal 已 null-render 后仍触发 setProgress */
   const reportProgressRef = useRef<(p: number) => void>(() => {});
-  reportProgressRef.current = (p: number) => setProgress(Math.min(100, Math.max(0, p)));
+  reportProgressRef.current = isOpen
+    ? (p: number) => setProgress(Math.min(100, Math.max(0, p)))
+    : () => {};
 
   // object URL 生命周期：组件卸载时统一回收（ref 路径，不触发 setState）
   useEffect(() => {
@@ -52,16 +54,6 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
       proofsRef.current = [];
     };
   }, []);
-
-  // 打开弹窗时重置状态
-  useEffect(() => {
-    if (isOpen) {
-      setProofs([]);
-      proofsRef.current = [];
-      setError(null);
-      setProgress(null);
-    }
-  }, [isOpen]);
 
   if (!isOpen) return null;
 
