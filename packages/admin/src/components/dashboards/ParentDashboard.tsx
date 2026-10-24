@@ -6,7 +6,7 @@ import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
 import { isScheduled } from '../../utils/date';
-import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, CalendarClock, Gift } from 'lucide-react';
+import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, Gift } from 'lucide-react';
 
 interface ParentDashboardProps {
   childUser: User;
@@ -127,16 +127,10 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
              <Archive size={16} /> {t('parent.history')}
           </button>
           <button
-            onClick={onOpenGenerate}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-lg shadow-green-600/20"
-          >
-            <CalendarClock size={16} /> {t('generateTask.entry')}
-          </button>
-          <button
             onClick={onOpenAddModal}
             className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/20"
           >
-            <Plus size={16} /> {t('parent.newQuest')}
+            <Plus size={16} /> {t('addTask.title')}
           </button>
         </div>
       </div>
