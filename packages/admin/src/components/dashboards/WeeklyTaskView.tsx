@@ -1,9 +1,22 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TaskRead } from '../../services/api';
 import type { SeasonTheme } from '../../types';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import { localToday } from '../../utils/date';
+
+function useIsLg() {
+  const [isLg, setIsLg] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const handler = (e: MediaQueryListEvent) => setIsLg(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return isLg;
+}
 
 interface WeeklyTaskViewProps {
   tasks: TaskRead[];
@@ -67,6 +80,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const today = localToday();
+  const isLg = useIsLg();
 
   const [weekOffset, setWeekOffset] = useState(0);
 
@@ -170,55 +184,141 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
         </div>
       </div>
 
-      {/* Week Grid - responsive: desktop = 7 columns, mobile = card view */}
-      <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border-2 border-slate-200 overflow-hidden">
-        {/* Day Headers */}
-        <div className="grid grid-cols-7 border-b-2 border-slate-200">
-          {days.map((day) => (
-            <div
-              key={day.date}
-              className={`py-2 text-center border-r last:border-r-0 ${
-                day.isToday
-                  ? `${currentTheme.primaryColor} text-white font-bold`
-                  : 'bg-slate-50 text-slate-600 font-medium'
-              }`}
-            >
-              <div className="text-xs opacity-75">{day.label}</div>
-              <div className="text-sm">{new Date(day.date).getDate()}</div>
-            </div>
-          ))}
-        </div>
+      {/* Week Grid - desktop only: 7 columns, hidden on mobile */}
+      {isLg ? (
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border-2 border-slate-200 overflow-hidden">
+          {/* Day Headers */}
+          <div className="grid grid-cols-7 border-b-2 border-slate-200">
+            {days.map((day) => (
+              <div
+                key={day.date}
+                className={`py-2 text-center border-r last:border-r-0 ${
+                  day.isToday
+                    ? `${currentTheme.primaryColor} text-white font-bold`
+                    : 'bg-slate-50 text-slate-600 font-medium'
+                }`}
+              >
+                <div className="text-xs opacity-75">{day.label}</div>
+                <div className="text-sm">{new Date(day.date).getDate()}</div>
+              </div>
+            ))}
+          </div>
 
-        {/* Task Rows per Day */}
-        <div className="grid grid-cols-7 min-h-[200px]">
+          {/* Task Rows per Day */}
+          <div className="grid grid-cols-7 min-h-[200px]">
+            {days.map((day) => (
+              <div
+                key={day.date}
+                className={`border-r last:border-r-0 border-b last:border-b-0 p-1.5 min-h-[120px] ${
+                  day.isToday ? `${currentTheme.primaryColor}/10` : 'bg-white'
+                }`}
+              >
+                {day.tasks.length === 0 ? (
+                  <div className="h-full flex items-center justify-center opacity-30">
+                    <Calendar size={20} />
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {day.tasks.map((task) => (
+                      <div
+                        key={task.id}
+                        className={`rounded-lg border-l-2 p-1.5 text-xs cursor-default transition-all hover:scale-[1.02] ${getTypeBadgeColor(task.type)}`}
+                        title={`${task.title} (${task.type})`}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task.status)}`} />
+                          <span className="font-bold truncate flex-1 leading-tight">{task.title}</span>
+                        </div>
+                        {task.status === 'COMPLETED' && task.rating && (
+                          <div className="flex items-center gap-0.5 mt-0.5">
+                            {[...Array(5)].map((_, i) => (
+                              <span key={i} className={`text-[8px] ${i < task.rating! ? 'text-yellow-500' : 'text-slate-300'}`}>★</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Legend */}
+          <div className="flex flex-wrap gap-3 px-4 py-2 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
+            <span className="font-bold">{t('weeklyView.legend')}:</span>
+            {(['DAILY', 'CHALLENGE', 'TIMED', 'CHAIN', 'COOP'] as const).map((type) => (
+              <span key={type} className={`px-1.5 py-0.5 rounded border ${getTypeBadgeColor(type)}`}>
+                {t(`taskType.${type}`)}
+              </span>
+            ))}
+            <span className="ml-auto flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-green-400" /> {t('taskStatus.AVAILABLE')}
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" /> {t('taskStatus.IN_PROGRESS')}
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-yellow-400" /> {t('taskStatus.PENDING_REVIEW')}
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-gray-400" /> {t('taskStatus.COMPLETED')}
+            </span>
+          </div>
+        </div>
+      ) : (
+        /* Mobile: card view when grid is too cramped */
+        <div className="space-y-3">
           {days.map((day) => (
-            <div
-              key={day.date}
-              className={`border-r last:border-r-0 border-b last:border-b-0 p-1.5 min-h-[120px] ${
-                day.isToday ? `${currentTheme.primaryColor}/10` : 'bg-white'
-              }`}
-            >
+            <div key={day.date} className={`rounded-xl border-2 p-3 ${day.isToday ? `${currentTheme.primaryColor} border-transparent text-white` : 'bg-white/95 border-slate-200 text-slate-800'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-bold text-sm">
+                  {day.label} · {day.date}
+                  {day.isToday && <span className="ml-1 text-xs opacity-75">({t('weeklyView.today')})</span>}
+                </span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${day.isToday ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  {day.tasks.length} {t('weeklyView.tasks')}
+                </span>
+              </div>
               {day.tasks.length === 0 ? (
-                <div className="h-full flex items-center justify-center opacity-30">
-                  <Calendar size={20} />
-                </div>
+                <p className="text-xs opacity-50 text-center py-2">{t('weeklyView.noTasks')}</p>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   {day.tasks.map((task) => (
                     <div
                       key={task.id}
-                      className={`rounded-lg border-l-2 p-1.5 text-xs cursor-default transition-all hover:scale-[1.02] ${getTypeBadgeColor(task.type)}`}
-                      title={`${task.title} (${task.type})`}
+                      className={`rounded-lg border-l-3 p-2 text-xs ${getTypeBadgeColor(task.type)}`}
                     >
-                      <div className="flex items-center gap-1">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task.status)}`} />
-                        <span className="font-bold truncate flex-1 leading-tight">{task.title}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${getStatusDot(task.status)}`} />
+                        <span className="font-bold flex-1">{task.title}</span>
+                        <span className="text-[10px] opacity-60">{t(`taskType.${task.type}`)}</span>
                       </div>
-                      {task.status === 'COMPLETED' && task.rating && (
-                        <div className="flex items-center gap-0.5 mt-0.5">
-                          {[...Array(5)].map((_, i) => (
-                            <span key={i} className={`text-[8px] ${i < task.rating! ? 'text-yellow-500' : 'text-slate-300'}`}>★</span>
-                          ))}
+                      {task.description && (
+                        <p className="mt-1 opacity-75 truncate">{task.description}</p>
+                      )}
+                      {task.status === 'AVAILABLE' && (
+                        <button
+                          onClick={() => onAcceptAttempt(task.id)}
+                          className="mt-1.5 w-full bg-blue-600 text-white text-xs font-bold py-1 rounded hover:bg-blue-700 active:scale-95 transition-all"
+                        >
+                          {t('questCard.accept')}
+                        </button>
+                      )}
+                      {task.status === 'IN_PROGRESS' && (
+                        <div className="flex gap-1 mt-1.5">
+                          <button
+                            onClick={() => onAbandonCurrent(task.id)}
+                            className="flex-1 text-red-400 hover:text-red-600 text-xs font-bold py-1 rounded border border-red-200 hover:border-red-400 transition-colors"
+                          >
+                            {t('questCard.abandon')}
+                          </button>
+                          <button
+                            onClick={() => onSubmit(task.id)}
+                            className="flex-1 bg-green-600 text-white text-xs font-bold py-1 rounded hover:bg-green-700 active:scale-95 transition-all"
+                          >
+                            {t('questCard.submitProof')}
+                          </button>
                         </div>
                       )}
                     </div>
@@ -228,91 +328,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
             </div>
           ))}
         </div>
-
-        {/* Legend */}
-        <div className="flex flex-wrap gap-3 px-4 py-2 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
-          <span className="font-bold">{t('weeklyView.legend')}:</span>
-          {(['DAILY', 'CHALLENGE', 'TIMED', 'CHAIN', 'COOP'] as const).map((type) => (
-            <span key={type} className={`px-1.5 py-0.5 rounded border ${getTypeBadgeColor(type)}`}>
-              {t(`taskType.${type}`)}
-            </span>
-          ))}
-          <span className="ml-auto flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-green-400" /> {t('taskStatus.AVAILABLE')}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" /> {t('taskStatus.IN_PROGRESS')}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-yellow-400" /> {t('taskStatus.PENDING_REVIEW')}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-gray-400" /> {t('taskStatus.COMPLETED')}
-          </span>
-        </div>
-      </div>
-
-      {/* Mobile: alternative card view when grid is too cramped */}
-      <div className="lg:hidden space-y-3">
-        {days.map((day) => (
-          <div key={day.date} className={`rounded-xl border-2 p-3 ${day.isToday ? `${currentTheme.primaryColor} border-transparent text-white` : 'bg-white/95 border-slate-200 text-slate-800'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-bold text-sm">
-                {day.label} · {day.date}
-                {day.isToday && <span className="ml-1 text-xs opacity-75">({t('weeklyView.today')})</span>}
-              </span>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${day.isToday ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                {day.tasks.length} {t('weeklyView.tasks')}
-              </span>
-            </div>
-            {day.tasks.length === 0 ? (
-              <p className="text-xs opacity-50 text-center py-2">{t('weeklyView.noTasks')}</p>
-            ) : (
-              <div className="space-y-1.5">
-                {day.tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    className={`rounded-lg border-l-3 p-2 text-xs ${getTypeBadgeColor(task.type)}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${getStatusDot(task.status)}`} />
-                      <span className="font-bold flex-1">{task.title}</span>
-                      <span className="text-[10px] opacity-60">{t(`taskType.${task.type}`)}</span>
-                    </div>
-                    {task.description && (
-                      <p className="mt-1 opacity-75 truncate">{task.description}</p>
-                    )}
-                    {task.status === 'AVAILABLE' && (
-                      <button
-                        onClick={() => onAcceptAttempt(task.id)}
-                        className="mt-1.5 w-full bg-blue-600 text-white text-xs font-bold py-1 rounded hover:bg-blue-700 active:scale-95 transition-all"
-                      >
-                        {t('questCard.accept')}
-                      </button>
-                    )}
-                    {task.status === 'IN_PROGRESS' && (
-                      <div className="flex gap-1 mt-1.5">
-                        <button
-                          onClick={() => onAbandonCurrent(task.id)}
-                          className="flex-1 text-red-400 hover:text-red-600 text-xs font-bold py-1 rounded border border-red-200 hover:border-red-400 transition-colors"
-                        >
-                          {t('questCard.abandon')}
-                        </button>
-                        <button
-                          onClick={() => onSubmit(task.id)}
-                          className="flex-1 bg-green-600 text-white text-xs font-bold py-1 rounded hover:bg-green-700 active:scale-95 transition-all"
-                        >
-                          {t('questCard.submitProof')}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+      )}
     </div>
   );
 };
