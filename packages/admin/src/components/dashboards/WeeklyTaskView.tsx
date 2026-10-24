@@ -1,9 +1,22 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TaskRead } from '../../services/api';
 import type { SeasonTheme } from '../../types';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import { localToday } from '../../utils/date';
+
+function useIsLg() {
+  const [isLg, setIsLg] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const handler = (e: MediaQueryListEvent) => setIsLg(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return isLg;
+}
 
 interface WeeklyTaskViewProps {
   tasks: TaskRead[];
@@ -67,6 +80,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const today = localToday();
+  const isLg = useIsLg();
 
   const [weekOffset, setWeekOffset] = useState(0);
 
@@ -170,7 +184,8 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
         </div>
       </div>
 
-      {/* Week Grid - responsive: desktop = 7 columns, mobile = card view */}
+      {/* Week Grid - desktop only: 7 columns, conditional render */}
+      {isLg ? (
       <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border-2 border-slate-200 overflow-hidden">
         {/* Day Headers */}
         <div className="grid grid-cols-7 border-b-2 border-slate-200">
@@ -251,9 +266,9 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
           </span>
         </div>
       </div>
-
-      {/* Mobile: alternative card view when grid is too cramped */}
-      <div className="lg:hidden space-y-3">
+      ) : (
+      /* Mobile: card view when viewport < 1024px */
+      <div className="space-y-3">
         {days.map((day) => (
           <div key={day.date} className={`rounded-xl border-2 p-3 ${day.isToday ? `${currentTheme.primaryColor} border-transparent text-white` : 'bg-white/95 border-slate-200 text-slate-800'}`}>
             <div className="flex items-center justify-between mb-2">
@@ -313,6 +328,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 };
