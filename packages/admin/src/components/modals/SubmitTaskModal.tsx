@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Camera, Film, X } from 'lucide-react';
 
@@ -27,10 +27,10 @@ interface SubmitTaskModalProps {
 /**
  * 提交任务证明（DEV-33 块 E 多证据）：多选图片+视频、逐个预览/删除、整体上传进度。
  *
- * 注意：本组件由 App.tsx 无条件渲染（始终挂载），所有 hooks 必须在
- * `if (!isOpen) return null` 之前无条件调用。否则 React 在 isOpen 状态变化时
- * 检测到 hooks 数量不一致，抛出内部错误（React 19.x manifest 为
- * "Expected static flag was missing"）。
+ * 注意：所有 hooks 必须在 `if (!isOpen) return null` 之前无条件调用
+ * （App.tsx 始终渲染本组件，不通过 `{isOpen && ...}` 条件渲染），
+ * 否则 React 在 isOpen 变化时会检测到 hooks 数量不一致，抛出
+ * "Expected static flag was missing" 内部错误（React 19.x）。
  */
 const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSubmit, submitting }) => {
   const { t } = useTranslation();
@@ -38,13 +38,18 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
 
-  // 组件卸载时统一回收 object URL
+  /** ref 镜像 proofs 列表，供 unmount 时的 cleanup 回收 object URL，避免对已卸载组件调 setState */
+  const proofsRef = useRef<ProofItem[]>([]);
+
+  /** ref 镜像 setProgress 包装，让 App 的 reportProgress 回调始终引用最新的 setter（防 unmount 后调用） */
+  const reportProgressRef = useRef<(p: number) => void>(() => {});
+  reportProgressRef.current = (p: number) => setProgress(Math.min(100, Math.max(0, p)));
+
+  // object URL 生命周期：组件卸载时统一回收（ref 路径，不触发 setState）
   useEffect(() => {
     return () => {
-      setProofs((prev) => {
-        prev.forEach((p) => URL.revokeObjectURL(p.previewUrl));
-        return [];
-      });
+      proofsRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+      proofsRef.current = [];
     };
   }, []);
 
@@ -52,6 +57,7 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
   useEffect(() => {
     if (isOpen) {
       setProofs([]);
+      proofsRef.current = [];
       setError(null);
       setProgress(null);
     }
@@ -90,16 +96,18 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
       });
     }
     if (next.length) {
-      setProofs((prev) => [...prev, ...next]);
+      const updated = [...proofs, ...next];
+      setProofs(updated);
+      proofsRef.current = updated;
       setError(null);
     }
   };
 
   const removeProof = (index: number) => {
-    setProofs((prev) => {
-      URL.revokeObjectURL(prev[index].previewUrl);
-      return prev.filter((_, i) => i !== index);
-    });
+    URL.revokeObjectURL(proofsRef.current[index].previewUrl);
+    const updated = proofsRef.current.filter((_, i) => i !== index);
+    proofsRef.current = updated;
+    setProofs(updated);
     setError(null);
   };
 
@@ -107,10 +115,9 @@ const SubmitTaskModal: React.FC<SubmitTaskModalProps> = ({ isOpen, onClose, onSu
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    // 整体进度 = 已完成文件 + 当前文件百分比（App 逐个上传时回调）
     onSubmit(
       proofs.map((p) => p.file),
-      (percent) => setProgress(Math.min(100, Math.max(0, percent))),
+      (percent) => reportProgressRef.current(percent),
     );
   };
 
