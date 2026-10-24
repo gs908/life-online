@@ -111,11 +111,24 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
     return result;
   }, [weekStart, today, t]);
 
-  // Group tasks by generated_for_date
+  // Group tasks by their effective date.
+  // 优先 generated_for_date（生成器产出的逻辑日）；为 null（手工一次性任务、链式实例）时，
+  // 已终结任务（COMPLETED/EXPIRED）回退到 completed_at 的归属日（实际完成日），
+  // 未终结任务回退到 created_at（实际投放日），最终回退 today。
+  // 否则所有 null 日期的历史任务会被 ?? today 堆到「今天」列。
   const tasksByDate = useMemo(() => {
+    const toDate = (ts: string | null | undefined): string | null =>
+      ts ? ts.slice(0, 10) : null; // ISO 8601 → YYYY-MM-DD
     const map: Record<string, TaskRead[]> = {};
     for (const task of tasks) {
-      const date = task.generated_for_date ?? today;
+      let date = task.generated_for_date;
+      if (!date) {
+        if (task.status === 'COMPLETED' || task.status === 'EXPIRED') {
+          date = toDate(task.completed_at);
+        }
+        if (!date) date = toDate(task.created_at);
+      }
+      if (!date) date = today;
       if (!map[date]) map[date] = [];
       map[date].push(task);
     }
