@@ -18,6 +18,7 @@ from app.config import settings
 from app.models.enums import (
     CoinTransactionType,
     ContentMode,
+    ContentSource,
     NotificationChannel,
     NotificationStatus,
     NotificationType,
@@ -38,7 +39,7 @@ from app.models.scn_task_template_library import ScnTaskTemplateLibrary
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.models.sys_upload import SysUpload
-from app.schemas.task import SNAPSHOT_FIELDS, TaskTuneRequest
+from app.schemas.task import SNAPSHOT_FIELDS, TaskCreate, TaskTuneRequest
 from app.services import (
     chain_service,
     coin_service,
@@ -48,6 +49,7 @@ from app.services import (
     task_generator_service,
     xp_service,
 )
+from app.services.task_template_service import MANUAL_GENERATE_MAX_AHEAD_DAYS
 
 # 驳回时若原 expire_at 已过(孩子在截止前提交,但家长审核拖到截止后才驳回),
 # 补一个重新提交窗口,避免下一轮过期批处理(expire_overdue_tasks)把它当成
@@ -290,6 +292,91 @@ async def create_task(db: AsyncSession, *, family_id: str, creator_id: str, **kw
         time_deposit=template.time_deposit,
         chain_index=template.chain_order if template.chain_key else None,
         chain_total=template.chain_total if template.chain_key else None,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return task
+
+
+async def create_ephemeral_task(
+    db: AsyncSession, *, family_id: str, creator_id: str, payload: TaskCreate,
+) -> ScnTaskInstance:
+    """临时任务(DEV-59):**只建实例、不落模板**,不进模板库。
+
+    业主裁决:任务板「创建新任务」的**未选模板**分支属于临时添加的任务,不该在
+    模板库里留痕。因此本路径不写 `scn_task_template` 行,实例的 `template_id`
+    恒为 NULL。
+
+    ## `template_id` 空值语义(为什么不需要迁移)
+    `scn_task_instance.template_id` **本就可空**(`ondelete="SET NULL"`,见
+    `models/scn_task_instance.py`),所以"可空 + 迁移"里的一半已经成立;也无需
+    "占位模板"——占位模板会把临时任务塞进模板库,正是裁决要禁止的。
+
+    读取端 `template_id IS NULL` ⇒ 该实例不由模板生成。无模板可穿读,因此:
+    - `type` 回落 DAILY,`category`/`required_start_time`/`reminder_*`/
+      `estimated_minutes` 为 NULL/default(`api/v1/tasks._to_read` 的既有兜底);
+    - 不参与实例池(`task_generator_service._latest_unconsumed` 按 template_id 查)、
+      无触发规则、无链式;
+    - 审核/结算/过期路径只读**实例自身列**(`_deposit_of` 读 `task.time_deposit`,
+      `_coop_final_xp` 对 `template is None` 已有兜底),故不受影响。
+
+    ## 赛季与逻辑日
+    实例 `season_id` 非空且任务不跨赛季 → 取**创建当时的激活赛季**,无激活赛季
+    409(与生成路径同口径)。`target_date` 是实例的逻辑日(`generated_for_date`):
+    缺省今天,`< 今天` 422,`> 今天 + MANUAL_GENERATE_MAX_AHEAD_DAYS` 422(与
+    手动生成同一上界)。写入 `generated_for_date` 后,临时任务自动沿用既有的
+    「未来实例不可见/不可接取」边界;同模板同日唯一索引对 `template_id IS NULL`
+    不生效(Postgres 唯一索引视 NULL 互不相同),故一天可建多条临时任务。
+
+    押金走 `resolve_deposit`(显式值 → clamp 类型区间 → 封顶**目标日**配额),
+    与手动生成同源 —— 配额按星期几不同,不能用今天的配额卡一条未来的任务。
+    """
+    target_child_id = payload.target_child_id or payload.target_user_id
+    await _ensure_task_refs(
+        db,
+        family_id=family_id,
+        season_id=payload.season_id,
+        target_child_id=target_child_id,
+    )
+    instance_season_id = await task_generator_service.active_season_id(db, family_id)
+    if instance_season_id is None:
+        raise ConflictError("当前没有进行中的赛季,无法创建任务")
+
+    today = today_bj()
+    target_date = payload.target_date or today
+    if target_date < today:
+        raise ValidationError("目标日期不能早于今天")
+    if target_date > today + timedelta(days=MANUAL_GENERATE_MAX_AHEAD_DAYS):
+        raise ValidationError(f"目标日期最多提前 {MANUAL_GENERATE_MAX_AHEAD_DAYS} 天")
+
+    deposit = await coin_service.resolve_deposit(
+        db,
+        family_id=family_id,
+        task_type=TaskType.DAILY,
+        estimated_minutes=payload.estimated_minutes,
+        explicit_deposit=payload.time_deposit,
+        day=target_date,
+    )
+
+    task = ScnTaskInstance(
+        family_id=family_id,
+        season_id=instance_season_id,
+        template_id=None,  # 临时任务:无模板支撑,不进模板库
+        creator_account_id=creator_id,
+        target_child_id=target_child_id,
+        title=payload.title,
+        description=payload.description or "",
+        lore_snippet=payload.lore_snippet,
+        xp_reward=payload.xp_reward,
+        difficulty=payload.difficulty,
+        status=TaskStatus.AVAILABLE,
+        deadline=payload.deadline,
+        expire_at=payload.expire_at or payload.deadline,
+        generated_for_date=target_date,
+        time_deposit=deposit,
+        # 不经生成器:内容由家长直接给出,叙事来源记为"非 LLM"的 TEMPLATE 口径。
+        content_source=ContentSource.TEMPLATE,
     )
     db.add(task)
     await db.commit()

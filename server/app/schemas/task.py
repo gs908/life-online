@@ -315,10 +315,44 @@ class TaskTuneRequest(BaseModel):
 
 
 class TaskCreate(TaskTemplateCreate):
-    """兼容旧创建接口:创建模板并生成一条初始实例。"""
+    """创建接口请求体,由 `ephemeral` 分流(DEV-59):
+
+    - `ephemeral=False`(缺省):兼容旧语义 —— 建模板 + 生成一条初始实例(deprecated,DEV-50);
+    - `ephemeral=True`:临时任务 —— **只建实例、不落模板**,不进模板库。
+
+    字段集刻意共用一份(TaskTemplateCreate),因为两条分支共用大多数字段;
+    `ephemeral=True` 时**模板级**字段无处安放,故显式 422 而非静默丢弃(见
+    `_check_ephemeral`)。
+    """
     target_user_id: str | None = None
     deadline: datetime | None = None
     expire_at: datetime | None = None
+    # DEV-59 临时任务:只建实例、不落模板。
+    ephemeral: bool = False
+    # 临时任务的逻辑日(= 实例 `generated_for_date`);仅 `ephemeral=True` 有效,
+    # 缺省今天。刻意与生成路径的 `target_date` 同名同义(入参是"意图")。
+    target_date: date | None = None
+
+    @model_validator(mode="after")
+    def _check_ephemeral(self) -> "TaskCreate":
+        if not self.ephemeral:
+            # 非临时任务没有"逻辑日"概念(实例 generated_for_date 由旧路径留空),
+            # 传了不生效 —— 不静默丢弃,直接 422。
+            if "target_date" in self.model_fields_set and self.target_date is not None:
+                raise ValueError("target_date 仅适用于临时任务(ephemeral=true)")
+            return self
+        # 临时任务没有模板行,模板级配置无处安放。逐项显式拒绝,避免"配了却没生效":
+        if self.triggers:
+            raise ValueError("临时任务没有模板,不支持触发规则(triggers);如需周期任务请先建模板")
+        if self.library_id is not None:
+            raise ValueError("临时任务不套用模板库(library_id);请直接给出任务内容")
+        if self.type != TaskType.DAILY:
+            raise ValueError("临时任务仅支持 type=DAILY(其余类型依赖模板:触发/链式/协作)")
+        if self.timed_mode != TimedMode.NONE:
+            raise ValueError("临时任务为一次性任务,不支持时间窗(timed_mode);截止请用 deadline/expire_at")
+        if self.chain_key is not None or self.chain_order != 1 or self.chain_total != 1:
+            raise ValueError("临时任务不支持链式(chain_key/chain_order/chain_total)")
+        return self
 
 
 class TaskProofRead(BaseModel):

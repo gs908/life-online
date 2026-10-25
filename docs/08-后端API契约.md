@@ -192,7 +192,7 @@
 | GET | `/scn/task-instances?page&page_size&season_id&status&template_id&assignee_child_id&generated_for_date_lte` | 任务实例分页列表（`template_id` 供模板详情/重新生成确认数未消费实例，DEV-35）。**DEV-50 可见性：孩子端由服务端强制 `generated_for_date IS NULL OR <= 今天`（客户端参数不可覆盖）；管理端默认全量，可用 `generated_for_date_lte` 显式筛选** | 登录 |
 | GET | `/scn/task-instances/{task_id}` | 详情（限本家庭） | 登录 |
 | PATCH | `/scn/task-instances/{task_id}` | **逐实例微调（DEV-50）**：见 §6B | 父母 |
-| POST | `/scn/task-instances` | 创建模板并生成初始实例（CHAIN 仅链首步）。**DEV-50 起 deprecated**，改用 `POST /scn/task-templates/{id}/generate` | 父母（deprecated） |
+| POST | `/scn/task-instances` | **按 `ephemeral` 分流（DEV-59）**：`ephemeral=true` → **临时任务：只建实例、不落模板**（返回体 `template_id=null`，不进模板库）；缺省 → 建模板 + 初始实例（CHAIN 仅链首步）。后者 **DEV-50 起 deprecated**，改用 `POST /scn/task-templates/{id}/generate` | 父母 |
 | POST | `/scn/task-templates` | 只建模板不投放实例（CHAIN 第 2..N 步，DEV-36） | 父母 |
 | DELETE | `/scn/task-instances/{task_id}` | 删除实例 | 父母 |
 | POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金；COOP 记 OWNER 参与者）。**DEV-50：`generated_for_date > 今天` 的"已排期"实例 409，未到期不可接取** | 登录 |
@@ -226,7 +226,7 @@
 ```jsonc
 {
   "id": "str", "family_id": "str", "season_id": "str",
-  "template_id": "str | null",
+  "template_id": "str | null",                    // null = 实例不由模板生成（临时任务，见下方 DEV-59 说明）
   "creator_account_id": "str | null",
   "target_child_id": "str | null",    // 指派给某个孩子（null=可任接）
   "assignee_child_id": "str | null",  // 实际接取的孩子
@@ -262,8 +262,20 @@
 **TaskProofRead** `{ id, task_instance_id, kind: "IMAGE|VIDEO|AUDIO", url: "str | null", size, content_type, created_at }`
 > `kind` 由 `content_type` 推导（image/*→IMAGE，video/*→VIDEO，audio/*→AUDIO）；`url` 按 `object_key` 现算，与 `UploadRead.access_url` 同口径（minio 预签名 / local 稳定路径）。
 
-**TaskCreate**（POST body；= TaskTemplateCreate + 实例参数）：
-`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?(50, ≥0), type?(DAILY), target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?(15), time_deposit?(10), is_active?(true), target_user_id?, deadline?, expire_at? }`
+**TaskCreate**（POST body；= TaskTemplateCreate + 实例参数 + DEV-59 分流参数）：
+`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?(50, ≥0), type?(DAILY), target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?(15), time_deposit?(10), is_active?(true), target_user_id?, deadline?, expire_at?, ephemeral?(false), target_date? }`
+
+**DEV-59｜临时任务分支（`ephemeral: true`）**
+
+> 业主裁决：任务板「创建新任务」的**未选模板**分支属于临时添加的任务，**不进模板库**。
+> 因此 `ephemeral=true` 时**只建实例、不落 `scn_task_template` 行**，实例 `template_id` 恒为 `null`。
+
+- **不需要迁移**：`scn_task_instance.template_id` 本就**可空**（`ondelete="SET NULL"`）。无需"占位模板"——那会把临时任务塞进模板库，正是裁决要禁止的。
+- **`template_id = null` 的读取语义**：该实例不由模板生成。无模板可穿读 → `type` 回落 `DAILY`，`category / required_start_time / reminder_message / estimated_minutes` 为 `null`（`reminder_minutes_before` 默认 15）。不参与实例池（无触发规则、不跨天顺延）、无链式。审核/结算/过期路径只读实例自身列（押金 `time_deposit`、难度快照 `difficulty`），**不受影响**。
+- **生效字段**：`title`、`description`、`lore_snippet`、`xp_reward`、`difficulty`、`time_deposit`（缺省走 `resolve_deposit`，封顶按**目标日**配额）、`target_date`、`target_child_id`、`season_id`（仅作归属校验；实例赛季取创建当时的**激活赛季**，无激活赛季 409）、`deadline`/`expire_at`（实例截止）。
+- **`target_date`** = 实例逻辑日（`generated_for_date`），缺省今天，`< 今天` 422，`> 今天 + 30 天` 422（与手动生成同一上界）。写入后自动继承「未来实例不可见 / 不可接取」边界；同日可建**多条**（`NULL` 不撞 `UNIQUE(template_id, generated_for_date)`）。
+- **模板级字段一律 422**（不静默丢弃）：`triggers` 非空、`library_id`、`type != DAILY`、`timed_mode != NONE`、`chain_key/chain_order/chain_total`。`target_date` 出现在 `ephemeral=false` 的旧路径上同样 422。
+- 响应即普通 **TaskRead**（`template_id: null`、`generated_for_date` = 逻辑日、`content_source: "TEMPLATE"`）。
 
 **TaskSubmitRequest** `{ proof_object_keys: string[] }`（块 E 起多证据；旧字段 `proof_object_key?: str` 过渡保留，等价单元素列表）— **不是 base64**：先循环 `POST /sys/uploads`（purpose=`task_proof`，建议带同一 `task_id`，DEV-30 起 key 含任务实例标识）逐个拿 `object_key`，再一次提交全部 keys。逐个校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`、content-type 可推导 kind、未被其他任务占用（`sys_upload.task_instance_id` 或既有 `scn_task_proof` 行任一命中即 422，防 local 模式下用任意字符串引用/探测他人对象）；任何一个不合法**整单 422**，不留半提交状态。数量上限 `upload.max_proof_files`（默认 9），重复 key / 空列表 422。提交成功时按所选集合整体落 `scn_task_proof` 行：新 key 建行、本任务已软删的 key 复活、未再携带的旧证据软删（提交即"当前所选集合"）；并把未绑定的凭证回填 `task_instance_id`。
 **TaskApproveRequest** `{ rating: int 1–5（必填）, comment?: str }`

@@ -239,19 +239,26 @@ async def get_task(task_id: str, db: DBSession, user: CurrentUser) -> ApiRespons
 @router.post(
     "",
     response_model=ApiResponse[TaskRead],
-    summary="创建任务模板并生成初始实例(父母)",
-    deprecated=True,
+    summary="创建任务实例(父母):ephemeral=true 只建实例不落模板;否则建模板+初始实例(deprecated)",
 )
 async def create_task(
     body: TaskCreate, db: DBSession, user: GuildMasterOnly,
 ) -> ApiResponse[TaskRead]:
-    """【deprecated,DEV-50】一次成型:建模板 + 建一条实例。
+    """按 `ephemeral` 分流(DEV-59):
 
-    已由「选模板 → 生成」取代(`POST /scn/task-templates` 建模板 /
-    `POST /scn/task-templates/{id}/generate` 按目标日期生成)。本入口不支持
-    目标日期与逐实例微调,且实例不写 `generated_for_date`(不参与实例池与同日
-    幂等)。保留仅为兼容旧客户端,新前端请勿使用。
+    - **`ephemeral=true`(临时任务,新入口)**:只建实例、**不落模板**——任务板
+      「创建新任务」未选模板分支走这条。返回体 `template_id` 恒为 `null`。
+      不进模板库、不参与实例池(无触发规则/无链式/不跨天顺延)。
+    - `ephemeral=false`(缺省,【deprecated,DEV-50】):一次成型建模板 + 建一条
+      实例。已由「选模板 → 生成」取代(`POST /scn/task-templates/{id}/generate`),
+      不支持目标日期与逐实例微调,且实例不写 `generated_for_date`。保留仅为兼容
+      旧客户端,新前端请勿使用。
     """
+    if body.ephemeral:
+        t = await task_service.create_ephemeral_task(
+            db, family_id=user.family_id, creator_id=user.id, payload=body,
+        )
+        return ok(await _to_read_with_proofs(db, t))
     data = body.model_dump()
     t = await task_service.create_task(
         db, family_id=user.family_id, creator_id=user.id, **data,
