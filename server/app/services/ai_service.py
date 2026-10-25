@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import time
 
+from app.common.exceptions import ExternalServiceError, ServiceUnavailableError
 from app.common.llm import LLMMessage, get_llm_client
 from app.config import settings
 
@@ -17,9 +18,14 @@ QUEST_SYSTEM_PROMPT = """
 - 严格根据用户的当前主题/赛季剧情包装,所有 lore 必须贴合主题
 - 描述必须具体可执行,孩子能照着做
 - XP 范围 50-500,难度匹配孩子等级
+- difficulty 是 1-5 的整数(1 最易、5 最难),按任务的实际强度建议
+- time_deposit 是孩子接取任务时冻结的时间币押金,取 >= 0 的整数
 - 输出必须是合法 JSON,字段齐全
 """.strip()
 
+
+# xp_reward 的建议缺省值:与 TaskTemplateCreate / 模板模型同源的平台默认值。
+DEFAULT_QUEST_XP = 50
 
 QUEST_JSON_SCHEMA = {
     "type": "object",
@@ -30,15 +36,27 @@ QUEST_JSON_SCHEMA = {
         "xp_reward": {"type": "integer"},
         "type": {"type": "string", "enum": ["DAILY", "CHALLENGE", "CHAIN", "TIMED", "COOP"]},
         "reminder_message": {"type": "string"},
+        # DEV-60 加法扩展:任务建议需要的两个数值字段。既有调用方(旧 AI 生成器
+        # UI)只读 title/description/lore_snippet/xp_reward/type 并忽略多出来的
+        # 字段,故这里只增不改;`required` 保持原样,老接口契约不变。
+        "difficulty": {"type": "integer", "minimum": 1, "maximum": 5},
+        "time_deposit": {"type": "integer", "minimum": 0},
     },
     "required": ["title", "description", "lore_snippet", "xp_reward", "type"],
 }
 
+# 「任务要点 → 任务建议」(DEV-60,docs/08 §6C)专用:在公共 schema 上把两个新
+# 数值字段也列为必需,让模型稳定输出 —— 该接口的契约保证这 5 个字段齐全。
+BRIEF_QUEST_JSON_SCHEMA = {
+    **QUEST_JSON_SCHEMA,
+    "required": [*QUEST_JSON_SCHEMA["required"], "difficulty", "time_deposit"],
+}
 
-async def generate_quest(
-    *, topic: str, child_level: int, narrative_context: str,
+
+async def _generate_quest_data(
+    *, topic: str, child_level: int, narrative_context: str, json_schema: dict,
 ) -> dict:
-    """根据现实任务主题,生成 RPG 包装的 quest 内容。"""
+    """调一次 LLM 产出 quest JSON(`generate_quest` 与 `generate_quest_from_brief` 共用)。"""
     client = get_llm_client()
     user_prompt = (
         f"现实任务:{topic}\n"
@@ -51,9 +69,117 @@ async def generate_quest(
             LLMMessage(role="system", content=QUEST_SYSTEM_PROMPT),
             LLMMessage(role="user", content=user_prompt),
         ],
-        json_schema=QUEST_JSON_SCHEMA,
+        json_schema=json_schema,
     )
     return resp.data
+
+
+async def generate_quest(
+    *, topic: str, child_level: int, narrative_context: str,
+) -> dict:
+    """根据现实任务主题,生成 RPG 包装的 quest 内容。
+
+    行为与契约不变(DEV-60):schema 只是加法扩展,返回值仍原样透传 LLM 输出,
+    字段补齐校验由前端做(`packages/admin/src/services/api/modules/ai.ts`)。
+    """
+    return await _generate_quest_data(
+        topic=topic,
+        child_level=child_level,
+        narrative_context=narrative_context,
+        json_schema=QUEST_JSON_SCHEMA,
+    )
+
+
+# ---- 任务要点 → 任务建议(DEV-60,docs/08 §6C)-----------------------------
+
+
+def _coerce_int(value, *, default: int, minimum: int, maximum: int | None = None) -> int:
+    """把 LLM 给的数值收敛到契约区间:缺失/非整数取 default,越界则 clamp。"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    if number < minimum:
+        return minimum
+    if maximum is not None and number > maximum:
+        return maximum
+    return number
+
+
+def normalize_quest_suggestion(data, *, deposit_cap: int | None = None) -> dict:
+    """把 LLM 的 quest JSON 收敛成「任务建议」出参(docs/08 §6C)。
+
+    出参恒为 5 个字段:title / description / xp_reward / difficulty /
+    time_deposit。LLM 输出没有强 schema 约束,所以这里做**确定性收敛**而不是
+    照抄,保证接口契约成立:
+
+    - title / description 缺失或为空 -> 建议不可用,抛 502 `external_service_error`;
+    - xp_reward 缺失 -> 平台默认 50(与模板默认值同源),越界 clamp 到 >= 0;
+    - difficulty 缺失 -> 1,clamp 到 1-5(与 `xp_service` 的 clamp 口径一致);
+    - time_deposit 缺失 -> 0,clamp 到 >= 0;给 `deposit_cap` 时再按当日配额封顶
+      (与 `coin_service.deposit_cap`、docs/08 §6B 的 preview-deposit 同一口径)。
+
+    这几个数字只是**渲染建议**,用户会在表单里确认或改写,所以缺字段取中性值
+    比让整个预览失败更有用。
+    """
+    if not isinstance(data, dict):
+        raise ExternalServiceError("AI 返回结构非法,请重试")
+    title = str(data.get("title") or "").strip()
+    description = str(data.get("description") or "").strip()
+    if not title or not description:
+        raise ExternalServiceError("AI 返回内容不完整,请重试")
+    time_deposit = _coerce_int(data.get("time_deposit"), default=0, minimum=0)
+    if deposit_cap is not None:
+        time_deposit = min(time_deposit, max(0, deposit_cap))
+    return {
+        "title": title,
+        "description": description,
+        "xp_reward": _coerce_int(data.get("xp_reward"), default=DEFAULT_QUEST_XP, minimum=0),
+        "difficulty": _coerce_int(data.get("difficulty"), default=1, minimum=1, maximum=5),
+        "time_deposit": time_deposit,
+    }
+
+
+async def generate_quest_from_brief(
+    *,
+    brief: str,
+    child_level: int = 1,
+    narrative_context: str = "",
+    deposit_cap: int | None = None,
+    timeout_seconds: float = 15.0,
+) -> dict:
+    """「任务要点 → 任务建议」:复用 `generate_quest` 的提示词与 schema,只产出
+    渲染建议,**不写库**(docs/08 §6C)。
+
+    失败口径与批量叙事生成(docs/15 R12)对齐 —— 区别在于这里没有可回落的模板
+    文本,所以不做降级,而是给出**明确**的错误:
+
+    - 能力未启用 / 未配置 -> 原样 503 `service_unavailable`(沿用 DEV-9 降级约定,
+      由 `require_ai_capability` 抛出,不在这里翻译);
+    - 超时、HTTP 错误、非法 JSON、结构非法、核心字段缺失 -> 502
+      `external_service_error`,前端提示"稍后重试"。
+    """
+    try:
+        data = await asyncio.wait_for(
+            _generate_quest_data(
+                topic=brief,
+                child_level=child_level,
+                narrative_context=narrative_context,
+                json_schema=BRIEF_QUEST_JSON_SCHEMA,
+            ),
+            timeout=timeout_seconds,
+        )
+    except ServiceUnavailableError:
+        raise  # 能力未启用/未配置:保持 503,不误报成"调用失败"
+    except TimeoutError as exc:
+        raise ExternalServiceError(
+            f"AI 生成超时(超过 {timeout_seconds:g} 秒),请稍后重试"
+        ) from exc
+    except ExternalServiceError:
+        raise
+    except Exception as exc:  # 非法 JSON / 结构异常统一成明确的 502
+        raise ExternalServiceError(f"AI 生成失败: {exc}") from exc
+    return normalize_quest_suggestion(data, deposit_cap=deposit_cap)
 
 
 async def evaluate_proof(

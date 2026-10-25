@@ -1,18 +1,26 @@
-"""任务路由:模板 + 实例 CRUD 与状态机操作 + 任务证据(DEV-33 块 E)。"""
+"""任务路由:模板 + 实例 CRUD 与状态机操作 + 任务证据(DEV-33 块 E)。
+
+另承载 `/scn/tasks/generate-from-brief`(DEV-60):任务要点 -> 任务建议的
+AI 预览接口,只回渲染建议、不入库。
+"""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
+from app.common.exceptions import ValidationError
 from app.common.timeutil import today_bj
+from app.config import settings
 from app.deps import CurrentUser, DBSession, GuildMasterOnly
 from app.models.enums import TaskStatus, TaskType, UserRole
 from app.models.scn_task_proof import ScnTaskProof
 from app.schemas.common import ApiResponse, PageQuery, PageResult, ok
 from app.schemas.task import (
     TaskApproveRequest,
+    TaskBriefGenerateRequest,
+    TaskBriefSuggestion,
     TaskCreate,
     TaskDepositPreviewRequest,
     TaskDepositPreviewResponse,
@@ -24,17 +32,20 @@ from app.schemas.task import (
     TaskTuneRequest,
 )
 from app.services import (
+    ai_service,
     coin_service,
     coop_service,
     proof_service,
     season_service,
     task_service,
+    task_template_service,
 )
 from app.services.upload_service import build_access_url
 
 router = APIRouter(prefix="/scn/task-instances", tags=["scn-task-instances"])
 templates_router = APIRouter(prefix="/scn/task-templates", tags=["scn-task-templates"])
 proofs_router = APIRouter(prefix="/scn/task-proofs", tags=["scn-task-proofs"])
+brief_router = APIRouter(prefix="/scn/tasks", tags=["scn-tasks"])
 
 
 def _enum_value(value) -> str:
@@ -435,3 +446,79 @@ async def preview_deposit(
         # 仅在解析值真正被配额封顶截断时置位;恰好等于上限不算(封顶态是前端视觉提示依据)
         capped_by_allowance=capped,
     ))
+
+
+# ---- 任务要点 → 任务建议(DEV-60)-----------------------------------------
+
+
+async def _brief_narrative_context(
+    db, *, family_id: str, season_id: str | None,
+) -> str:
+    """叙事背景:显式 `season_id` 优先(按家庭校验归属),否则取**当前激活赛季**。
+
+    与生成器同一口径(DEV-50):"生成任务时结合**当季**背景"。没有赛季时返回
+    空串 —— `generate_quest` 的 `narrative_context` 本就允许为空(提示词里
+    主题为空时写通用冒险场景),预览不该因为没赛季就失败。
+    """
+    if season_id:
+        season = await season_service.get_season(db, season_id, family_id=family_id)
+        return season.narrative_context or ""
+    season = await season_service.get_active_season(db, family_id)
+    return (season.narrative_context or "") if season is not None else ""
+
+
+async def _brief_deposit_cap(db, *, family_id: str, target_date: date | None) -> int:
+    """建议押金的当日配额上限;`target_date` 缺省 = 家庭本地时区今天。
+
+    与 `preview-deposit` 的 `for_date` 同源(DEV-50):配额按**星期几**不同
+    (`ScnTimeConfig.exceptions`),拿今天的配额去卡未来日期会失真 —— 目标日期
+    变化时前端应重新请求。这里没有任务类型,所以只做与类型无关的配额封顶,
+    类型区间(clamp 到 DAILY/CHALLENGE/... 的 min/max)留给创建路径。
+    """
+    day = target_date or today_bj()
+    allowance = await coin_service.compute_daily_allowance(db, family_id, day)
+    return coin_service.deposit_cap(allowance)
+
+
+@brief_router.post(
+    "/generate-from-brief",
+    response_model=ApiResponse[TaskBriefSuggestion],
+    summary="按任务要点生成任务建议(AI 润色,不入库;父母)",
+)
+async def generate_from_brief(
+    body: TaskBriefGenerateRequest, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[TaskBriefSuggestion]:
+    """任务要点交给 LLM 润色成任务建议,反显回表单;**只返回建议,不落库**。
+
+    落库仍走既有创建路径(`POST /scn/task-templates` 或
+    `POST /scn/task-templates/{id}/generate`),由用户确认后再提交。
+
+    日期校验与 `POST /scn/task-templates/{id}/generate` 同口径(一律 `today_bj()`):
+    早于今天 / 超过 30 天 -> 422,避免给出一个创建路径必然拒绝的建议。
+    失败语义见 `ai_service.generate_quest_from_brief`:未配置 503,其余 502。
+    """
+    today = today_bj()
+    if body.target_date is not None:
+        if body.target_date < today:
+            raise ValidationError("目标日期不能早于今天")
+        if body.target_date > today + timedelta(
+            days=task_template_service.MANUAL_GENERATE_MAX_AHEAD_DAYS
+        ):
+            raise ValidationError(
+                f"目标日期最多提前 {task_template_service.MANUAL_GENERATE_MAX_AHEAD_DAYS} 天"
+            )
+
+    narrative_context = await _brief_narrative_context(
+        db, family_id=user.family_id, season_id=body.season_id,
+    )
+    deposit_cap = await _brief_deposit_cap(
+        db, family_id=user.family_id, target_date=body.target_date,
+    )
+    suggestion = await ai_service.generate_quest_from_brief(
+        brief=body.brief,
+        child_level=body.child_level,
+        narrative_context=narrative_context,
+        deposit_cap=deposit_cap,
+        timeout_seconds=settings.task_content.llm_timeout_seconds,
+    )
+    return ok(TaskBriefSuggestion(**suggestion))

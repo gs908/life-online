@@ -185,7 +185,7 @@
 
 > `ThemeId` 是**赛季主题枚举**（预设皮肤，前端 `constants/themes.ts` 对应渲染素材）；与第 7 节的动态主题样式 `ThemeStyle` 是两个概念。
 
-## 6. 任务 `/scn/task-instances`（路由器前缀 `/scn`，另承载 `/scn/task-templates`）
+## 6. 任务 `/scn/task-instances`（路由器前缀 `/scn`，另承载 `/scn/task-templates` 与 `/scn/tasks`）
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
@@ -384,6 +384,36 @@
 
 ---
 
+## 6C. 任务要点 → 任务建议（DEV-60，已实现）
+
+> 任务板「创建新任务」**未选模板**时，家长填「任务要点」、点「生成」：后端把要点交给 LLM 润色成任务建议**反显回表单**，家长确认后再走上面的创建路径落库。
+> 与 §6B 的分界：§6B 是「选模板 → 生成实例」（落库）；本节**只回渲染建议，不落库**。
+
+**`POST /scn/tasks/generate-from-brief`**（父母）
+
+请求体 **TaskBriefGenerateRequest** `{ brief: str（1–500）, season_id?: str, target_date?: "YYYY-MM-DD", child_level?: int = 1（1–200） }`（`extra="forbid"`：多传字段 422）
+
+- `brief` 即任务要点（`ai_service.generate_quest` 的 `topic`），与赛季无关的任务实质。
+- `season_id` 缺省 = **当前激活赛季**的 `narrative_context` 作为叙事背景；显式传入时按家庭校验归属（跨家庭一律 404）。无激活赛季不报错，按空主题处理。
+- `target_date` **只用于建议押金的当日配额封顶**（配额按星期几不同，见 §6B 的 `for_date` 口径），缺省 = 家庭本地时区今天（`today_bj()`）；日期校验与 §6B 的 `generate` 同口径：`< 今天` / `> 今天 + 30 天` → **422**。
+- `child_level` 只影响 LLM 的语气与难度建议。
+
+响应 `ApiResponse[TaskBriefSuggestion]`：`{ title, description, xp_reward, difficulty, time_deposit }` —— **恒为这 5 个字段**，且**不入库**（不产生模板/实例）。
+
+- `difficulty` 恒为 1–5 整数；`time_deposit` 恒为 `>= 0` 且已被**目标日配额**封顶，但**未**按任务类型区间 clamp —— 类型区间在创建路径解析（`coin_service.resolve_deposit`）。这三个数字只是建议，家长可改。
+- LLM 输出无强 schema 约束，故后端做**确定性收敛**（`ai_service.normalize_quest_suggestion`）：`title` / `description` 缺失或为空 → 502；`xp_reward` 缺失取 50、`difficulty` 缺失取 1、`time_deposit` 缺失取 0；越界一律 clamp。
+
+**失败口径**（与 docs/15 R12 同源；本接口没有可回落的模板文本，故**不降级**，只给明确错误）：
+
+| 情形 | HTTP | `error_code` |
+|------|------|--------------|
+| LLM 能力未启用 / 未配置 | 503 | `service_unavailable` |
+| 超时（`task_content.llm_timeout_seconds`）、HTTP 错误、返回非法 JSON、结构非法、`title`/`description` 缺失 | 502 | `external_service_error` |
+
+> 本接口是 §13 AI 生成能力的**任务侧封装**：复用 `generate_quest` 的提示词与 JSON schema（见 §13 的 `QUEST_JSON_SCHEMA` 说明），由 `ai_service.generate_quest_from_brief` 实现。前端本期（DEV-51 分支 B）**先不接**，按钮位置预留。
+
+---
+
 ## 7. 动态主题样式 `/scn/theme-styles`
 
 > 家庭级自定义主题（AI 生成 tokens/css_vars），区别于赛季 `ThemeId` 预设枚举。
@@ -501,7 +531,9 @@
 
 **GenerateQuestRequest** `{ topic: str（1–500）, child_level?: int = 1（1–200）, narrative_context?: str = "" }`
 → `data`（无静态类型，来自 LLM，schema 见 `ai_service.QUEST_JSON_SCHEMA`）：
-`{ title, description, lore_snippet, xp_reward, type: "DAILY|CHALLENGE|CHAIN|TIMED|COOP", reminder_message? }`
+`{ title, description, lore_snippet, xp_reward, type: "DAILY|CHALLENGE|CHAIN|TIMED|COOP", reminder_message?, difficulty?, time_deposit? }`
+
+> **DEV-60 schema 加法扩展**：`QUEST_JSON_SCHEMA` 新增 `difficulty`（1–5）与 `time_deposit`（`>= 0`）两个属性，system 提示词同步要求输出；**`required` 集合不变**（仍为 `title/description/lore_snippet/xp_reward/type`），本接口的既有契约与调用方行为不变（多出来的字段被忽略，前端 `generateQuest` 只做关键字段运行时校验）。这两个字段在「任务要点 → 任务建议」接口里被列为必需（`ai_service.BRIEF_QUEST_JSON_SCHEMA`），见 §6C。
 
 **EvaluateProofRequest** `{ task_title: str, image_data_url: str }`
 → `{ rating: 1–5, comment: str }`
