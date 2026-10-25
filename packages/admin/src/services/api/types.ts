@@ -563,6 +563,18 @@ export interface PrivilegeRead {
   is_active: boolean;
 }
 
+/** POST /scn/privileges/templates 请求体（家庭级新建；`family_id` 由服务端取，恒 `is_system=false`） */
+export interface PrivilegeTemplateCreate {
+  level_required: number;
+  title: string;
+  description?: string;
+  icon?: string;
+  season_id?: string | null;
+}
+
+/** PATCH /scn/privileges/templates/{id} 请求体：仅提交需变更的字段 */
+export type PrivilegeTemplateUpdate = Partial<PrivilegeTemplateCreate>;
+
 export interface UserPrivilegeRead {
   id: string;
   family_id: string;

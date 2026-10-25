@@ -1,13 +1,19 @@
-"""特权路由:查询特权模板、已解锁特权与使用记录。"""
+"""特权路由:查询特权模板、已解锁特权与使用记录,以及家庭级模板维护。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
 from sqlalchemy import or_, select
 
-from app.deps import CurrentUser, DBSession
+from app.deps import CurrentUser, DBSession, GuildMasterOnly
 from app.models.scn_privilege_template import ScnPrivilegeTemplate
 from app.schemas.common import ApiResponse, ok
-from app.schemas.privilege import PrivilegeRead, UserPrivilegeRead, UserPrivilegeUseRequest
+from app.schemas.privilege import (
+    PrivilegeRead,
+    PrivilegeTemplateCreate,
+    PrivilegeTemplateUpdate,
+    UserPrivilegeRead,
+    UserPrivilegeUseRequest,
+)
 from app.schemas.redemption import RedemptionRead
 from app.services import privilege_service
 
@@ -70,6 +76,48 @@ async def get_tree(db: DBSession, user: CurrentUser) -> ApiResponse[list[Privile
         .order_by(ScnPrivilegeTemplate.level_required)
     )
     return ok([_to_privilege_read(p) for p in result.scalars().all()])
+
+
+@router.post(
+    "/templates",
+    response_model=ApiResponse[PrivilegeRead],
+    summary="新建家庭级权益模板(父母)",
+)
+async def create_privilege_template(
+    body: PrivilegeTemplateCreate, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[PrivilegeRead]:
+    template = await privilege_service.create_privilege_template(
+        db, family_id=user.family_id, payload=body,
+    )
+    return ok(_to_privilege_read(template))
+
+
+@router.patch(
+    "/templates/{template_id}",
+    response_model=ApiResponse[PrivilegeRead],
+    summary="修改家庭级权益模板(父母)",
+)
+async def update_privilege_template(
+    template_id: str, body: PrivilegeTemplateUpdate, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[PrivilegeRead]:
+    template = await privilege_service.update_privilege_template(
+        db, template_id=template_id, family_id=user.family_id, payload=body,
+    )
+    return ok(_to_privilege_read(template))
+
+
+@router.delete(
+    "/templates/{template_id}",
+    response_model=ApiResponse[dict],
+    summary="删除家庭级权益模板(父母)",
+)
+async def delete_privilege_template(
+    template_id: str, db: DBSession, user: GuildMasterOnly,
+) -> ApiResponse[dict]:
+    await privilege_service.delete_privilege_template(
+        db, template_id=template_id, family_id=user.family_id,
+    )
+    return ok({"deleted": True, "id": template_id})
 
 
 @router.get("/unlocks", response_model=ApiResponse[list[UserPrivilegeRead]], summary="用户已解锁特权")
