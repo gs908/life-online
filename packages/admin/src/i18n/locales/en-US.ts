@@ -474,6 +474,8 @@ const enUS = {
     qualityRating: 'Quality Rating (Stars)',
     comment: 'Comment',
     commentPlaceholder: 'Great job!',
+    generateComment: 'Generate',
+    noImageForAi: 'No image proof yet — AI generation unavailable',
     approve: 'Approve & Grant XP',
     reject: 'Reject',
     rejectReason: 'Rejection reason (required)',

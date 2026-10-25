@@ -25,6 +25,7 @@ interface ProofViewItem {
  * proofs 为空时回退单值 proof_url（过渡字段 = 首个证据，兼容存量数据）。
  * AI 辅助评分走 POST /scn/ai/evaluate-proof，契约要求 image_data_url —— 只对首个图片证据送评，
  * 纯视频/无证据任务跳过 AI（评分只是辅助建议，失败不阻塞人工审核）。
+ * 打开弹窗不再自动调 LLM（DEV-66）：评语默认空，由「✨ 生成」按钮显式触发，避免驳回场景误用 AI 文案。
  *
  * 驳回（DEV-57）：与「评语」分开的独立输入框 —— 评语会被 AI 评分预填，复用会让 AI 文案被当成驳回原因。
  * rejectComment 必填，为空时驳回按钮禁用。
@@ -54,6 +55,7 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
     [proofs],
   );
 
+  // 打开弹窗只重置表单；AI 评估改为「✨ 生成」手动触发（DEV-66），驳回场景不再隐式调用 LLM。
   useEffect(() => {
     if (isOpen && task) {
       setReviewRating(5);
@@ -61,43 +63,45 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
       setRejectComment('');
       setEvaluateError(null);
       setActiveIndex(0);
-
-      if (firstImageUrl) {
-        setIsEvaluating(true);
-        // 前端只持有证据 URL；evaluate-proof 契约要求 image_data_url，
-        // 取回图片转 data URL 再送评（评分只是辅助建议,失败不阻塞人工审核）
-        fetch(firstImageUrl)
-          .then(res => {
-            // 404/403（如预签名 URL 过期、dev 无反代）不能把错误页 HTML 当图片送评（review 🟡-2）
-            if (!res.ok) throw new Error(`proof fetch failed: ${res.status}`);
-            return res.blob();
-          })
-          .then(
-            blob =>
-              new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-              })
-          )
-          .then(image_data_url => api.ai.evaluateProof({ task_title: task.title, image_data_url }))
-          .then(res => {
-            setReviewRating(res.rating);
-            setReviewComment(res.comment);
-          })
-          .catch(err => {
-            // 503(能力未启用/未配置)单独提示,与 AddTaskModal 口径一致
-            if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
-              setEvaluateError(t('addTask.aiNotConfigured'));
-            } else {
-              setEvaluateError(t('reviewTask.evaluateFailed'));
-            }
-          })
-          .finally(() => setIsEvaluating(false));
-      }
     }
-  }, [isOpen, task, firstImageUrl, t]);
+  }, [isOpen, task]);
+
+  /** 「✨ 生成」：取回首图 → dataURL → 送评 → 回填评分与评语（失败不阻塞人工审核） */
+  const handleGenerate = useCallback(() => {
+    if (!task || !firstImageUrl || isEvaluating) return;
+    setIsEvaluating(true);
+    setEvaluateError(null);
+    // 前端只持有证据 URL；evaluate-proof 契约要求 image_data_url，取回图片转 data URL 再送评
+    fetch(firstImageUrl)
+      .then(res => {
+        // 404/403（如预签名 URL 过期、dev 无反代）不能把错误页 HTML 当图片送评（review 🟡-2）
+        if (!res.ok) throw new Error(`proof fetch failed: ${res.status}`);
+        return res.blob();
+      })
+      .then(
+        blob =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          })
+      )
+      .then(image_data_url => api.ai.evaluateProof({ task_title: task.title, image_data_url }))
+      .then(res => {
+        setReviewRating(res.rating);
+        setReviewComment(res.comment);
+      })
+      .catch(err => {
+        // 503(能力未启用/未配置)单独提示,与 AddTaskModal 口径一致
+        if (err instanceof ApiError && err.errorCode === 'service_unavailable') {
+          setEvaluateError(t('addTask.aiNotConfigured'));
+        } else {
+          setEvaluateError(t('reviewTask.evaluateFailed'));
+        }
+      })
+      .finally(() => setIsEvaluating(false));
+  }, [task, firstImageUrl, isEvaluating, t]);
 
   const goPrev = useCallback(
     () => setActiveIndex((i) => (i - 1 + proofs.length) % proofs.length),
@@ -235,7 +239,22 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
 
             <div>
               <label className="text-sm font-bold text-slate-700 block mb-1">{t('reviewTask.comment')}</label>
-              <input className="w-full border p-2 rounded" value={reviewComment} onChange={e => setReviewComment(e.target.value)} placeholder={t('reviewTask.commentPlaceholder')} />
+              <div className="flex items-center gap-2">
+                <input className="flex-1 border p-2 rounded" value={reviewComment} onChange={e => setReviewComment(e.target.value)} placeholder={t('reviewTask.commentPlaceholder')} />
+                <button
+                  type="button"
+                  onClick={handleGenerate}
+                  disabled={isEvaluating || !firstImageUrl}
+                  title={!firstImageUrl ? t('reviewTask.noImageForAi') : undefined}
+                  className="shrink-0 flex items-center gap-1 px-3 py-2 rounded border border-purple-300 text-purple-700 font-bold text-sm hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Sparkles size={14} />
+                  {t('reviewTask.generateComment')}
+                </button>
+              </div>
+              {!firstImageUrl && (
+                <p className="text-xs text-slate-500 mt-1">{t('reviewTask.noImageForAi')}</p>
+              )}
             </div>
 
             {/* 驳回原因（DEV-57）：独立输入框，与 AI 预填的「评语」分离；必填，空则驳回按钮禁用 */}

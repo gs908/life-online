@@ -480,6 +480,8 @@ const zhCN = {
     qualityRating: '质量评分（星级）',
     comment: '评语',
     commentPlaceholder: '做得很棒！',
+    generateComment: '生成',
+    noImageForAi: '暂无图片凭证，无法使用 AI 生成评语',
     approve: '批准并发放 XP',
     reject: '驳回重做',
     rejectReason: '驳回原因（必填）',
