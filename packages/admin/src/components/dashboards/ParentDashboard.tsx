@@ -239,6 +239,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
               <h3 className="text-lg font-bold text-blue-800 mb-2 flex items-center gap-2">
                 <Sparkles size={18} /> {t('parent.currentlyAdventuring')}
               </h3>
+              {/* 与下方「待审核」网格同构，卡片只占第一格 —— 单格 grid 是为了对齐列宽，不是漏了第二张卡 */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <QuestCard
                   task={activeQuest}
