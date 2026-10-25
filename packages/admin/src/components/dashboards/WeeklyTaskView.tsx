@@ -4,6 +4,7 @@ import type { TaskRead } from '../../services/api';
 import type { SeasonTheme } from '../../types';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import { localToday } from '../../utils/date';
+import TaskDetailModal from '../modals/TaskDetailModal';
 
 /** 多孩子模式下的孩子选项（家长端）：头像 + 名字用于区分任务归属 */
 export interface WeeklyViewChild {
@@ -138,11 +139,13 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
   seasonStart,
   seasonEnd,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const today = localToday();
   const isLg = useIsLg();
 
   const [weekOffset, setWeekOffset] = useState(0);
+  /** 点击任务 chip / 移动端卡片后展示的只读详情（孩子端/家长端共用） */
+  const [selectedTask, setSelectedTask] = useState<TaskRead | null>(null);
 
   // 家长端白底卡片用固定深色文字；孩子端跟随赛季主题色（深色主题底）
   const isLight = variant === 'light';
@@ -193,6 +196,14 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
     monday.setDate(todayDate.getDate() - ((dayOfWeek + 6) % 7) + weekOffset * 7);
     return monday;
   }, [weekOffset]);
+
+  // 周范围（含月份）：跨月周只看日头数字看不出月份，标题区必须给出完整区间
+  const weekRangeLabel = useMemo(() => {
+    const end = new Date(weekStart);
+    end.setDate(weekStart.getDate() + 6);
+    const fmt = (d: Date) => d.toLocaleDateString(i18n.language, { month: 'long', day: 'numeric' });
+    return t('weeklyView.weekRange', { start: fmt(weekStart), end: fmt(end) });
+  }, [weekStart, i18n.language, t]);
 
   const days: DayCell[] = useMemo(() => {
     const result: DayCell[] = [];
@@ -288,11 +299,14 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
   return (
     <div className="space-y-4">
       {/* Week Header */}
-      <div className="flex items-center justify-between">
-        <h3 className={`text-lg font-bold flex items-center gap-2 ${headerTextClass} drop-shadow-sm`}>
-          <Calendar size={18} /> {t('weeklyView.title')}
-        </h3>
-        <div className="flex items-center gap-1">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className={`text-lg font-bold flex items-center gap-2 ${headerTextClass} drop-shadow-sm`}>
+            <Calendar size={18} /> {t('weeklyView.title')}
+          </h3>
+          <p className={`text-xs mt-0.5 ${headerTextClass} opacity-80`}>{weekRangeLabel}</p>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={prevWeek}
             disabled={!canGoPrev}
@@ -305,7 +319,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
             onClick={goToCurrentWeek}
             className={`px-2 py-1 text-xs font-bold rounded-lg transition-colors ${currentWeekBtnClass}`}
           >
-            {t('weeklyView.currentWeek')}
+            {weekOffset === 0 ? t('weeklyView.currentWeek') : t('weeklyView.backToCurrentWeek')}
           </button>
           <button
             onClick={nextWeek}
@@ -369,7 +383,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
               }`}
             >
               <div className="text-xs opacity-75">{day.label}</div>
-              <div className="text-sm">{new Date(day.date).getDate()}</div>
+              <div className="text-sm">{day.date.slice(5).replace('-', '/')}</div>
             </div>
           ))}
         </div>
@@ -392,7 +406,17 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                   {day.tasks.map((task) => (
                     <div
                       key={task.id}
-                      className={`rounded-lg border-l-2 p-1.5 text-xs cursor-default transition-all hover:scale-[1.02] ${getTypeBadgeColor(task.type)}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedTask(task)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelectedTask(task);
+                        }
+                      }}
+                      aria-label={t('taskDetail.openLabel', { title: task.title })}
+                      className={`rounded-lg border-l-2 p-1.5 text-xs cursor-pointer transition-all hover:scale-[1.02] ${getTypeBadgeColor(task.type)}`}
                       title={`${task.title} (${task.type})`}
                     >
                       <div className="flex items-center gap-1">
@@ -464,9 +488,16 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                 {day.tasks.map((task) => (
                   <div
                     key={task.id}
-                    className={`rounded-lg border-l-3 p-2 text-xs ${getTypeBadgeColor(task.type)}`}
+                    onClick={() => setSelectedTask(task)}
+                    className={`rounded-lg border-l-3 p-2 text-xs cursor-pointer ${getTypeBadgeColor(task.type)}`}
                   >
-                    <div className="flex items-center gap-2">
+                    {/* 标题行是真按钮：整卡可点（鼠标），键盘也能聚焦到这一条打开详情 */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTask(task)}
+                      aria-label={t('taskDetail.openLabel', { title: task.title })}
+                      className="flex w-full items-center gap-2 text-left"
+                    >
                       <span className={`w-2 h-2 rounded-full shrink-0 ${getStatusDot(task)}`} />
                       {renderChildBadge(task)}
                       <span className="font-bold flex-1">{task.title}</span>
@@ -476,7 +507,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                         </span>
                       )}
                       <span className="text-[10px] opacity-60">{t(`taskType.${task.type}`)}</span>
-                    </div>
+                    </button>
                     {isRejectedTask(task) && task.review_comment && (
                       <div className="mt-1 text-red-700">
                         <span className="font-bold">{t('questCard.rejectReasonLabel')}</span>
@@ -489,7 +520,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                     )}
                     {task.status === 'AVAILABLE' && onAcceptAttempt && (
                       <button
-                        onClick={() => onAcceptAttempt(task.id)}
+                        onClick={(e) => { e.stopPropagation(); onAcceptAttempt(task.id); }}
                         className="mt-1.5 w-full bg-blue-600 text-white text-xs font-bold py-1 rounded hover:bg-blue-700 active:scale-95 transition-all"
                       >
                         {t('questCard.accept')}
@@ -499,7 +530,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                       <div className="flex gap-1 mt-1.5">
                         {onAbandonCurrent && (
                           <button
-                            onClick={() => onAbandonCurrent(task.id)}
+                            onClick={(e) => { e.stopPropagation(); onAbandonCurrent(task.id); }}
                             className="flex-1 text-red-400 hover:text-red-600 text-xs font-bold py-1 rounded border border-red-200 hover:border-red-400 transition-colors"
                           >
                             {t('questCard.abandon')}
@@ -507,7 +538,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                         )}
                         {onSubmit && (
                           <button
-                            onClick={() => onSubmit(task.id)}
+                            onClick={(e) => { e.stopPropagation(); onSubmit(task.id); }}
                             className="flex-1 bg-green-600 text-white text-xs font-bold py-1 rounded hover:bg-green-700 active:scale-95 transition-all"
                           >
                             {t('questCard.submitProof')}
@@ -523,6 +554,13 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
         ))}
       </div>
       )}
+
+      {/* 只读任务详情（孩子端/家长端共用）：桌面 chip 与移动卡片共用同一 selectedTask */}
+      <TaskDetailModal
+        isOpen={selectedTask !== null}
+        onClose={() => setSelectedTask(null)}
+        task={selectedTask}
+      />
     </div>
   );
 };
