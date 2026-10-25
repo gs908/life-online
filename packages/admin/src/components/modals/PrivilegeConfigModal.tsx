@@ -171,7 +171,6 @@ const PrivilegeConfigModal: React.FC<PrivilegeConfigModalProps> = ({
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-sm text-slate-800 truncate">{tpl.title}</span>
                           {tpl.is_system && <span className="text-xs bg-slate-200 text-slate-500 px-1 rounded">{t('privilegeConfig.systemBadge')}</span>}
-                          {!tpl.is_active && <span className="text-xs bg-red-100 text-red-600 px-1 rounded">{t('privilegeConfig.inactiveBadge')}</span>}
                         </div>
                         <p className="text-xs text-slate-500 truncate">{tpl.description || '—'}</p>
                         <p className="text-xs text-slate-400 mt-0.5">{t('common.levelShort')} {tpl.level_required}</p>
@@ -239,6 +238,7 @@ const PrivilegeConfigModal: React.FC<PrivilegeConfigModalProps> = ({
                   type="text"
                   value={form.title}
                   onChange={e => handleFieldChange('title', e.target.value)}
+                  maxLength={64}
                   placeholder={t('privilegeConfig.titlePlaceholder')}
                   className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -249,6 +249,7 @@ const PrivilegeConfigModal: React.FC<PrivilegeConfigModalProps> = ({
                 <textarea
                   value={form.description}
                   onChange={e => handleFieldChange('description', e.target.value)}
+                  maxLength={256}
                   placeholder={t('privilegeConfig.descriptionPlaceholder')}
                   rows={2}
                   className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"

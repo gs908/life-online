@@ -312,7 +312,6 @@ const enUS = {
     descriptionPlaceholder: 'Describe the rules for using this privilege',
     levelRequired: 'Unlock Level',
     systemBadge: 'System',
-    inactiveBadge: 'Inactive',
     addNew: '+ New Privilege',
     edit: 'Edit',
     delete: 'Delete',

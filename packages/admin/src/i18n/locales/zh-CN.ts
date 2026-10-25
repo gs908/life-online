@@ -314,7 +314,6 @@ const zhCN = {
     descriptionPlaceholder: '说明该权益的使用规则',
     levelRequired: '解锁等级',
     systemBadge: '系统',
-    inactiveBadge: '未启用',
     addNew: '+ 新建权益',
     edit: '编辑',
     delete: '删除',
