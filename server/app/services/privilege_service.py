@@ -15,6 +15,7 @@ from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.common.timeutil import utcnow
 from app.schemas.privilege import PrivilegeTemplateCreate, PrivilegeTemplateUpdate
+from app.services import season_service
 
 
 def enum_value(value) -> str:
@@ -154,10 +155,23 @@ async def _get_scoped_template(
     return template
 
 
+async def _require_own_season(db: AsyncSession, *, season_id: str | None, family_id: str) -> None:
+    """模板可选关联的"来源赛季"须属于本家庭。
+
+    缺省 / 显式 `null` 表示不关联,放行;传了 id 就复用 `season_service.get_season`
+    的家庭口径校验 —— 不存在或属于别的家庭一律 404,既避免 FK 违约落到兜底
+    handler 变成 500,也堵住把模板挂到别人家庭赛季上的越权引用。
+    """
+    if season_id is None:
+        return
+    await season_service.get_season(db, season_id, family_id=family_id)
+
+
 async def create_privilege_template(
     db: AsyncSession, *, family_id: str, payload: PrivilegeTemplateCreate,
 ) -> ScnPrivilegeTemplate:
     """新建家庭级权益模板;恒为 `is_system=False`。"""
+    await _require_own_season(db, season_id=payload.season_id, family_id=family_id)
     template = ScnPrivilegeTemplate(
         family_id=family_id,
         season_id=payload.season_id,
@@ -180,7 +194,18 @@ async def update_privilege_template(
     template = await _get_scoped_template(db, template_id=template_id, family_id=family_id)
     if template.is_system:
         raise PermissionDeniedError("系统权益模板不可修改")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+
+    patch = payload.model_dump(exclude_unset=True)
+    # 显式传 null 是"客户端可控输入",不能让它写进 nullable=False 列再触发
+    # IntegrityError(→500);这里直接判 422。`season_id` 可空,单独放行以保留
+    # "清空来源赛季"的能力。
+    for key in ("level_required", "title", "description", "icon", "is_active"):
+        if key in patch and patch[key] is None:
+            raise ValidationError(f"字段 {key} 不能为空")
+    if "season_id" in patch:
+        await _require_own_season(db, season_id=patch["season_id"], family_id=family_id)
+
+    for key, value in patch.items():
         setattr(template, key, value)
     await db.commit()
     await db.refresh(template)
