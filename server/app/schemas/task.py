@@ -420,6 +420,9 @@ class TaskRead(BaseModel):
     proofs: list[TaskProofRead] = Field(default_factory=list)
     rating: int | None
     review_comment: str | None = None
+    # 驳回展示态(DEV-56 路线 2):驳回后实例仍停在 IN_PROGRESS,后端单点派生,
+    # 前端只消费本字段,不各自重算规则。派生口径见 `api/v1/tasks.py:_to_read`。
+    rejected: bool = False
     xp_awarded: int | None = None
     coin_delta: int = 0
     abandon_count_at_submit: int = 0

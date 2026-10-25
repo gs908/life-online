@@ -124,6 +124,19 @@ def _to_read(
         )
         for p in getattr(t, "participants", [])
     ]
+    # 驳回展示态单点派生(DEV-56 路线 2):驳回后实例仍停在 IN_PROGRESS,与普通
+    # 进行中任务行为完全等价(`UNCONSUMED_STATUSES` / 过期 job / COOP 子状态均
+    # 零改动),唯一差异在展示——故不做真状态,只在读取口径派生。
+    # 不变式:`review_comment` 的四处写入中,approve 两处必转 COMPLETED、逐人确认
+    # 处要求目标参与者 SUBMITTED(其存在 ⟹ `submitted_at` 非空),而 `submitted_at`
+    # 仅 `submit_task` 置值、仅 `reject_task` 清空 ⇒ "IN_PROGRESS + 有评语 + 无提交
+    # 时间"只可能来自驳回。用 `is not None`(而非非空串)以免家长留空评语驳回时
+    # 孩子端看不到驳回态。
+    rejected = (
+        t.status == TaskStatus.IN_PROGRESS
+        and t.review_comment is not None
+        and t.submitted_at is None
+    )
     return TaskRead(
         id=t.id,
         family_id=t.family_id,
@@ -152,6 +165,7 @@ def _to_read(
         proofs=proof_reads,
         rating=t.rating,
         review_comment=t.review_comment,
+        rejected=rejected,
         xp_awarded=t.xp_awarded,
         coin_delta=t.coin_delta,
         abandon_count_at_submit=t.abandon_count_at_submit,

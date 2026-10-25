@@ -471,6 +471,11 @@ async def start_task(
     task.status = TaskStatus.IN_PROGRESS
     task.assignee_child_id = child.id
     task.started_at = utcnow()
+    # DEV-56:AVAILABLE 态的 review_comment 只可能是「驳回 → 放弃 → 重新接取」的
+    # 残留(abandon_task 退回 AVAILABLE 时不清理它)。不复位会让本轮全新接取的
+    # 任务被 `_to_read` 误判为驳回态、标红并展示上一轮原因——target_child_id
+    # 为空时,接取者换人还会看到**前一个孩子**的驳回原因。
+    task.review_comment = None
 
     if coop_service.is_coop(task):
         task.participants.append(ScnTaskParticipant(
@@ -1095,7 +1100,10 @@ async def reject_task(
         raise ConflictError(f"当前状态 {_enum_value(task.status)},无法驳回")
 
     task.status = TaskStatus.IN_PROGRESS
-    task.review_comment = comment
+    # DEV-56:`rejected` 派生以 `review_comment is not None` 判定,故不带 comment
+    # 的非前端调用(前端已做必填,这是跨调用方兜底)必须落空串而非 None,否则
+    # 孩子端完全看不到驳回态——正是本 issue 要修的症状。
+    task.review_comment = comment or ""
     task.submitted_at = None
 
     if coop_service.is_coop(task):
