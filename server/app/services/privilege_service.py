@@ -14,6 +14,7 @@ from app.models.scn_privilege_use import ScnPrivilegeUse
 from app.models.sys_account import SysAccount
 from app.models.sys_child import SysChild
 from app.common.timeutil import utcnow
+from app.schemas.privilege import PrivilegeTemplateCreate, PrivilegeTemplateUpdate
 
 
 def enum_value(value) -> str:
@@ -134,3 +135,68 @@ async def use_privilege(
     await db.commit()
     await db.refresh(rec)
     return rec
+
+
+async def _get_scoped_template(
+    db: AsyncSession, *, template_id: str, family_id: str,
+) -> ScnPrivilegeTemplate:
+    """取模板并做家庭隔离校验。
+
+    - 不存在 / 属于别的家庭 → 404(不泄露模板是否存在于别的家庭,与赛季同口径);
+    - 系统模板(`family_id IS NULL`)对本家庭"可见",不在此拦,交由写操作各自
+      判定 `is_system` 保护。
+    """
+    template = await db.get(ScnPrivilegeTemplate, template_id)
+    if template is None:
+        raise NotFoundError(f"权益模板 {template_id} 不存在")
+    if template.family_id is not None and template.family_id != family_id:
+        raise NotFoundError(f"权益模板 {template_id} 不存在")
+    return template
+
+
+async def create_privilege_template(
+    db: AsyncSession, *, family_id: str, payload: PrivilegeTemplateCreate,
+) -> ScnPrivilegeTemplate:
+    """新建家庭级权益模板;恒为 `is_system=False`。"""
+    template = ScnPrivilegeTemplate(
+        family_id=family_id,
+        season_id=payload.season_id,
+        level_required=payload.level_required,
+        title=payload.title,
+        description=payload.description,
+        icon=payload.icon,
+        is_system=False,
+        is_active=payload.is_active,
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+    return template
+
+
+async def update_privilege_template(
+    db: AsyncSession, *, template_id: str, family_id: str, payload: PrivilegeTemplateUpdate,
+) -> ScnPrivilegeTemplate:
+    template = await _get_scoped_template(db, template_id=template_id, family_id=family_id)
+    if template.is_system:
+        raise PermissionDeniedError("系统权益模板不可修改")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(template, key, value)
+    await db.commit()
+    await db.refresh(template)
+    return template
+
+
+async def delete_privilege_template(
+    db: AsyncSession, *, template_id: str, family_id: str,
+) -> None:
+    """删除家庭级权益模板。
+
+    模板删除会级联删除孩子的解锁记录(`scn_privilege_unlock` CASCADE);历史
+    使用记录保留(`scn_privilege_use.privilege_template_id` SET NULL)。
+    """
+    template = await _get_scoped_template(db, template_id=template_id, family_id=family_id)
+    if template.is_system:
+        raise PermissionDeniedError("系统权益模板不可删除")
+    await db.delete(template)
+    await db.commit()
