@@ -89,6 +89,8 @@ const zhCN = {
     submitProof: '提交凭证',
     review: '审核',
     verified: '已验证',
+    completedOn: '完成 {{date}}',
+    submittedOn: '提交 {{date}}',
     rejectReasonLabel: '驳回原因：',
     rejectResubmitHint: '请修改后重新提交凭证。',
   },

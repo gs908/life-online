@@ -91,6 +91,15 @@ function isRejectedTask(task: TaskRead): boolean {
   return task.status === 'IN_PROGRESS' && !!task.rejected;
 }
 
+/**
+ * 已完成任务的完成日 MM-DD（DEV-65 块 B）：优先实际完成时间，回退逻辑日。
+ * 同一模板的每日实例标题完全相同，带上完成日才能在周视图里区分。
+ */
+function completedDateMMDD(task: TaskRead): string | null {
+  const raw = task.completed_at ?? task.generated_for_date;
+  return raw ? raw.slice(5, 10) : null;
+}
+
 function getStatusDot(task: TaskRead) {
   if (isRejectedTask(task)) return 'bg-red-500';
   switch (task.status) {
@@ -399,6 +408,9 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task)}`} />
                         {renderChildBadge(task)}
                         <span className="font-bold truncate flex-1 leading-tight">{task.title}</span>
+                        {task.status === 'COMPLETED' && completedDateMMDD(task) && (
+                          <span className="shrink-0 text-[9px] font-bold opacity-70">{completedDateMMDD(task)}</span>
+                        )}
                         {isRejectedTask(task) && (
                           <span className="shrink-0 text-[9px] font-bold text-red-700 bg-red-100 rounded px-1">
                             {t('taskStatus.REJECTED')}
@@ -470,6 +482,9 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                       <span className={`w-2 h-2 rounded-full shrink-0 ${getStatusDot(task)}`} />
                       {renderChildBadge(task)}
                       <span className="font-bold flex-1">{task.title}</span>
+                      {task.status === 'COMPLETED' && completedDateMMDD(task) && (
+                        <span className="shrink-0 text-[10px] font-bold opacity-60">{completedDateMMDD(task)}</span>
+                      )}
                       {isRejectedTask(task) && (
                         <span className="shrink-0 text-[10px] font-bold text-red-700 bg-red-100 rounded px-1.5">
                           {t('taskStatus.REJECTED')}

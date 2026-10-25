@@ -89,6 +89,8 @@ const enUS = {
     submitProof: 'Submit Proof',
     review: 'Review',
     verified: 'Verified',
+    completedOn: 'Completed {{date}}',
+    submittedOn: 'Submitted {{date}}',
     rejectReasonLabel: 'Rejection reason: ',
     rejectResubmitHint: 'Please revise and resubmit your proof.',
   },
