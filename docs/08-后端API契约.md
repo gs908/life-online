@@ -274,7 +274,7 @@
 - **`template_id = null` 的读取语义**：该实例不由模板生成。无模板可穿读 → `type` 回落 `DAILY`，`category / required_start_time / reminder_message / estimated_minutes` 为 `null`（`reminder_minutes_before` 默认 15）。不参与实例池（无触发规则、不跨天顺延）、无链式。审核/结算/过期路径只读实例自身列（押金 `time_deposit`、难度快照 `difficulty`），**不受影响**。
 - **生效字段**：`title`、`description`、`lore_snippet`、`xp_reward`、`difficulty`、`time_deposit`（缺省走 `resolve_deposit`，封顶按**目标日**配额）、`target_date`、`target_child_id`、`season_id`（仅作归属校验；实例赛季取创建当时的**激活赛季**，无激活赛季 409）、`deadline`/`expire_at`（实例截止）。
 - **`target_date`** = 实例逻辑日（`generated_for_date`），缺省今天，`< 今天` 422，`> 今天 + 30 天` 422（与手动生成同一上界）。写入后自动继承「未来实例不可见 / 不可接取」边界；同日可建**多条**（`NULL` 不撞 `UNIQUE(template_id, generated_for_date)`）。
-- **模板级字段一律 422**（不静默丢弃）：`triggers` 非空、`library_id`、`type != DAILY`、`timed_mode != NONE`、`chain_key/chain_order/chain_total`。`target_date` 出现在 `ephemeral=false` 的旧路径上同样 422。
+- **模板级字段一律 422**（不静默丢弃）：`triggers` 非空、`library_id`、`type != DAILY`、`timed_mode != NONE`、`chain_key/chain_order/chain_total`、`estimated_minutes`（会经 `resolve_deposit` 改落库押金，但实例无该列、响应无法回显 → 押金请显式用 `time_deposit`）。`target_date` 出现在 `ephemeral=false` 的旧路径上同样 422。
 - **不落库的模板级字段**（实例无对应列，故不生效）：`reminder_message`/`reminder_minutes_before`（阅读端 `reminder_message` 恒为 `null`）、`content_mode`/`content_brief`（不经生成器，`content_source` 恒为 `TEMPLATE`）、`category`、`required_start_time`、`is_active`、`pool_policy`。前端临时任务分支无需发送这些字段。
 - 响应即普通 **TaskRead**（`template_id: null`、`generated_for_date` = 逻辑日、`content_source: "TEMPLATE"`）。
 

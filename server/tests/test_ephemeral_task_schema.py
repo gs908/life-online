@@ -32,10 +32,21 @@ def test_ephemeral_rejects_template_scoped_fields():
         {"type": "CHALLENGE"},
         {"timed_mode": "DEADLINE", "deadline_time": "20:00"},
         {"chain_key": "c1", "chain_total": 2},
+        {"estimated_minutes": 60},
     ]
     for over in cases:
         with pytest.raises(ValidationError):
             TaskCreate.model_validate({"title": "临时任务", "ephemeral": True, **over})
+
+
+def test_ephemeral_rejects_estimated_minutes_that_cannot_be_echoed():
+    """`estimated_minutes` 会改落库押金却无法回显(实例无该列),故显式 422。
+
+    旧路径(ephemeral=false)照旧接受 —— 那里模板行装得下这个字段。"""
+    with pytest.raises(ValidationError, match="estimated_minutes"):
+        TaskCreate.model_validate({"title": "临时任务", "ephemeral": True, "estimated_minutes": 60})
+    legacy = TaskCreate.model_validate({"title": "旧路径", "estimated_minutes": 60})
+    assert legacy.estimated_minutes == 60
 
 
 def test_target_date_only_valid_for_ephemeral():

@@ -352,6 +352,11 @@ class TaskCreate(TaskTemplateCreate):
             raise ValueError("临时任务为一次性任务,不支持时间窗(timed_mode);截止请用 deadline/expire_at")
         if self.chain_key is not None or self.chain_order != 1 or self.chain_total != 1:
             raise ValueError("临时任务不支持链式(chain_key/chain_order/chain_total)")
+        # `estimated_minutes` 会经 `resolve_deposit` 改变落库押金,但实例无该列,
+        # `TaskRead.estimated_minutes` 恒为 null —— 家长按 60 分钟算出押金、响应却
+        # 说没设时长,是"生效了却说不清"的坏契约。押金请显式用 `time_deposit`。
+        if self.estimated_minutes is not None:
+            raise ValueError("临时任务不支持 estimated_minutes(实例无该字段,无法回显);押金请直接用 time_deposit")
         return self
 
 
