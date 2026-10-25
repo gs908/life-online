@@ -715,7 +715,7 @@ const App: React.FC = () => {
         isOpen={isPrivilegeConfigOpen}
         onClose={() => setIsPrivilegeConfigOpen(false)}
         templates={privilegeTemplates}
-        onSaved={(next) => setPrivilegeTemplates(next)}
+        onSaved={loadPrivileges}
         onToast={showToast}
       />
     </div>
