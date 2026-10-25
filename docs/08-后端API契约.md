@@ -275,6 +275,7 @@
 - **生效字段**：`title`、`description`、`lore_snippet`、`xp_reward`、`difficulty`、`time_deposit`（缺省走 `resolve_deposit`，封顶按**目标日**配额）、`target_date`、`target_child_id`、`season_id`（仅作归属校验；实例赛季取创建当时的**激活赛季**，无激活赛季 409）、`deadline`/`expire_at`（实例截止）。
 - **`target_date`** = 实例逻辑日（`generated_for_date`），缺省今天，`< 今天` 422，`> 今天 + 30 天` 422（与手动生成同一上界）。写入后自动继承「未来实例不可见 / 不可接取」边界；同日可建**多条**（`NULL` 不撞 `UNIQUE(template_id, generated_for_date)`）。
 - **模板级字段一律 422**（不静默丢弃）：`triggers` 非空、`library_id`、`type != DAILY`、`timed_mode != NONE`、`chain_key/chain_order/chain_total`。`target_date` 出现在 `ephemeral=false` 的旧路径上同样 422。
+- **不落库的模板级字段**（实例无对应列，故不生效）：`reminder_message`/`reminder_minutes_before`（阅读端 `reminder_message` 恒为 `null`）、`content_mode`/`content_brief`（不经生成器，`content_source` 恒为 `TEMPLATE`）、`category`、`required_start_time`、`is_active`、`pool_policy`。前端临时任务分支无需发送这些字段。
 - 响应即普通 **TaskRead**（`template_id: null`、`generated_for_date` = 逻辑日、`content_source: "TEMPLATE"`）。
 
 **TaskSubmitRequest** `{ proof_object_keys: string[] }`（块 E 起多证据；旧字段 `proof_object_key?: str` 过渡保留，等价单元素列表）— **不是 base64**：先循环 `POST /sys/uploads`（purpose=`task_proof`，建议带同一 `task_id`，DEV-30 起 key 含任务实例标识）逐个拿 `object_key`，再一次提交全部 keys。逐个校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`、content-type 可推导 kind、未被其他任务占用（`sys_upload.task_instance_id` 或既有 `scn_task_proof` 行任一命中即 422，防 local 模式下用任意字符串引用/探测他人对象）；任何一个不合法**整单 422**，不留半提交状态。数量上限 `upload.max_proof_files`（默认 9），重复 key / 空列表 422。提交成功时按所选集合整体落 `scn_task_proof` 行：新 key 建行、本任务已软删的 key 复活、未再携带的旧证据软删（提交即"当前所选集合"）；并把未绑定的凭证回填 `task_instance_id`。
