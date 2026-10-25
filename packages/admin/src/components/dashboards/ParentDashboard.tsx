@@ -227,9 +227,11 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
               tasks={completedTasks}
               currentTheme={currentTheme}
               variant="light"
-              children={childOptions}
+              childOptions={childOptions}
               selectedChildId={selectedChildId}
               onChildSelected={setSelectedChildId}
+              seasonStart={activeSeason?.start_date ?? null}
+              seasonEnd={activeSeason?.end_date ?? null}
             />
           </div>
 

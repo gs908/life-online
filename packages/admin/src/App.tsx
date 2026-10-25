@@ -514,6 +514,7 @@ const App: React.FC = () => {
                 privilegeTemplates={privilegeTemplates}
                 unlockedTemplateIds={privilegeUnlocks.map(u => u.privilege_template_id)}
                 privilegesLoading={privilegesLoading}
+                activeSeason={activeSeason}
                 onAcceptAttempt={handleAcceptAttempt}
                 onSubmit={(id) => { setSelectedTaskId(id); setIsSubmitModalOpen(true); }}
                 onAbandonCurrent={handleAbandonCurrent}

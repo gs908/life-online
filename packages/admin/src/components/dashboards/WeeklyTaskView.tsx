@@ -32,11 +32,18 @@ interface WeeklyTaskViewProps {
   onAcceptAttempt?: (id: string) => void;
   onSubmit?: (id: string) => void;
   onAbandonCurrent?: (id: string) => void;
-  /** 家长端多孩子模式：孩子列表。传了则启用头像区分与筛选栏（孩子端不传，行为不变） */
-  children?: WeeklyViewChild[];
+  /** 家长端多孩子模式：孩子选项列表。传了则启用头像区分与筛选栏（孩子端不传，行为不变） */
+  childOptions?: WeeklyViewChild[];
   /** 当前选中的孩子 ID；null = 显示全部 */
   selectedChildId?: string | null;
   onChildSelected?: (childId: string | null) => void;
+  /**
+   * 左右翻页的时间边界（赛季起止，YYYY-MM-DD 或 ISO 8601）。
+   * 左箭头不早于 seasonStart 所在周，右箭头不晚于 seasonEnd 所在周；
+   * 缺省（无激活赛季）= 该方向不设限，可自由翻页。跨赛季暂不支持。
+   */
+  seasonStart?: string | null;
+  seasonEnd?: string | null;
   /**
    * 标题/翻页控件的配色上下文。
    * - 'themed'（默认，孩子端）：跟随赛季主题色，背景为深色主题底；
@@ -90,16 +97,40 @@ function getStatusDot(status: string) {
   }
 }
 
+/** 状态图例顺序（与状态点颜色一一对应），按「图例只列出当前视图实际出现过的状态」筛选 */
+const STATUS_LEGEND: Array<{ key: string; dot: string }> = [
+  { key: 'AVAILABLE', dot: 'bg-green-400' },
+  { key: 'IN_PROGRESS', dot: 'bg-blue-400 animate-pulse' },
+  { key: 'PENDING_REVIEW', dot: 'bg-yellow-400' },
+  { key: 'COMPLETED', dot: 'bg-gray-400' },
+  { key: 'EXPIRED', dot: 'bg-red-300' },
+];
+
+/** Date → YYYY-MM-DD（本地时区口径，与 utils/date 的 localToday 一致） */
+function formatDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** 该日所在周的周一（YYYY-MM-DD）；入参接受 YYYY-MM-DD 或 ISO 8601，作为赛季起止的翻页边界 */
+function mondayOf(day: string): string {
+  const [y, m, d] = day.slice(0, 10).split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
+  return formatDay(dt);
+}
+
 const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
   tasks,
   currentTheme,
   onAcceptAttempt,
   onSubmit,
   onAbandonCurrent,
-  children,
+  childOptions,
   selectedChildId,
   onChildSelected,
   variant = 'themed',
+  seasonStart,
+  seasonEnd,
 }) => {
   const { t } = useTranslation();
   const today = localToday();
@@ -120,15 +151,15 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
       ? 'bg-white/20 hover:bg-white/30 text-white'
       : 'opacity-50 cursor-default';
 
-  // 多孩子模式：家长端传入 children 列表 + onChildSelected 时启用
-  const multiChild = Boolean(children && children.length > 0 && onChildSelected);
+  // 多孩子模式：家长端传入 childOptions 列表 + onChildSelected 时启用
+  const multiChild = Boolean(childOptions && childOptions.length > 0 && onChildSelected);
   const activeChildId = multiChild ? (selectedChildId ?? null) : null;
 
   const childMap = useMemo(() => {
     const map: Record<string, WeeklyViewChild> = {};
-    for (const c of children ?? []) map[c.childId] = c;
+    for (const c of childOptions ?? []) map[c.childId] = c;
     return map;
-  }, [children]);
+  }, [childOptions]);
 
   /** 任务归属的孩子（接取者优先，其次指派对象）；无归属或非多孩子模式返回 null */
   const childOf = (task: TaskRead): WeeklyViewChild | null => {
@@ -137,11 +168,13 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
     return id ? (childMap[id] ?? null) : null;
   };
 
-  // 多孩子模式下按 selectedChildId 在组件内过滤；孩子端（非多孩子）原样展示
+  // 多孩子模式下按 selectedChildId 在组件内过滤；孩子端（非多孩子）原样展示。
+  // 过滤口径与头像归属口径**保持一致**（assignee 优先、回退 target），
+  // 否则会出现「按 B 筛选，却带出一条挂 A 头像的任务」。
   const visibleTasks = useMemo(() => {
     if (!multiChild || activeChildId === null) return tasks;
     return tasks.filter(
-      (task) => task.assignee_child_id === activeChildId || task.target_child_id === activeChildId,
+      (task) => (task.assignee_child_id ?? task.target_child_id) === activeChildId,
     );
   }, [tasks, multiChild, activeChildId]);
 
@@ -160,7 +193,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekStart);
       d.setDate(weekStart.getDate() + i);
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const dateStr = formatDay(d);
       const dayLabels = [t('days.0'), t('days.1'), t('days.2'), t('days.3'), t('days.4'), t('days.5'), t('days.6')];
       result.push({
         date: dateStr,
@@ -220,7 +253,20 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
   const nextWeek = () => setWeekOffset(prev => prev + 1);
   const goToCurrentWeek = () => setWeekOffset(0);
 
-  const isPastWeek = weekOffset < 0;
+  // 左右翻页边界：不早于赛季开始所在周、不晚于赛季结束所在周。
+  // 历史/未来两方向都可一直翻，只是到赛季边界为止（跨赛季暂不支持）；
+  // 边界缺省（无激活赛季 / 赛季无结束日）则该方向不设限。
+  const weekStartStr = formatDay(weekStart);
+  const seasonStartWeek = useMemo(() => (seasonStart ? mondayOf(seasonStart) : null), [seasonStart]);
+  const seasonEndWeek = useMemo(() => (seasonEnd ? mondayOf(seasonEnd) : null), [seasonEnd]);
+  const canGoPrev = seasonStartWeek === null || weekStartStr > seasonStartWeek;
+  const canGoNext = seasonEndWeek === null || weekStartStr < seasonEndWeek;
+
+  // 图例只列出当前视图实际出现过的状态，避免只读视图里出现永远不出现的死条目
+  const presentStatuses = useMemo(
+    () => new Set(visibleTasks.map((task) => task.status)),
+    [visibleTasks],
+  );
 
   /** 多孩子模式下任务归属的小头像（16px），单孩子模式返回 null */
   const renderChildBadge = (task: TaskRead) => {
@@ -243,7 +289,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
         <div className="flex items-center gap-1">
           <button
             onClick={prevWeek}
-            disabled={isPastWeek}
+            disabled={!canGoPrev}
             className={`p-1.5 rounded-lg ${navBtnClass} disabled:opacity-30 disabled:cursor-not-allowed transition-colors`}
             aria-label={t('weeklyView.prevWeek')}
           >
@@ -257,6 +303,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
           </button>
           <button
             onClick={nextWeek}
+            disabled={!canGoNext}
             className={`p-1.5 rounded-lg ${navBtnClass} disabled:opacity-30 disabled:cursor-not-allowed transition-colors`}
             aria-label={t('weeklyView.nextWeek')}
           >
@@ -279,7 +326,7 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
           >
             {t('weeklyView.allChildren')}
           </button>
-          {children!.map((c) => {
+          {childOptions!.map((c) => {
             const selected = activeChildId === c.childId;
             return (
               <button
@@ -370,17 +417,12 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
               {t(`taskType.${type}`)}
             </span>
           ))}
-          <span className="ml-auto flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-green-400" /> {t('taskStatus.AVAILABLE')}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" /> {t('taskStatus.IN_PROGRESS')}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-yellow-400" /> {t('taskStatus.PENDING_REVIEW')}
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-gray-400" /> {t('taskStatus.COMPLETED')}
+          <span className="ml-auto flex flex-wrap items-center gap-3">
+            {STATUS_LEGEND.filter(({ key }) => presentStatuses.has(key)).map(({ key, dot }) => (
+              <span key={key} className="flex items-center gap-1">
+                <span className={`w-2 h-2 rounded-full ${dot}`} /> {t(`taskStatus.${key}`)}
+              </span>
+            ))}
           </span>
         </div>
       </div>
