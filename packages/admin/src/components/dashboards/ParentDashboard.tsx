@@ -26,9 +26,8 @@ interface ParentDashboardProps {
   onRetrySeasons: () => void;
   onOpenSeasonConfig: () => void;
   onViewHistory: () => void;
+  /** 任务板工具栏唯一入口：打开「创建新任务」弹窗（顶部选模板分两支） */
   onOpenAddModal: () => void;
-  /** 选模板 → 生成（契约 §6B）：任务板顶部入口（先选模板再填目标日期） */
-  onOpenGenerate: () => void;
   /** 微调已生成实例的难度/押金/经验值 */
   onTuneTask: (id: string) => void;
   /** 家庭本地时区的今天，YYYY-MM-DD：用于区分「已投放」与「已排期」 */
@@ -59,7 +58,6 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onOpenSeasonConfig,
   onViewHistory,
   onOpenAddModal,
-  onOpenGenerate,
   onTuneTask,
   today,
   onRecordUsage,
@@ -130,7 +128,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
             onClick={onOpenAddModal}
             className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/20"
           >
-            <Plus size={16} /> {t('addTask.title')}
+            <Plus size={16} /> {t('createTask.entry')}
           </button>
         </div>
       </div>

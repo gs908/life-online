@@ -384,6 +384,22 @@ const zhCN = {
     quotaLine: '当日配额 {{allowance}} · 押金上限 {{cap}}',
     retry: '重试',
   },
+  // 任务板「创建新任务」统一入口（DEV-58）：任务口径的文案，刻意不复用 addTask.* 的模板词
+  createTask: {
+    entry: '创建新任务',
+    title: '创建新任务',
+    questTitle: '任务名称',
+    questNamePlaceholder: '任务名称',
+    questContent: '任务内容',
+    questContentPlaceholder: '描述...',
+    brief: '任务要点',
+    briefPlaceholder: '例：口算 4 页，100 以内',
+    briefHint: '告诉生成器这条任务现实里要做什么，不要写赛季背景。',
+    polish: 'AI 润色',
+    polishDisabledHint: 'AI 润色即将上线，本期请自行填写任务内容。',
+    onceHint: '这条任务不进模板库，只作为一次性临时任务投放。',
+    submit: '创建',
+  },
   // 选模板 → 生成（契约 §6B，POST /scn/task-templates/{id}/generate）
   generateTask: {
     entry: '生成任务',

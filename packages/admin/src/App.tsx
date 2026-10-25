@@ -7,7 +7,7 @@ import { Bell } from 'lucide-react';
 
 // API Client（阶段②赛季 + 阶段③任务链路均已接入后端）
 import { api, ApiError } from './services/api';
-import type { AddTaskSubmit } from './components/modals/AddTaskModal';
+import type { AddTaskSubmit, AddTaskPurpose } from './components/modals/AddTaskModal';
 import type { TaskCreate, TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserPrivilegeRead, TaskTemplateRead, TaskGenerateResult } from './services/api';
 import { localToday } from './utils/date';
 
@@ -101,6 +101,10 @@ const App: React.FC = () => {
   // 任务模板链路：AddTaskModal 双出口（instance/template/update）+ 管理视图重拉信号
   const [editingTemplate, setEditingTemplate] = useState<TaskTemplateRead | null>(null);
   const [addModalDefaultCategory, setAddModalDefaultCategory] = useState<TaskTemplateCategoryIntent>('once');
+  /** 弹窗用途（DEV-58）：任务板入口=createTask，模板管理入口=createTemplate */
+  const [addModalPurpose, setAddModalPurpose] = useState<AddTaskPurpose>('createTemplate');
+  /** createTask 且从模板行「生成」进入时的预选模板（P2 修复：原实现丢弃该参数） */
+  const [addModalTemplate, setAddModalTemplate] = useState<TaskTemplateRead | null>(null);
   const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templatesRefreshSignal, setTemplatesRefreshSignal] = useState(0);
 
@@ -233,8 +237,9 @@ const App: React.FC = () => {
     try {
       if (action.mode === 'instance') {
         const ok = await handleAddTask(action.task);
-        // task-instances 路径同样会落一条模板，仅在创建成功时让管理视图列表重拉
-        if (ok) setTemplatesRefreshSignal(signal => signal + 1);
+        // 非 ephemeral 的 task-instances 路径仍会落一条模板，仅在创建成功时让管理视图列表重拉；
+        // ephemeral（DEV-58 临时任务）不落模板，无需重拉。
+        if (ok && !action.task.ephemeral) setTemplatesRefreshSignal(signal => signal + 1);
         return;
       }
       if (action.mode === 'template') {
@@ -258,30 +263,32 @@ const App: React.FC = () => {
 
   const openCreateModal = (defaultCategory: TaskTemplateCategoryIntent) => {
     setEditingTemplate(null);
+    setAddModalPurpose('createTemplate');
+    setAddModalTemplate(null);
     setAddModalDefaultCategory(defaultCategory);
     setIsAddModalOpen(true);
   };
 
   const openEditModal = (template: TaskTemplateRead) => {
     setEditingTemplate(template);
+    setAddModalPurpose('createTemplate');
+    setAddModalTemplate(null);
     setIsAddModalOpen(true);
   };
 
   const closeAddModal = () => {
     setIsAddModalOpen(false);
     setEditingTemplate(null);
+    setAddModalTemplate(null);
   };
 
-  // 选模板 → 生成（契约 §6B）：template 非空 = 从模板行进入；null = 从任务板进入先选模板
+  // 「创建新任务」统一入口（DEV-58）：template 非空 = 从模板行「生成」进入（分支 A 直达）；
+  // null = 从任务板进入，弹窗顶部「选择模板」下拉由用户决定走哪一支。
   const openGenerateModal = (template: TaskTemplateRead | null) => {
-    // DEV-51：合并到 AddTaskModal 后不再单独打开弹窗；任务板入口直接打开新建弹窗并默认 daily
-    if (template) {
-      // 已选模板场景：直接生成（旧路径保留入口，但此处走 AddTaskModal 的 onSubmitGenerated）
-      setAddModalDefaultCategory('daily');
-      setIsAddModalOpen(true);
-      return;
-    }
-    setAddModalDefaultCategory('daily');
+    setEditingTemplate(null);
+    setAddModalPurpose('createTask');
+    setAddModalTemplate(template); // P2 修复：原实现丢弃该参数，模板行「生成」退化成新建 daily 模板
+    setAddModalDefaultCategory('once');
     setIsAddModalOpen(true);
   };
 
@@ -299,6 +306,16 @@ const App: React.FC = () => {
     }
     setInstancesRefreshSignal(signal => signal + 1);
     await loadBoard();
+    // DEV-58：任务板「创建新任务」选模板生成实例后，直接进入 TuneTaskModal 二次微调
+    if (addModalPurpose === 'createTask' && result.instance_id !== null) {
+      setIsAddModalOpen(false);
+      setAddModalTemplate(null);
+      try {
+        setTuningTask(await api.tasks.getTask(result.instance_id));
+      } catch {
+        // 取实例失败不阻断：任务已生成、任务板已刷新，用户可从任务卡片上的「微调」再进
+      }
+    }
   };
 
   const startQuest = async (id: string) => {
@@ -572,8 +589,7 @@ const App: React.FC = () => {
                         onRetrySeasons={loadSeasons}
                         onOpenSeasonConfig={() => setIsSeasonConfigModalOpen(true)}
                         onViewHistory={() => setShowSeasonHistory(true)}
-                        onOpenAddModal={() => openCreateModal('once')}
-                        onOpenGenerate={() => openGenerateModal(null)}
+                        onOpenAddModal={() => openGenerateModal(null)}
                         onTuneTask={(id) => setTuningTask(tasks.find(item => item.id === id) ?? null)}
                         today={today}
                         onRecordUsage={handleRecordUsage}
@@ -599,6 +615,8 @@ const App: React.FC = () => {
         submitting={templateActionBusy}
         editingTemplate={editingTemplate}
         defaultCategory={addModalDefaultCategory}
+        purpose={addModalPurpose}
+        initialTemplate={addModalTemplate}
         onSubmitGenerated={handleGeneratedFromCreate}
         onToast={showToast}
         today={today}
