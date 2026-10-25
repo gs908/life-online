@@ -33,6 +33,8 @@ api_router.include_router(users.router, tags=["users"])
 api_router.include_router(families.router, tags=["families"])
 api_router.include_router(seasons.router, tags=["seasons"])
 api_router.include_router(tasks.router, tags=["tasks"])
+# DEV-60:任务要点 -> 任务建议(/scn/tasks/generate-from-brief),只回渲染建议、不入库。
+api_router.include_router(tasks.brief_router, tags=["scn-tasks"])
 api_router.include_router(tasks.proofs_router, tags=["scn-task-proofs"])
 # 两套路由前缀同为 /scn/task-templates 但路径不重叠:
 # tasks.templates_router 仅 /preview-deposit(DEV-34 块 C 押金预览);

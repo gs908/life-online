@@ -468,6 +468,41 @@ class TaskDepositPreviewResponse(BaseModel):
     capped_by_allowance: bool
 
 
+class TaskBriefGenerateRequest(BaseModel):
+    """「任务要点 → 任务建议」入参(DEV-60,docs/08 §6C)。
+
+    任务板「创建新任务」未选模板时,家长填任务要点、点「生成」,后端把要点交给
+    LLM 润色成任务建议**反显回表单**;确认后再走既有的创建路径落库。
+
+    - `brief` 即 `ai_service.generate_quest` 的 `topic`(任务实质,Season 无关);
+    - `season_id` 缺省 = 当前激活赛季的剧情,作为叙事背景(与生成器同口径);
+    - `target_date` 只用于**建议押金**的当日配额封顶(配额按星期几不同),缺省
+      = 家庭本地时区今天;校验口径与 `POST /scn/task-templates/{id}/generate`
+      一致(仅允许 ≥ 今天、最多提前 30 天);
+    - `child_level` 只影响 LLM 的语气与难度建议。
+
+    `extra="forbid"`:多传字段直接 422,不静默忽略(DEV-50 审查口径)。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    brief: str = Field(..., min_length=1, max_length=500)
+    season_id: str | None = None
+    target_date: date | None = None
+    child_level: int = Field(default=1, ge=1, le=200)
+
+
+class TaskBriefSuggestion(BaseModel):
+    """任务建议出参(DEV-60):只回渲染建议,**不入库**。
+
+    前端拿这 5 个字段回填「创建新任务」表单,由用户确认/改写后再提交创建。
+    """
+    title: str
+    description: str
+    xp_reward: int
+    difficulty: int
+    time_deposit: int
+
+
 # ---- 模板库(docs/06 §2 / docs/12 块 A) ----
 
 
