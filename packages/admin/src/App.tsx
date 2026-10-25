@@ -35,6 +35,15 @@ import CoinLogsModal from './components/modals/CoinLogsModal';
 import SeasonConfigModal from './components/modals/SeasonConfigModal';
 import PrivilegeConfigModal from './components/modals/PrivilegeConfigModal';
 
+/**
+ * 同一时间一个任务（前端体验约束，后端不限制）。被驳回的任务优先作为「当前任务」，
+ * 避免多模板并存时被另一个普通 IN_PROGRESS 顶掉而看不到驳回原因（DEV-57）。
+ */
+const pickActiveQuest = (tasks: TaskRead[], childId: string | null | undefined) => {
+  const inProgress = tasks.filter(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childId);
+  return inProgress.find(t => t.rejected) ?? inProgress[0];
+};
+
 const App: React.FC = () => {
   const { t } = useTranslation();
   // --- AUTH（阶段①：真实登录态，Mock 用户已删除） ---
@@ -335,7 +344,7 @@ const App: React.FC = () => {
   };
 
   const handleAcceptAttempt = (id: string) => {
-    const activeQuest = tasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childUser?.childId);
+    const activeQuest = pickActiveQuest(tasks, childUser?.childId);
     if (activeQuest) {
       if (activeQuest.id === id) return;
       // UI 门禁：同一时间一个任务（后端不限制，纯前端体验约束）
@@ -431,6 +440,23 @@ const App: React.FC = () => {
     }
   };
 
+  /** 驳回（DEV-57）：后端退回 IN_PROGRESS 并写 review_comment，不动押金/XP（docs/13 §3.1），
+   *  故只需刷新任务板，无需 refreshUser。comment 由弹窗保证非空。 */
+  const handleRejectTask = async (taskId: string, comment: string) => {
+    if (approving) return;
+    setApproving(true);
+    try {
+      await api.tasks.rejectTask(taskId, { comment });
+      setIsReviewModalOpen(false);
+      toast(t('toast.rejectSuccessTitle'), t('toast.rejectSuccessMsg'));
+      await loadBoard();
+    } catch (error) {
+      showApiError(error, t('toast.rejectFailedTitle'));
+    } finally {
+      setApproving(false);
+    }
+  };
+
   /** 记录一次特权使用（POST /scn/privileges/uses，返回使用记录）；成功后余额/流水一律 refetch，禁止本地加减 */
   const handleRecordUsage = async (privilege: PrivilegeRead) => {
     try {
@@ -469,7 +495,7 @@ const App: React.FC = () => {
 
   // --- HELPER DATA FOR RENDER（任务列表已按激活赛季服务端过滤） ---
   const currentSeasonTheme = THEMES[activeSeason?.theme_id ?? 'DEFAULT'] || THEMES.DEFAULT;
-  const activeQuest = tasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childUser?.childId);
+  const activeQuest = pickActiveQuest(tasks, childUser?.childId);
   const availableTasks = tasks.filter(t => t.status === TaskStatus.AVAILABLE);
   const completedTasks = tasks.filter(t => t.status === TaskStatus.COMPLETED);
   const pendingTasks = tasks.filter(t => t.status === TaskStatus.PENDING_REVIEW);
@@ -646,6 +672,7 @@ const App: React.FC = () => {
         onClose={() => setIsReviewModalOpen(false)}
         task={tasks.find(t => t.id === selectedTaskId)}
         onApprove={handleApproveTask}
+        onReject={handleRejectTask}
         approving={approving}
       />
 

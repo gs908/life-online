@@ -52,6 +52,7 @@ const zhCN = {
   taskStatus: {
     AVAILABLE: '可领取',
     IN_PROGRESS: '冒险中',
+    REJECTED: '已驳回',
     PENDING_REVIEW: '待审核',
     COMPLETED: '已完成',
     EXPIRED: '已过期',
@@ -88,6 +89,8 @@ const zhCN = {
     submitProof: '提交凭证',
     review: '审核',
     verified: '已验证',
+    rejectReasonLabel: '驳回原因：',
+    rejectResubmitHint: '请修改后重新提交凭证。',
   },
   parent: {
     management: '公会管理',
@@ -478,6 +481,10 @@ const zhCN = {
     comment: '评语',
     commentPlaceholder: '做得很棒！',
     approve: '批准并发放 XP',
+    reject: '驳回重做',
+    rejectReason: '驳回原因（必填）',
+    rejectReasonPlaceholder: '说明需要修改的地方，例如：照片太模糊，请重拍',
+    rejectReasonRequired: '驳回后任务会退回给孩子修改重交，请填写原因。',
   },
   submitTask: {
     title: '完成任务',
@@ -634,6 +641,9 @@ const zhCN = {
     approveSuccessTitle: '审核完成',
     approveSuccessMsg: '已给出 {{rating}} 星评价，XP 与时间币由后端结算。',
     approveFailedTitle: '审核失败',
+    rejectSuccessTitle: '已驳回',
+    rejectSuccessMsg: '任务已退回给孩子修改重交。',
+    rejectFailedTitle: '驳回失败',
     deleteFailedTitle: '删除失败',
     privilegeCreatedTitle: '权益已创建',
     privilegeCreatedMsg: '「{{title}}」已添加到权益列表。',

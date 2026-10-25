@@ -86,8 +86,14 @@ function getTypeBadgeColor(type: TaskRead['type']) {
   }
 }
 
-function getStatusDot(status: string) {
-  switch (status) {
+/** 驳回展示态（DEV-57 路线 2）：与任务板 QuestCard 同口径 —— 周视图同属孩子端，驳回需可见 */
+function isRejectedTask(task: TaskRead): boolean {
+  return task.status === 'IN_PROGRESS' && !!task.rejected;
+}
+
+function getStatusDot(task: TaskRead) {
+  if (isRejectedTask(task)) return 'bg-red-500';
+  switch (task.status) {
     case 'AVAILABLE': return 'bg-green-400';
     case 'IN_PROGRESS': return 'bg-blue-400 animate-pulse';
     case 'PENDING_REVIEW': return 'bg-yellow-400';
@@ -390,10 +396,21 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                       title={`${task.title} (${task.type})`}
                     >
                       <div className="flex items-center gap-1">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task.status)}`} />
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task)}`} />
                         {renderChildBadge(task)}
                         <span className="font-bold truncate flex-1 leading-tight">{task.title}</span>
+                        {isRejectedTask(task) && (
+                          <span className="shrink-0 text-[9px] font-bold text-red-700 bg-red-100 rounded px-1">
+                            {t('taskStatus.REJECTED')}
+                          </span>
+                        )}
                       </div>
+                      {isRejectedTask(task) && task.review_comment && (
+                        <div className="mt-0.5 text-[9px] text-red-700 truncate" title={task.review_comment}>
+                          <span className="font-bold">{t('questCard.rejectReasonLabel')}</span>
+                          {task.review_comment}
+                        </div>
+                      )}
                       {task.status === 'COMPLETED' && task.rating && (
                         <div className="flex items-center gap-0.5 mt-0.5">
                           {[...Array(5)].map((_, i) => (
@@ -450,11 +467,23 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                     className={`rounded-lg border-l-3 p-2 text-xs ${getTypeBadgeColor(task.type)}`}
                   >
                     <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${getStatusDot(task.status)}`} />
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${getStatusDot(task)}`} />
                       {renderChildBadge(task)}
                       <span className="font-bold flex-1">{task.title}</span>
+                      {isRejectedTask(task) && (
+                        <span className="shrink-0 text-[10px] font-bold text-red-700 bg-red-100 rounded px-1.5">
+                          {t('taskStatus.REJECTED')}
+                        </span>
+                      )}
                       <span className="text-[10px] opacity-60">{t(`taskType.${task.type}`)}</span>
                     </div>
+                    {isRejectedTask(task) && task.review_comment && (
+                      <div className="mt-1 text-red-700">
+                        <span className="font-bold">{t('questCard.rejectReasonLabel')}</span>
+                        {task.review_comment}
+                        <span className="block mt-0.5 opacity-80">{t('questCard.rejectResubmitHint')}</span>
+                      </div>
+                    )}
                     {task.description && (
                       <p className="mt-1 opacity-75 truncate">{task.description}</p>
                     )}

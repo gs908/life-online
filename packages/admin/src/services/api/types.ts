@@ -236,6 +236,9 @@ export interface TaskRead {
   proofs: TaskProofRead[]; // 全部证据（DEV-33 块 E）
   rating: number | null; // 1-5
   review_comment: string | null;
+  /** 驳回展示态（DEV-57 路线 2）：后端派生 `status == IN_PROGRESS && review_comment != null && submitted_at == null`。
+   *  无独立状态/字段，重交后（submitted_at 非空）自动回落 false */
+  rejected: boolean;
   xp_awarded: number | null;
   coin_delta: number;
   abandon_count_at_submit: number;
@@ -500,6 +503,11 @@ export interface TaskSubmitRequest {
 
 export interface TaskApproveRequest {
   rating: number; // 1-5 必填
+  comment?: string;
+}
+
+/** 审核驳回（DEV-57 接线）：后端把状态切回 `IN_PROGRESS`、写 `review_comment`、清 `submitted_at` */
+export interface TaskRejectRequest {
   comment?: string;
 }
 

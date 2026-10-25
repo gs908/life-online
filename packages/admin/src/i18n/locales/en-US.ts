@@ -52,6 +52,7 @@ const enUS = {
   taskStatus: {
     AVAILABLE: 'Available',
     IN_PROGRESS: 'Active Quest',
+    REJECTED: 'Rejected',
     PENDING_REVIEW: 'Reviewing',
     COMPLETED: 'Complete',
     EXPIRED: 'Expired',
@@ -88,6 +89,8 @@ const enUS = {
     submitProof: 'Submit Proof',
     review: 'Review',
     verified: 'Verified',
+    rejectReasonLabel: 'Rejection reason: ',
+    rejectResubmitHint: 'Please revise and resubmit your proof.',
   },
   parent: {
     management: 'Guild Management',
@@ -472,6 +475,10 @@ const enUS = {
     comment: 'Comment',
     commentPlaceholder: 'Great job!',
     approve: 'Approve & Grant XP',
+    reject: 'Reject',
+    rejectReason: 'Rejection reason (required)',
+    rejectReasonPlaceholder: 'Explain what needs to change, e.g. the photo is too blurry',
+    rejectReasonRequired: 'Rejecting sends the quest back to the child to revise; a reason is required.',
   },
   submitTask: {
     title: 'Complete Quest',
@@ -625,6 +632,9 @@ const enUS = {
     approveSuccessTitle: 'Review Complete',
     approveSuccessMsg: 'Rated {{rating}} stars. XP and coins are settled by the backend.',
     approveFailedTitle: 'Review Failed',
+    rejectSuccessTitle: 'Rejected',
+    rejectSuccessMsg: 'The quest was sent back to the child to revise and resubmit.',
+    rejectFailedTitle: 'Reject Failed',
     deleteFailedTitle: 'Delete Failed',
     privilegeCreatedTitle: 'Privilege Created',
     privilegeCreatedMsg: '"{{title}}" was added to the privilege list.',
