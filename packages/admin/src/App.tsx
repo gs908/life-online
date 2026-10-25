@@ -315,15 +315,12 @@ const App: React.FC = () => {
     }
     setInstancesRefreshSignal(signal => signal + 1);
     await loadBoard();
-    // DEV-58：任务板「创建新任务」选模板生成实例后，直接进入 TuneTaskModal 二次微调
+    // DEV-61：任务板「创建新任务」选模板生成时，内容已在 AddTaskModal 内预览并
+    // 人工确认，保存后直接关闭弹窗（不再强制跳 TuneTaskModal）；需要改数值时
+    // 从任务卡片的「微调」进入。
     if (addModalPurpose === 'createTask' && result.instance_id !== null) {
       setIsAddModalOpen(false);
       setAddModalTemplate(null);
-      try {
-        setTuningTask(await api.tasks.getTask(result.instance_id));
-      } catch {
-        // 取实例失败不阻断：任务已生成、任务板已刷新，用户可从任务卡片上的「微调」再进
-      }
     }
   };
 

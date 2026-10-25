@@ -321,6 +321,8 @@ async def _insert_instance(
     xp_reward: int | None = None,
     time_deposit: int | None = None,
     target_child_id: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
 ) -> tuple[ScnTaskInstance, bool]:
     """插入目标日实例;撞唯一索引(并发兜底)时回滚并取回既有行。
 
@@ -334,6 +336,8 @@ async def _insert_instance(
     三个数值字段是**快照**(DEV-50):`None` = 生成时取模板当前值;非 None =
     本次生成显式覆盖(「选模板 → 生成」表单可带覆盖值)。三者语义同构,都由
     这里一次落库,之后可经 `PATCH /scn/task-instances/{id}` 独立调整。
+    `title`/`description`(DEV-61)同口径:`None` = 用模板文案,非 None =
+    家长确认后的内容快照到实例,不回写模板。
 
     返回 (实例, 是否新建)。兜底取回既有行时 created=False(可能是并发方
     刚插入的 AVAILABLE 行,也可能是当日已消费的 COMPLETED/EXPIRED 行),
@@ -349,8 +353,8 @@ async def _insert_instance(
         template_id=template_id,
         creator_account_id=creator_account_id,
         target_child_id=target_child_id or template.target_child_id,
-        title=template.title,
-        description=template.description,
+        title=template.title if title is None else title,
+        description=template.description if description is None else description,
         lore_snippet=template.lore_snippet if lore_snippet is None else lore_snippet,
         xp_reward=template.xp_reward if xp_reward is None else xp_reward,
         # 难度快照:生成即定值,审批算 XP 读本列。**不回落模板** —— 否则改模板
@@ -395,6 +399,8 @@ async def generate_for_template(
     time_deposit: int | None = None,
     xp_reward: int | None = None,
     target_child_id: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
 ) -> tuple[ScnTaskInstance | None, str]:
     """对单个模板执行一次生成;返回 (实例, 动作)。
 
@@ -491,6 +497,8 @@ async def generate_for_template(
         time_deposit=time_deposit,
         xp_reward=xp_reward,
         target_child_id=target_child_id,
+        title=title,
+        description=description,
     )
     await db.commit()
     if not created:
@@ -510,6 +518,8 @@ async def manual_generate(
     time_deposit: int | None = None,
     xp_reward: int | None = None,
     target_child_id: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
 ) -> tuple[ScnTaskInstance | None, str, bool]:
     """「选模板 → 生成」的落库路径(DEV-50)。
 
@@ -545,6 +555,7 @@ async def manual_generate(
             db, template, today=today, now=now, manual=True,
             difficulty=difficulty, time_deposit=time_deposit,
             xp_reward=xp_reward, target_child_id=target_child_id,
+            title=title, description=description,
         )
         return instance, action, action == "created"
 
@@ -580,6 +591,8 @@ async def manual_generate(
         time_deposit=time_deposit,
         xp_reward=xp_reward,
         target_child_id=target_child_id,
+        title=title,
+        description=description,
     )
     await db.commit()
     if not created:

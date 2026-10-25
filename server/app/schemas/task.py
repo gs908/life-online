@@ -270,6 +270,9 @@ class TaskGenerateRequest(BaseModel):
     - 三个可覆盖字段**未提供 = 用模板值**(快照);**显式 `null` → 422**。
       生成路径不存在"清除覆盖"的动作 —— 新建实例没有可清除的覆盖。
     - `target_child_id` 缺省 = 用模板值;显式 `null` 在此语义为"不指定"。
+    - `title` / `description`(DEV-61「预览 → 确认 → 保存」):AI 建议经家长
+      确认/改写后随生成一次落库,快照到**实例**,不改模板;未提供 = 用模板值,
+      显式 `null` 或纯空白 → 422。
 
     `extra="forbid"`(DEV-50 审查):多传字段直接 422。静默忽略会掩盖客户端 bug
     —— 例如往 PATCH 里塞 `season_id`(实例赛季不可改)会被无声吞掉,客户端以为
@@ -283,10 +286,14 @@ class TaskGenerateRequest(BaseModel):
     time_deposit: int | None = Field(default=None, ge=0)
     xp_reward: int | None = Field(default=None, ge=0)
     target_child_id: str | None = None
+    title: str | None = Field(default=None, max_length=128)
+    description: str | None = None
 
     @model_validator(mode="after")
     def _check_snapshots(self) -> "TaskGenerateRequest":
-        reject_explicit_null(self)
+        reject_explicit_null(self, SNAPSHOT_FIELDS + ("title", "description"))
+        if self.title is not None and not self.title.strip():
+            raise ValueError("title 不可为空白")
         return self
 
 
