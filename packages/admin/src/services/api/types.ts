@@ -403,11 +403,15 @@ export interface TaskTemplateRegenerateResult {
   new_instance: { id: string; generated_for_date: string; status: TaskStatus } | null;
 }
 
-/** 创建任务 = 建模板 + 初始实例（「一次性」发布走本接口：不传 triggers 即立即生成、不重复） */
+/** 创建任务 = 建模板 + 初始实例（「一次性」发布走本接口：不传 triggers 即立即生成、不重复）。
+ *
+ * `ephemeral: true`（DEV-58）= **只建实例、不落模板**：用于「创建新任务」里未选模板的临时任务，
+ * 创建后 `scn_task_template` 不新增行。 */
 export interface TaskCreate extends TaskTemplateCreate {
   target_user_id?: string; // ⚠️ 仅兼容字段，新代码不写
   deadline?: string; // ⚠️ 仅兼容字段，新代码不写
   expire_at?: string; // ⚠️ 仅兼容字段，新代码不写
+  ephemeral?: boolean;
 }
 
 /** 管理端表单实时预览押金（DEV-34 块 C；难度不影响押金，仅为表单完整性透传） */

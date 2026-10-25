@@ -36,6 +36,13 @@ export type AddTaskSubmit =
   | { mode: 'template'; template: TaskTemplateCreate }
   | { mode: 'update'; templateId: string; patch: TaskTemplateUpdate };
 
+/** 弹窗用途（DEV-58）：
+ *  - `createTemplate`：任务模板管理 tab 的「新建模板 / 编辑」——原行为不变；
+ *  - `createTask`：任务板「创建新任务」——顶部「选择模板」下拉分两支：
+ *    未选模板 → 一次性临时任务（`ephemeral: true`，不落模板）；
+ *    选了模板 → 目标日期 + 三项微调 → 生成实例。 */
+export type AddTaskPurpose = 'createTask' | 'createTemplate';
+
 interface AddTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -49,6 +56,10 @@ interface AddTaskModalProps {
   editingTemplate?: TaskTemplateRead | null;
   /** 新建默认类别：任务板「新建任务」= once（旧行为），模板管理「新建模板」= daily */
   defaultCategory?: TaskTemplateCategoryIntent;
+  /** 弹窗用途（DEV-58）；缺省 `createTemplate` 保证模板管理 tab 行为不变 */
+  purpose?: AddTaskPurpose;
+  /** `createTask` 且从模板行「生成」进入时预选的模板（分支 A 直达） */
+  initialTemplate?: TaskTemplateRead | null;
   /** 创建模板成功后触发生成（新口径：新建模板后直接选日生成，替代独立的 GenerateTaskModal） */
   onSubmitGenerated?: (result: TaskGenerateResult) => void;
   /** 给生成步骤的人话 toast（失败/命中既有/排期到未来等） */
@@ -138,12 +149,15 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   submitting,
   editingTemplate,
   defaultCategory = 'once',
+  purpose = 'createTemplate',
+  initialTemplate = null,
   onSubmitGenerated,
   onToast,
   today: propToday,
 }) => {
   const { t } = useTranslation();
   const isEdit = Boolean(editingTemplate);
+  const isCreateTask = purpose === 'createTask';
   const today = useMemo(() => propToday ?? localToday(), [propToday]);
   const maxDate = useMemo(() => addDays(today, TARGET_DATE_MAX_AHEAD_DAYS), [today]);
 
@@ -170,6 +184,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   /** 从任务板入口选模板（与 GenerateTaskModal 对齐）；已定模板时不展示下拉 */
   const [templates, setTemplates] = useState<TaskTemplateRead[] | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  /** `createTask` 本次打开内用户是否动过「选择模板」下拉；没动过则沿用模板行预选（P2） */
+  const [pickerTouched, setPickerTouched] = useState(false);
   const [targetDate, setTargetDate] = useState<string>(today);
   const [tuneValues, setTuneValues] = useState<TuneValues>(EMPTY_VALUES);
   const [tuneDirty, setTuneDirty] = useState<Record<TuneField, boolean>>(EMPTY_DIRTY);
@@ -180,6 +196,15 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // 模板行「生成」预选（DEV-58 P2）：用户本次打开未动过下拉时以传入模板为准。
+  // 在渲染期直接派生（而非等 effect 回填），避免打开瞬间先闪一下「未选模板」支。
+  const presetTemplate = !pickerTouched && isCreateTask ? initialTemplate : null;
+  /** `createTask` 当前生效的模板：模板行预选优先，其次下拉选中项 */
+  const activeTemplate =
+    presetTemplate ?? templates?.find(item => item.id === selectedTemplateId) ?? null;
+  /** 下拉当前值：预选时显示预选模板，否则显示用户选择 */
+  const pickerValue = presetTemplate?.id ?? selectedTemplateId;
 
   // 打开时重置表单（创建失败时 App 保留弹窗与已填内容，成功后关闭并在此处复位）
   useEffect(() => {
@@ -195,7 +220,17 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     setTuneDirty(EMPTY_DIRTY);
     setCreatedTemplateId(null);
     setTemplates(null);
+    setPickerTouched(false);
     setSelectedTemplateId('');
+    if (isCreateTask && initialTemplate) {
+      // 模板行「生成」直达分支 A：三项微调预填该模板当前值（dirty 保持 false）
+      setTuneValues({
+        difficulty: initialTemplate.difficulty,
+        time_deposit: initialTemplate.time_deposit,
+        xp_reward: initialTemplate.xp_reward,
+      });
+      setTuneDirty(EMPTY_DIRTY);
+    }
     if (editingTemplate) {
       setCategory(categoryOf(editingTemplate));
       setNewTaskTitle(editingTemplate.title);
@@ -212,7 +247,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       setStartTime((editingTemplate.start_time ?? '16:30').slice(0, 5));
       setDurationMinutes(editingTemplate.duration_minutes ?? 45);
     } else {
-      setCategory(defaultCategory);
+      // createTask 的「未选模板」支是纯一次性任务，没有类别选择，固定 once
+      setCategory(isCreateTask ? 'once' : defaultCategory);
       setNewTaskTitle('');
       setNewTaskDesc('');
       setNewTaskXP(50);
@@ -232,7 +268,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       setStartTime('16:30');
       setDurationMinutes(45);
     }
-  }, [isOpen, editingTemplate, defaultCategory, today]);
+  }, [isOpen, editingTemplate, defaultCategory, isCreateTask, initialTemplate, today]);
 
   // 任务板入口（未定模板）：打开弹窗时拉一次可用模板列表；已定模板或编辑态不走
   useEffect(() => {
@@ -257,7 +293,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
 
   // 进入生成步骤后预检：该模板在目标日期是否已有实例（中性提示用）
   useEffect(() => {
-    const tmplId = createdTemplateId ?? selectedTemplateId;
+    const tmplId = createdTemplateId ?? presetTemplate?.id ?? selectedTemplateId;
     if (!isOpen || !tmplId || !targetDate) return;
     let cancelled = false;
     setDateHasInstance(null);
@@ -274,7 +310,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, createdTemplateId, selectedTemplateId, targetDate]);
+  }, [isOpen, createdTemplateId, presetTemplate, selectedTemplateId, targetDate]);
 
   // Esc 关闭（模板编辑与生成步骤都要响应）
   useEffect(() => {
@@ -354,10 +390,11 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   };
 
   const fillBack = async (field: TuneField) => {
-    if (!createdTemplateId) return;
+    const templateId = createdTemplateId ?? presetTemplate?.id ?? selectedTemplateId;
+    if (!templateId) return;
     setTuneFillingBack(field);
     try {
-      const fresh = await api.taskTemplates.getTemplate(createdTemplateId);
+      const fresh = await api.taskTemplates.getTemplate(templateId);
       if (field === 'difficulty') {
         if (fresh.difficulty === null || fresh.difficulty < 1) {
           onToast?.(t('toast.actionFailedTitle'), t('tune.fillBackNoTemplateValue'));
@@ -380,7 +417,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   const handleGenerateSubmit = async () => {
     if (dateError) return;
     // 已选模板路径：用下拉选中的模板（任务板入口场景）；否则走新建模板路径（从模板管理进入场景）
-    const templateId = createdTemplateId ?? selectedTemplateId;
+    const templateId = createdTemplateId ?? presetTemplate?.id ?? selectedTemplateId;
     if (!templateId || dateError) return;
     setGenerateError(null);
     setGenerating(true);
@@ -410,7 +447,362 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     }
   };
 
+  /** 「创建新任务」未选模板支：一次性临时任务（`ephemeral: true`，只建实例、不落模板）。 */
+  const handleSubmitCreateTask = () => {
+    const formErrors = buildError();
+    setErrors(formErrors);
+    if (formErrors) return;
+    const seasonTag = seasonId ? { season_id: seasonId } : {};
+    const task: TaskCreate = {
+      title: newTaskTitle.trim(),
+      description: newTaskDesc,
+      xp_reward: Math.max(0, newTaskXP),
+      content_brief: contentBrief.trim() || undefined,
+      content_mode: contentMode,
+      reminder_message: t('addTask.defaultReminder'),
+      reminder_minutes_before: 15,
+      ...seasonTag,
+      type: 'DAILY',
+      ...(difficulty !== null ? { difficulty } : {}),
+      ephemeral: true,
+    };
+    onSubmit({ mode: 'instance', task });
+  };
+
   if (!isOpen) return null;
+
+  const dateFieldError = dateError
+    ? dateError === 'min'
+      ? t('generateTask.errDateTooEarly')
+      : t('generateTask.errDateTooFar', { days: TARGET_DATE_MAX_AHEAD_DAYS })
+    : null;
+
+  const resultActionCopy = (r: TaskGenerateResult): string => {
+    switch (r.action) {
+      case 'created':
+        return t('generateTask.resultCreated');
+      case 'exists':
+        return t('generateTask.resultExists');
+      case 'rolled_forward':
+        return t('generateTask.resultRolled');
+      case 'kept':
+        return t('generateTask.resultKept');
+      case 'skipped_expired':
+        return t('generateTask.resultSkipped');
+      default:
+        return '';
+    }
+  };
+
+  /** 「选择模板」下拉（DEV-58）：任务板「创建新任务」入口与模板行「生成」共用。 */
+  const renderTemplatePicker = () => (
+    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+      <div className="text-xs font-bold text-slate-600 mb-1.5">{t('generateTask.pickTemplate')}</div>
+      {!templates ? (
+        <p className="text-xs text-slate-400">{t('common.loading')}</p>
+      ) : templates.length === 0 ? (
+        <p className="text-xs text-slate-500">{t('generateTask.noTemplates')}</p>
+      ) : (
+        <select
+          value={pickerValue}
+          onChange={event => {
+            const value = event.target.value;
+            // 用户手动改选即放弃「模板行预选」，以下拉为准
+            setPickerTouched(true);
+            setSelectedTemplateId(value);
+            setGenerateResult(null);
+            setDateHasInstance(null);
+            const tmpl = templates.find(item => item.id === value);
+            if (tmpl) {
+              setTuneValues({
+                difficulty: tmpl.difficulty,
+                time_deposit: tmpl.time_deposit,
+                xp_reward: tmpl.xp_reward,
+              });
+              setTuneDirty(EMPTY_DIRTY);
+            }
+          }}
+          aria-label={t('generateTask.pickTemplate')}
+          className="border rounded-lg p-2 text-sm w-full border-slate-200"
+        >
+          <option value="">{t('generateTask.pickTemplatePlaceholder')}</option>
+          {templates.map(item => (
+            <option key={item.id} value={item.id}>
+              {item.title}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+
+  /** 生成步骤主体（目标日期 + 三项微调 + 结果/错误）：
+   *  新建模板第二步与「创建新任务」分支 A 共用，避免两份实现漂移。 */
+  const renderGenerateStepContent = (opts: {
+    templateId: string;
+    templateTitle: string;
+    templateType: TaskType;
+    estimatedMinutes: number | null;
+    fillBackDifficultyDisabled: boolean;
+  }) => (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-bold text-slate-800">{opts.templateTitle}</span>
+        <span className="text-[11px] text-slate-400">{t(`taskType.${opts.templateType}`)}</span>
+      </div>
+
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+        <div className="text-xs font-bold text-slate-600 mb-1 flex items-center gap-1">
+          <CalendarClock size={13} aria-hidden /> {t('generateTask.targetDate')}
+        </div>
+        <input
+          type="date"
+          value={targetDate}
+          min={today}
+          max={maxDate}
+          onChange={event => {
+            setTargetDate(event.target.value);
+            setGenerateResult(null);
+          }}
+          aria-invalid={Boolean(dateError)}
+          aria-describedby="generate-target-date-hint"
+          className={`border rounded-lg p-2 text-sm w-full ${
+            dateError ? 'border-red-400' : 'border-slate-200'
+          }`}
+        />
+        {dateFieldError ? (
+          <p className="text-xs text-red-600 mt-1" aria-live="polite">{dateFieldError}</p>
+        ) : (
+          <p id="generate-target-date-hint" className="text-[11px] text-slate-400 mt-1">
+            {t('generateTask.dateHint', { days: TARGET_DATE_MAX_AHEAD_DAYS })}
+          </p>
+        )}
+        {dateHasInstance && !dateError && (
+          <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-2 flex items-start gap-1 mt-1" aria-live="polite">
+            <Info size={12} className="mt-0.5 shrink-0" aria-hidden />
+            <span>{t('generateTask.dateHasInstance', { date: targetDate })}</span>
+          </p>
+        )}
+      </div>
+
+      <div>
+        <div className="text-xs font-bold text-slate-600 mb-1.5">{t('tune.sectionTitle')}</div>
+        <TaskTuneFields
+          template={{
+            id: opts.templateId,
+            type: opts.templateType,
+            estimated_minutes: opts.estimatedMinutes,
+          }}
+          value={tuneValues}
+          dirty={tuneDirty}
+          onChange={changeField}
+          onFillBack={fillBack}
+          fillingBack={tuneFillingBack}
+          fillBackDisabled={{ difficulty: opts.fillBackDifficultyDisabled }}
+          previewDate={targetDate}
+          disabled={generating}
+        />
+      </div>
+
+      {generateResult && generateResult.instance_id === null && (
+        <div
+          className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="text-sm font-bold text-amber-800">{t('generateTask.resultSkippedTitle')}</div>
+          <p className="text-xs text-amber-700">{resultActionCopy(generateResult)}</p>
+        </div>
+      )}
+
+      {generateResult && generateResult.instance_id !== null && (
+        <div
+          className="bg-green-50 border border-green-200 rounded-xl p-3 space-y-1"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="text-sm font-bold text-green-800">
+            {generateResult.generated_for_date === null
+              ? t('generateTask.resultReused')
+              : generateResult.generated_for_date > today
+                ? t('generateTask.scheduledFor', { date: generateResult.generated_for_date })
+                : t('generateTask.deployedToday')}
+          </div>
+          <p className="text-xs text-green-700">{resultActionCopy(generateResult)}</p>
+          <p className="text-[11px] text-slate-500">
+            {t('generateTask.resultValues', {
+              difficulty: generateResult.difficulty ?? t('tune.unrated'),
+              deposit: generateResult.time_deposit ?? '—',
+              xp: generateResult.xp_reward ?? '—',
+            })}
+          </p>
+          {sentOverrides && !generateResult.overrides_applied && (
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+              {t('generateTask.overridesNotApplied')}
+            </p>
+          )}
+        </div>
+      )}
+
+      {generateError && (
+        <div role="alert" className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm font-bold">
+          {generateError}
+        </div>
+      )}
+    </>
+  );
+
+  // 任务板「创建新任务」（DEV-58）：顶部「选择模板」下拉分两支
+  if (!isEdit && isCreateTask) {
+    // 选了模板即进入「生成」语义；未选模板是「创建」语义
+    const heading = activeTemplate ? t('generateTask.title') : t('createTask.title');
+    return (
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div
+          className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200"
+          role="dialog"
+          aria-modal="true"
+          aria-label={heading}
+        >
+          <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
+            <h3 className="font-bold text-lg flex items-center gap-2">
+              {activeTemplate ? <Sparkles size={20} /> : <Plus size={20} />} {heading}
+            </h3>
+            <button onClick={onClose} aria-label={t('common.close')}><X /></button>
+          </div>
+
+          <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+            {renderTemplatePicker()}
+
+            {!activeTemplate ? (
+              // 分支 B：未选模板 —— 一次性临时任务（ephemeral，不落模板）
+              <>
+                <div className="flex gap-3">
+                  <div className="space-y-1.5 flex-1">
+                    <label className="text-sm font-bold text-slate-700" htmlFor="create-task-title">{t('createTask.questTitle')}</label>
+                    <input
+                      id="create-task-title"
+                      className={`w-full border p-2 rounded ${errors?.title ? 'border-red-400' : 'border-slate-200'}`}
+                      value={newTaskTitle}
+                      onChange={e => setNewTaskTitle(e.target.value)}
+                      placeholder={t('createTask.questNamePlaceholder')}
+                    />
+                  </div>
+                  <div className="space-y-1.5 w-20">
+                    <label className="text-sm font-bold text-slate-700" htmlFor="create-task-xp">{t('common.xp')}</label>
+                    <input
+                      id="create-task-xp"
+                      type="number"
+                      min={0}
+                      className={`w-full border p-2 rounded ${errors?.xp ? 'border-red-400' : 'border-slate-200'}`}
+                      value={newTaskXP}
+                      onChange={e => setNewTaskXP(Number(e.target.value))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="text-sm font-bold text-slate-700" id="create-task-difficulty-label">{t('taskTemplate.difficulty')}</div>
+                    <div role="radiogroup" aria-labelledby="create-task-difficulty-label" className="flex gap-0.5 h-[38px] items-center">
+                      {[1, 2, 3, 4, 5].map(star => {
+                        const active = difficulty !== null && star <= difficulty;
+                        return (
+                          <button
+                            key={star}
+                            type="button"
+                            role="radio"
+                            aria-checked={difficulty !== null && star === difficulty}
+                            tabIndex={difficulty === null ? (star === 3 ? 0 : -1) : (star === difficulty ? 0 : -1)}
+                            aria-label={t('taskTemplate.difficultyN', { n: star })}
+                            onClick={() => setDifficulty(prev => (prev === star ? null : star))}
+                            className={`w-7 h-7 text-lg leading-none transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 rounded ${
+                              active ? 'text-amber-500' : 'text-slate-200 hover:text-slate-300'
+                            }`}
+                          >
+                            ★
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                {(errors?.title || errors?.xp) && (
+                  <p className="text-xs text-red-600" aria-live="polite">
+                    {errors?.title ? t('taskTemplate.errTitleRequired') : t('taskTemplate.errXpInvalid')}
+                  </p>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-700">{t('createTask.questContent')}</label>
+                  <textarea className="w-full border border-slate-200 p-2 rounded h-20" value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} placeholder={t('createTask.questContentPlaceholder')} />
+                </div>
+
+                {/* 分支 B 的「要点 → LLM 润色」接口尚未落地（P3 单开）：此处只预留位置，禁用并说明 */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-bold text-slate-700" htmlFor="create-task-brief">{t('createTask.brief')}</label>
+                    <button
+                      type="button"
+                      disabled
+                      title={t('createTask.polishDisabledHint')}
+                      aria-disabled="true"
+                      className="text-[11px] font-bold text-sky-700 px-2 py-1 rounded border border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed"
+                    >
+                      <Sparkles size={12} className="inline -mt-0.5 mr-0.5" aria-hidden /> {t('createTask.polish')}
+                    </button>
+                  </div>
+                  <textarea
+                    id="create-task-brief"
+                    className="w-full border border-slate-200 p-2 rounded h-16"
+                    value={contentBrief}
+                    onChange={e => setContentBrief(e.target.value)}
+                    placeholder={t('createTask.briefPlaceholder')}
+                  />
+                  <p className="text-[11px] text-slate-400">{t('createTask.briefHint')}</p>
+                  <p className="text-[11px] text-amber-600">{t('createTask.polishDisabledHint')}</p>
+                </div>
+
+                <div className="flex items-center gap-2 p-3 bg-violet-50 border border-violet-100 rounded-lg">
+                  <Info size={14} className="text-violet-500 shrink-0" />
+                  <span className="text-xs text-violet-700">{t('createTask.onceHint')}</span>
+                </div>
+              </>
+            ) : (
+              // 分支 A：选了模板 —— 目标日期 + 三项微调 → 生成
+              renderGenerateStepContent({
+                templateId: activeTemplate.id,
+                templateTitle: activeTemplate.title,
+                templateType: activeTemplate.type,
+                estimatedMinutes: activeTemplate.estimated_minutes,
+                fillBackDifficultyDisabled: activeTemplate.difficulty === null,
+              })
+            )}
+          </div>
+
+          <div className="p-4 bg-slate-50 border-t flex justify-end gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded">
+              {t('common.cancel')}
+            </button>
+            {!activeTemplate ? (
+              <button
+                onClick={handleSubmitCreateTask}
+                disabled={submitting || !newTaskTitle.trim()}
+                className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md transform active:scale-95 disabled:opacity-50"
+              >
+                {submitting ? t('common.loading') : t('createTask.submit')}
+              </button>
+            ) : (
+              <button
+                onClick={handleGenerateSubmit}
+                disabled={Boolean(dateError) || generating}
+                className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {generating ? t('common.loading') : t('generateTask.submit')}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // 新建非 once 模板：第一步是建模板，第二步是选日期+微调
   if (!isEdit && category !== 'once' && !createdTemplateId) {
@@ -804,31 +1196,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     );
   }
 
-  // 生成步骤（仅新建非 once 模板时出现）
+  // 生成步骤（新建非 once 模板第二步：模板已落库，直接选日期 + 微调生成实例）
   if (!isEdit && category !== 'once' && createdTemplateId) {
-    const dateFieldError = dateError
-      ? dateError === 'min'
-        ? t('generateTask.errDateTooEarly')
-        : t('generateTask.errDateTooFar', { days: TARGET_DATE_MAX_AHEAD_DAYS })
-      : null;
-
-    const resultActionCopy = (r: TaskGenerateResult): string => {
-      switch (r.action) {
-        case 'created':
-          return t('generateTask.resultCreated');
-        case 'exists':
-          return t('generateTask.resultExists');
-        case 'rolled_forward':
-          return t('generateTask.resultRolled');
-        case 'kept':
-          return t('generateTask.resultKept');
-        case 'skipped_expired':
-          return t('generateTask.resultSkipped');
-        default:
-          return '';
-      }
-    };
-
     return (
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
         <div
@@ -847,149 +1216,13 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
           </div>
 
           <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
-            {/* 任务板入口（未选模板）：先选模板；模板管理入口（已定模板）时隐藏 */}
-            {!createdTemplateId && (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                <div className="text-xs font-bold text-slate-600 mb-1.5">{t('generateTask.pickTemplate')}</div>
-                {!templates ? (
-                  <p className="text-xs text-slate-400">{t('common.loading')}</p>
-                ) : templates.length === 0 ? (
-                  <p className="text-xs text-slate-500">{t('generateTask.noTemplates')}</p>
-                ) : (
-                  <select
-                    value={selectedTemplateId}
-                    onChange={event => {
-                      setSelectedTemplateId(event.target.value);
-                      setGenerateResult(null);
-                      setDateHasInstance(null);
-                      const tmpl = templates.find(item => item.id === event.target.value);
-                      if (tmpl) {
-                        setTuneValues({
-                          difficulty: tmpl.difficulty,
-                          time_deposit: tmpl.time_deposit,
-                          xp_reward: tmpl.xp_reward,
-                        });
-                        setTuneDirty(EMPTY_DIRTY);
-                      }
-                    }}
-                    aria-label={t('generateTask.pickTemplate')}
-                    className="border rounded-lg p-2 text-sm w-full border-slate-200"
-                  >
-                    <option value="">{t('generateTask.pickTemplatePlaceholder')}</option>
-                    {templates.map(item => (
-                      <option key={item.id} value={item.id}>
-                        {item.title}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-bold text-slate-800">{newTaskTitle.trim()}</span>
-              <span className="text-[11px] text-slate-400">
-                {t(`taskType.${CATEGORY_TYPE[category]}`)}
-              </span>
-            </div>
-
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-              <div className="text-xs font-bold text-slate-600 mb-1 flex items-center gap-1">
-                <CalendarClock size={13} aria-hidden /> {t('generateTask.targetDate')}
-              </div>
-              <input
-                type="date"
-                value={targetDate}
-                min={today}
-                max={maxDate}
-                onChange={event => {
-                  setTargetDate(event.target.value);
-                  setGenerateResult(null);
-                }}
-                aria-invalid={Boolean(dateError)}
-                aria-describedby="generate-target-date-hint"
-                className={`border rounded-lg p-2 text-sm w-full ${
-                  dateError ? 'border-red-400' : 'border-slate-200'
-                }`}
-              />
-              {dateFieldError ? (
-                <p className="text-xs text-red-600 mt-1" aria-live="polite">{dateFieldError}</p>
-              ) : (
-                <p id="generate-target-date-hint" className="text-[11px] text-slate-400 mt-1">
-                  {t('generateTask.dateHint', { days: TARGET_DATE_MAX_AHEAD_DAYS })}
-                </p>
-              )}
-              {dateHasInstance && !dateError && (
-                <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-2 flex items-start gap-1 mt-1" aria-live="polite">
-                  <Info size={12} className="mt-0.5 shrink-0" aria-hidden />
-                  <span>{t('generateTask.dateHasInstance', { date: targetDate })}</span>
-                </p>
-              )}
-            </div>
-
-            <div>
-              <div className="text-xs font-bold text-slate-600 mb-1.5">{t('tune.sectionTitle')}</div>
-              <TaskTuneFields
-                template={{
-                  id: createdTemplateId,
-                  type: CATEGORY_TYPE[category],
-                  estimated_minutes: null,
-                }}
-                value={tuneValues}
-                dirty={tuneDirty}
-                onChange={changeField}
-                onFillBack={fillBack}
-                fillingBack={tuneFillingBack}
-                fillBackDisabled={{ difficulty: false }}
-                previewDate={targetDate}
-                disabled={generating}
-              />
-            </div>
-
-            {generateResult && generateResult.instance_id === null && (
-              <div
-                className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1"
-                role="status"
-                aria-live="polite"
-              >
-                <div className="text-sm font-bold text-amber-800">{t('generateTask.resultSkippedTitle')}</div>
-                <p className="text-xs text-amber-700">{resultActionCopy(generateResult)}</p>
-              </div>
-            )}
-
-            {generateResult && generateResult.instance_id !== null && (
-              <div
-                className="bg-green-50 border border-green-200 rounded-xl p-3 space-y-1"
-                role="status"
-                aria-live="polite"
-              >
-                <div className="text-sm font-bold text-green-800">
-                  {generateResult.generated_for_date === null
-                    ? t('generateTask.resultReused')
-                    : generateResult.generated_for_date > today
-                      ? t('generateTask.scheduledFor', { date: generateResult.generated_for_date })
-                      : t('generateTask.deployedToday')}
-                </div>
-                <p className="text-xs text-green-700">{resultActionCopy(generateResult)}</p>
-                <p className="text-[11px] text-slate-500">
-                  {t('generateTask.resultValues', {
-                    difficulty: generateResult.difficulty ?? t('tune.unrated'),
-                    deposit: generateResult.time_deposit ?? '—',
-                    xp: generateResult.xp_reward ?? '—',
-                  })}
-                </p>
-                {sentOverrides && !generateResult.overrides_applied && (
-                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
-                    {t('generateTask.overridesNotApplied')}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {generateError && (
-              <div role="alert" className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm font-bold">
-                {generateError}
-              </div>
-            )}
+            {renderGenerateStepContent({
+              templateId: createdTemplateId,
+              templateTitle: newTaskTitle.trim(),
+              templateType: CATEGORY_TYPE[category],
+              estimatedMinutes: null,
+              fillBackDifficultyDisabled: false,
+            })}
           </div>
 
           <div className="p-4 bg-slate-50 border-t flex justify-end gap-2">

@@ -384,6 +384,22 @@ const enUS = {
     quotaLine: 'Daily allowance {{allowance}} · deposit cap {{cap}}',
     retry: 'Retry',
   },
+  // Quest board "Create Task" unified entry (DEV-58): task wording, deliberately not reusing the addTask.* template terms
+  createTask: {
+    entry: 'Create Task',
+    title: 'Create Task',
+    questTitle: 'Task name',
+    questNamePlaceholder: 'Task name',
+    questContent: 'Task content',
+    questContentPlaceholder: 'Content...',
+    brief: 'Task brief',
+    briefPlaceholder: 'e.g. 4 pages of mental math, within 100',
+    briefHint: 'Tell the generator what this task actually is. No season backdrop.',
+    polish: 'AI polish',
+    polishDisabledHint: 'AI polish is coming soon — please fill in the task content yourself for now.',
+    onceHint: 'This task is not saved to your template library; it is a one-off quest.',
+    submit: 'Create',
+  },
   // Pick a template → generate (contract §6B, POST /scn/task-templates/{id}/generate)
   generateTask: {
     entry: 'Generate Quest',
