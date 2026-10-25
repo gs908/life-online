@@ -311,8 +311,6 @@ const enUS = {
     descriptionLabel: 'Description',
     descriptionPlaceholder: 'Describe the rules for using this privilege',
     levelRequired: 'Unlock Level',
-    active: 'Active',
-    system: 'System',
     systemBadge: 'System',
     inactiveBadge: 'Inactive',
     addNew: '+ New Privilege',
@@ -322,6 +320,9 @@ const enUS = {
     systemHint: 'System privileges (is_system=true) are platform-built-in and cannot be deleted; custom privileges can be edited or deleted.',
     titleRequired: 'Title is required',
     levelRequiredMin: 'Level must be ≥ 1',
+    confirmDelete: 'Delete this privilege? This cannot be undone.',
+    saveFailed: 'Failed to save. Please try again.',
+    deleteFailed: 'Failed to delete. Please try again.',
     save: 'Save',
   },
   seasonHistory: {

@@ -313,8 +313,6 @@ const zhCN = {
     descriptionLabel: '描述',
     descriptionPlaceholder: '说明该权益的使用规则',
     levelRequired: '解锁等级',
-    active: '启用',
-    system: '系统权益',
     systemBadge: '系统',
     inactiveBadge: '未启用',
     addNew: '+ 新建权益',
@@ -324,6 +322,9 @@ const zhCN = {
     systemHint: '系统权益（is_system=true）由平台内置，不可删除；自定义权益可编辑或删除。',
     titleRequired: '名称不能为空',
     levelRequiredMin: '等级必须 ≥ 1',
+    confirmDelete: '确定删除该权益？删除后不可恢复。',
+    saveFailed: '保存失败，请重试',
+    deleteFailed: '删除失败，请重试',
     save: '保存',
   },
   seasonHistory: {
