@@ -239,14 +239,16 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
               <h3 className="text-lg font-bold text-blue-800 mb-2 flex items-center gap-2">
                 <Sparkles size={18} /> {t('parent.currentlyAdventuring')}
               </h3>
-              <QuestCard
-                task={activeQuest}
-                role={UserRole.PARENT}
-                isActive={true}
-                onAccept={() => { }}
-                onSubmit={() => { }}
-                onApprove={() => { }}
-              />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <QuestCard
+                  task={activeQuest}
+                  role={UserRole.PARENT}
+                  isActive={true}
+                  onAccept={() => { }}
+                  onSubmit={() => { }}
+                  onApprove={() => { }}
+                />
+              </div>
             </div>
           )}
 

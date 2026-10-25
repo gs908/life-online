@@ -55,7 +55,7 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
 
   return (
     <div className={`relative p-4 rounded-xl border-l-4 shadow-sm flex flex-col gap-2 transition-all duration-300
-        ${isActive ? 'scale-105 ring-4 ring-yellow-400/50 z-10 shadow-xl' : 'hover:-translate-y-1'}
+        ${isActive ? 'ring-4 ring-yellow-400/50 z-10 shadow-xl' : 'hover:-translate-y-1'}
         ${getTypeColor(task.type)}`}>
 
       {isActive && (
