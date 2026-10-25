@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { TaskRead } from '../services/api';
 import { TaskStatus, UserRole } from '../types';
 import { Clock, CheckCircle, ShieldAlert, Users, Camera, Star, Play, AlertTriangle, Coins } from 'lucide-react';
+import { dateOnlyToMMDD, timestampToMMDD } from '../utils/date';
 
 interface QuestCardProps {
   task: TaskRead;
@@ -30,6 +31,28 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
   /** 驳回展示态（DEV-57）：后端在 IN_PROGRESS 上以 rejected 派生，重交后自动回落 */
   const rejectedInProgress = task.status === TaskStatus.IN_PROGRESS && !!task.rejected;
 
+  /**
+   * 头部日期小标签（DEV-65 块 B）。三种口径，统一 MM-DD：
+   * 已完成 → 实际完成日；待审核 → 提交日；其余 → 逻辑日（这张卡属于哪一天）。
+   *
+   * 「排期」一词只留给真正的已排期任务（未来日期、孩子端不可见）—— 在架卡沿用「已排期」
+   * 会让它与未来排期的卡文案一致，家长反而分不出「孩子没做」和「还没投放」，正是该角标要防的误判。
+   * 完成/提交是时间戳字段，必须走本地口径，不能用 UTC 切片。
+   */
+  const dateLabel = (() => {
+    if (task.status === TaskStatus.COMPLETED) {
+      const date = timestampToMMDD(task.completed_at) ?? dateOnlyToMMDD(task.generated_for_date);
+      return date ? { key: 'questCard.completedOn', date } : null;
+    }
+    if (task.status === TaskStatus.PENDING_REVIEW) {
+      const date = timestampToMMDD(task.submitted_at) ?? dateOnlyToMMDD(task.generated_for_date);
+      return date ? { key: 'questCard.submittedOn', date } : null;
+    }
+    const date = dateOnlyToMMDD(task.generated_for_date);
+    if (!date) return null;
+    return { key: scheduled ? 'taskTemplate.scheduledBadge' : 'questCard.generatedOn', date };
+  })();
+
   const getTypeColor = (type: TaskRead['type']) => {
     switch (type) {
       case 'CHALLENGE': return 'border-red-400 bg-red-50';
@@ -55,7 +78,7 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
 
   return (
     <div className={`relative p-4 rounded-xl border-l-4 shadow-sm flex flex-col gap-2 transition-all duration-300
-        ${isActive ? 'scale-105 ring-4 ring-yellow-400/50 z-10 shadow-xl' : 'hover:-translate-y-1'}
+        ${isActive ? 'ring-4 ring-yellow-400/50 z-10 shadow-xl' : 'hover:-translate-y-1'}
         ${getTypeColor(task.type)}`}>
 
       {isActive && (
@@ -70,10 +93,11 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
             {task.type === 'COOP' && <Users size={16} className="text-purple-500" />}
             {task.type === 'TIMED' && <Clock size={16} className="text-orange-500" />}
             <span className="text-xs uppercase font-bold text-slate-500 tracking-wider">{t(`taskType.${task.type}`)}</span>
-            {/* 已排期角标（契约 §6B）：未来日期的实例孩子端不可见，不标出来家长会当成"孩子没做" */}
-            {scheduled && (
-              <span className="text-[10px] font-bold bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full">
-                {t('taskTemplate.scheduledBadge', { date: task.generated_for_date })}
+            {/* 日期小标签（DEV-65 块 B）：完成 / 提交 / 逻辑日三者同款同格式；
+                已排期任务走 taskTemplate.scheduledBadge（「已排期」只在真有未来排期时出现） */}
+            {dateLabel && (
+              <span className="shrink-0 whitespace-nowrap text-[10px] font-bold bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full">
+                {t(dateLabel.key, { date: dateLabel.date })}
               </span>
             )}
         </div>

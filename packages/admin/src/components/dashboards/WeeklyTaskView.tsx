@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { TaskRead } from '../../services/api';
 import type { SeasonTheme } from '../../types';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
-import { localToday } from '../../utils/date';
+import { localToday, dateOnlyToMMDD, timestampToMMDD } from '../../utils/date';
 
 /** 多孩子模式下的孩子选项（家长端）：头像 + 名字用于区分任务归属 */
 export interface WeeklyViewChild {
@@ -89,6 +89,15 @@ function getTypeBadgeColor(type: TaskRead['type']) {
 /** 驳回展示态（DEV-57 路线 2）：与任务板 QuestCard 同口径 —— 周视图同属孩子端，驳回需可见 */
 function isRejectedTask(task: TaskRead): boolean {
   return task.status === 'IN_PROGRESS' && !!task.rejected;
+}
+
+/**
+ * 已完成任务的完成日 MM-DD（DEV-65 块 B）：优先实际完成时间，回退逻辑日。
+ * 同一模板的每日实例标题完全相同，带上完成日才能在周视图里区分。
+ * 格式化口径统一在 utils/date（完成时间是时间戳，必须按本地分量取日）。
+ */
+function completedDateMMDD(task: TaskRead): string | null {
+  return timestampToMMDD(task.completed_at) ?? dateOnlyToMMDD(task.generated_for_date);
 }
 
 function getStatusDot(task: TaskRead) {
@@ -399,6 +408,9 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task)}`} />
                         {renderChildBadge(task)}
                         <span className="font-bold truncate flex-1 leading-tight">{task.title}</span>
+                        {task.status === 'COMPLETED' && completedDateMMDD(task) && (
+                          <span className="shrink-0 text-[9px] font-bold opacity-70">{completedDateMMDD(task)}</span>
+                        )}
                         {isRejectedTask(task) && (
                           <span className="shrink-0 text-[9px] font-bold text-red-700 bg-red-100 rounded px-1">
                             {t('taskStatus.REJECTED')}
@@ -470,6 +482,9 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
                       <span className={`w-2 h-2 rounded-full shrink-0 ${getStatusDot(task)}`} />
                       {renderChildBadge(task)}
                       <span className="font-bold flex-1">{task.title}</span>
+                      {task.status === 'COMPLETED' && completedDateMMDD(task) && (
+                        <span className="shrink-0 text-[10px] font-bold opacity-60">{completedDateMMDD(task)}</span>
+                      )}
                       {isRejectedTask(task) && (
                         <span className="shrink-0 text-[10px] font-bold text-red-700 bg-red-100 rounded px-1.5">
                           {t('taskStatus.REJECTED')}
