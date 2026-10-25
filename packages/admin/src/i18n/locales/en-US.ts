@@ -91,6 +91,8 @@ const enUS = {
     verified: 'Verified',
     completedOn: 'Completed {{date}}',
     submittedOn: 'Submitted {{date}}',
+    // Neutral on-shelf date: "Scheduled" is reserved for future-dated instances (taskTemplate.scheduledBadge)
+    generatedOn: '{{date}}',
     rejectReasonLabel: 'Rejection reason: ',
     rejectResubmitHint: 'Please revise and resubmit your proof.',
   },

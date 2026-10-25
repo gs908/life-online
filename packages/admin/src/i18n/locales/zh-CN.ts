@@ -91,6 +91,8 @@ const zhCN = {
     verified: '已验证',
     completedOn: '完成 {{date}}',
     submittedOn: '提交 {{date}}',
+    // 在架卡的逻辑日：中性，不带「排期」字样 —— 「已排期」只表示未来投放（见 taskTemplate.scheduledBadge）
+    generatedOn: '{{date}}',
     rejectReasonLabel: '驳回原因：',
     rejectResubmitHint: '请修改后重新提交凭证。',
   },

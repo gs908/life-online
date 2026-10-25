@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { TaskRead } from '../../services/api';
 import type { SeasonTheme } from '../../types';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
-import { localToday } from '../../utils/date';
+import { localToday, dateOnlyToMMDD, timestampToMMDD } from '../../utils/date';
 
 /** 多孩子模式下的孩子选项（家长端）：头像 + 名字用于区分任务归属 */
 export interface WeeklyViewChild {
@@ -94,10 +94,10 @@ function isRejectedTask(task: TaskRead): boolean {
 /**
  * 已完成任务的完成日 MM-DD（DEV-65 块 B）：优先实际完成时间，回退逻辑日。
  * 同一模板的每日实例标题完全相同，带上完成日才能在周视图里区分。
+ * 格式化口径统一在 utils/date（完成时间是时间戳，必须按本地分量取日）。
  */
 function completedDateMMDD(task: TaskRead): string | null {
-  const raw = task.completed_at ?? task.generated_for_date;
-  return raw ? raw.slice(5, 10) : null;
+  return timestampToMMDD(task.completed_at) ?? dateOnlyToMMDD(task.generated_for_date);
 }
 
 function getStatusDot(task: TaskRead) {
