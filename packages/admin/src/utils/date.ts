@@ -21,6 +21,28 @@ export function addDays(date: string, days: number): string {
   return localToday(base);
 }
 
+/**
+ * 纯 DATE 字段（如 `generated_for_date`）→ MM-DD。
+ * 这类值本身就是「哪一天」，不带时刻也没有时区语义，直接切分即可。
+ */
+export function dateOnlyToMMDD(date: string | null | undefined): string | null {
+  return date ? date.slice(5, 10) : null;
+}
+
+/**
+ * 时间戳字段（`DateTime(timezone=True)`，如 `completed_at` / `submitted_at`）→ 本地时区的 MM-DD。
+ *
+ * 必须按本地分量取日，不能 `slice(5, 10)`：序列化出来是 UTC 瞬时值，
+ * 直接切片会拿到 UTC 日 —— 北京时间 00:00–08:00 完成的任务会显示成前一天，
+ * 与本文件顶部的口径约定和后端 `today_bj()` 冲突。
+ */
+export function timestampToMMDD(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /** 生成时后台默认的「可提前天数」上限（契约 §2.1：> 今天 + 30 天 → 422） */
 export const TARGET_DATE_MAX_AHEAD_DAYS = 30;
 
