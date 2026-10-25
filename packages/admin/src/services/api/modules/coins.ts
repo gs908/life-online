@@ -9,6 +9,8 @@ import type {
   CoinTransactionRead,
   PageResult,
   PrivilegeRead,
+  PrivilegeTemplateCreate,
+  PrivilegeTemplateUpdate,
   RedemptionCreate,
   RedemptionRead,
   TimeConfigRead,
@@ -37,6 +39,18 @@ export const updateMyTimeConfig = (data: TimeConfigUpdate) =>
 
 /** 特权模板树（系统+本家庭，后端已按 level_required 排序）；特权树按 level_required 分组渲染 */
 export const listPrivilegeTemplates = () => request<PrivilegeRead[]>('/scn/privileges/templates');
+
+/** 新建家庭级权益模板（仅家长）：服务端取当前家庭、恒 is_system=false */
+export const createPrivilegeTemplate = (data: PrivilegeTemplateCreate) =>
+  request<PrivilegeRead>('/scn/privileges/templates', { method: 'POST', body: data });
+
+/** 修改家庭级权益模板（仅家长）：只提交需变更字段；系统模板会被后端拒绝（403） */
+export const updatePrivilegeTemplate = (id: string, data: PrivilegeTemplateUpdate) =>
+  request<PrivilegeRead>(`/scn/privileges/templates/${id}`, { method: 'PATCH', body: data });
+
+/** 删除家庭级权益模板（仅家长）：系统模板会被后端拒绝（403） */
+export const deletePrivilegeTemplate = (id: string) =>
+  request<{ deleted: boolean; id: string }>(`/scn/privileges/templates/${id}`, { method: 'DELETE' });
 
 export const listPrivilegeUnlocks = (childId?: string) =>
   request<UserPrivilegeRead[]>('/scn/privileges/unlocks', { query: { child_id: childId } });

@@ -1,34 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PrivilegeRead } from '../../services/api';
+import { api, type PrivilegeRead } from '../../services/api';
 import { X, Plus, Pencil, Trash2, Check, Save, AlertCircle } from 'lucide-react';
 
 interface PrivilegeFormState {
-  id: string;
   title: string;
   description: string;
   icon: string;
-  levelRequired: number;
-  isSystem: boolean;
-  isActive: boolean;
+  level_required: number;
 }
 
 interface PrivilegeConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   templates: PrivilegeRead[];
-  onSaved: (templates: PrivilegeRead[]) => void;
+  /** 保存/删除成功后由父级重拉模板列表（服务端为准，不再本地拼装） */
+  onSaved: () => void | Promise<void>;
   onToast: (title: string, msg: string) => void;
 }
 
 const EMPTY_FORM: PrivilegeFormState = {
-  id: '',
   title: '',
   description: '',
   icon: '⭐',
-  levelRequired: 1,
-  isSystem: false,
-  isActive: true,
+  level_required: 1,
 };
 
 const ICON_OPTIONS = ['⭐', '🌳', '🍔', '🏪', '🎮', '🚲', '👑', '🎁', '🏆', '💎'];
@@ -63,7 +58,7 @@ const PrivilegeConfigModal: React.FC<PrivilegeConfigModalProps> = ({
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ ...EMPTY_FORM, id: crypto.randomUUID?.() ?? Date.now().toString(36) });
+    setForm({ ...EMPTY_FORM });
     setView('form');
     setFormError(null);
   };
@@ -71,45 +66,49 @@ const PrivilegeConfigModal: React.FC<PrivilegeConfigModalProps> = ({
   const openEdit = (tpl: PrivilegeRead) => {
     setEditing(tpl);
     setForm({
-      id: tpl.id,
       title: tpl.title,
       description: tpl.description,
       icon: tpl.icon,
-      levelRequired: tpl.level_required,
-      isSystem: tpl.is_system,
-      isActive: tpl.is_active,
+      level_required: tpl.level_required,
     });
     setView('form');
     setFormError(null);
   };
 
-  const handleFieldChange = (field: keyof PrivilegeFormState, value: string | number | boolean) => {
+  const handleFieldChange = (field: keyof PrivilegeFormState, value: string | number) => {
     setForm(prev => ({ ...prev, [field]: value }));
     setFormError(null);
   };
 
   const handleSave = async () => {
     if (saving) return;
-    if (!form.title.trim()) {
+    const title = form.title.trim();
+    if (!title) {
       setFormError(t('privilegeConfig.titleRequired'));
       return;
     }
-    if (form.levelRequired < 1) {
+    if (form.level_required < 1) {
       setFormError(t('privilegeConfig.levelRequiredMin'));
       return;
     }
     setSaving(true);
     setFormError(null);
     try {
-      const updated: PrivilegeRead[] = editing
-        ? localTemplates.map(t => t.id === editing.id ? { ...t, title: form.title, description: form.description, icon: form.icon, levelRequired: form.levelRequired, is_system: form.isSystem, is_active: form.isActive } : t)
-        : [...localTemplates, { id: form.id, family_id: '', season_id: null, title: form.title, description: form.description, icon: form.icon, levelRequired: form.levelRequired, is_system: form.isSystem, is_active: form.isActive }];
-      setLocalTemplates(updated);
-      onSaved(updated);
+      const payload = {
+        title,
+        description: form.description,
+        icon: form.icon,
+        level_required: form.level_required,
+      };
+      if (editing) {
+        await api.coins.updatePrivilegeTemplate(editing.id, payload);
+      } else {
+        await api.coins.createPrivilegeTemplate(payload);
+      }
+      await onSaved();
       onToast(
         editing ? t('toast.privilegeUpdatedTitle') : t('toast.privilegeCreatedTitle'),
-        editing ? t('toast.privilegeUpdatedMsg', { title: form.title }) : t('toast.privilegeCreatedMsg', { title: form.title }),
-        3000,
+        editing ? t('toast.privilegeUpdatedMsg', { title }) : t('toast.privilegeCreatedMsg', { title }),
       );
       setView('list');
       setEditing(null);
@@ -121,13 +120,22 @@ const PrivilegeConfigModal: React.FC<PrivilegeConfigModalProps> = ({
     }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
+    if (deleting) return;
+    if (!window.confirm(t('privilegeConfig.confirmDelete'))) return;
     setDeleting(id);
-    const updated = localTemplates.filter(t => t.id !== id);
-    setLocalTemplates(updated);
-    onSaved(updated);
-    onToast(t('toast.privilegeDeletedTitle'), t('toast.privilegeDeletedMsg'), 2000);
-    setDeleting(null);
+    try {
+      await api.coins.deletePrivilegeTemplate(id);
+      await onSaved();
+      onToast(t('toast.privilegeDeletedTitle'), t('toast.privilegeDeletedMsg'));
+    } catch (err) {
+      onToast(
+        t('toast.deleteFailedTitle'),
+        err instanceof Error ? err.message : t('privilegeConfig.deleteFailed'),
+      );
+    } finally {
+      setDeleting(null);
+    }
   };
 
   const handleCancel = () => {
@@ -253,33 +261,10 @@ const PrivilegeConfigModal: React.FC<PrivilegeConfigModalProps> = ({
                   type="number"
                   min={1}
                   max={99}
-                  value={form.levelRequired}
-                  onChange={e => handleFieldChange('levelRequired', Math.max(1, parseInt(e.target.value) || 1))}
+                  value={form.level_required}
+                  onChange={e => handleFieldChange('level_required', Math.max(1, parseInt(e.target.value) || 1))}
                   className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-              </div>
-
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.isActive}
-                    onChange={e => handleFieldChange('isActive', e.target.checked)}
-                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  {t('privilegeConfig.active')}
-                </label>
-                {!editing?.is_system && (
-                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.isSystem}
-                      onChange={e => handleFieldChange('isSystem', e.target.checked)}
-                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    {t('privilegeConfig.system')}
-                  </label>
-                )}
               </div>
             </div>
           )}
