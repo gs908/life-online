@@ -9,6 +9,8 @@ interface ReviewTaskModalProps {
   onClose: () => void;
   task: TaskRead | undefined;
   onApprove: (taskId: string, rating: number, comment: string) => void;
+  /** 驳回（DEV-57）：reason 必填（空则按钮禁用），后端写入 review_comment 并把实例退回 IN_PROGRESS */
+  onReject: (taskId: string, comment: string) => void;
   approving?: boolean;
 }
 
@@ -23,11 +25,15 @@ interface ProofViewItem {
  * proofs 为空时回退单值 proof_url（过渡字段 = 首个证据，兼容存量数据）。
  * AI 辅助评分走 POST /scn/ai/evaluate-proof，契约要求 image_data_url —— 只对首个图片证据送评，
  * 纯视频/无证据任务跳过 AI（评分只是辅助建议，失败不阻塞人工审核）。
+ *
+ * 驳回（DEV-57）：与「评语」分开的独立输入框 —— 评语会被 AI 评分预填，复用会让 AI 文案被当成驳回原因。
+ * rejectComment 必填，为空时驳回按钮禁用。
  */
-const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task, onApprove, approving }) => {
+const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task, onApprove, onReject, approving }) => {
   const { t } = useTranslation();
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
+  const [rejectComment, setRejectComment] = useState('');
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [evaluateError, setEvaluateError] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -52,6 +58,7 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
     if (isOpen && task) {
       setReviewRating(5);
       setReviewComment('');
+      setRejectComment('');
       setEvaluateError(null);
       setActiveIndex(0);
 
@@ -230,10 +237,36 @@ const ReviewTaskModal: React.FC<ReviewTaskModalProps> = ({ isOpen, onClose, task
               <label className="text-sm font-bold text-slate-700 block mb-1">{t('reviewTask.comment')}</label>
               <input className="w-full border p-2 rounded" value={reviewComment} onChange={e => setReviewComment(e.target.value)} placeholder={t('reviewTask.commentPlaceholder')} />
             </div>
+
+            {/* 驳回原因（DEV-57）：独立输入框，与 AI 预填的「评语」分离；必填，空则驳回按钮禁用 */}
+            <div className="border-t border-slate-200 pt-4">
+              <label htmlFor="reviewTask-reject-reason" className="text-sm font-bold text-slate-700 block mb-1">
+                {t('reviewTask.rejectReason')}
+              </label>
+              <textarea
+                id="reviewTask-reject-reason"
+                className="w-full border p-2 rounded"
+                rows={2}
+                value={rejectComment}
+                onChange={e => setRejectComment(e.target.value)}
+                placeholder={t('reviewTask.rejectReasonPlaceholder')}
+                aria-describedby="reviewTask-reject-hint"
+              />
+              <p id="reviewTask-reject-hint" className="text-xs text-slate-500 mt-1">
+                {t('reviewTask.rejectReasonRequired')}
+              </p>
+            </div>
           </div>
         </div>
         <div className="p-4 bg-slate-50 border-t flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-slate-600 font-bold">{t('common.close')}</button>
+          <button
+            onClick={() => onReject(task.id, rejectComment.trim())}
+            disabled={approving || !rejectComment.trim()}
+            className="px-6 py-2 bg-white text-red-600 border border-red-300 font-bold rounded hover:bg-red-50 disabled:opacity-50"
+          >
+            {t('reviewTask.reject')}
+          </button>
           <button
             onClick={() => onApprove(task.id, reviewRating, reviewComment)}
             disabled={approving}
