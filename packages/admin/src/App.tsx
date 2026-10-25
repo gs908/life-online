@@ -7,7 +7,7 @@ import { Bell } from 'lucide-react';
 
 // API Client（阶段②赛季 + 阶段③任务链路均已接入后端）
 import { api, ApiError } from './services/api';
-import type { AddTaskSubmit } from './components/modals/AddTaskModal';
+import type { AddTaskSubmit, AddTaskPurpose } from './components/modals/AddTaskModal';
 import type { TaskCreate, TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserPrivilegeRead, TaskTemplateRead, TaskGenerateResult } from './services/api';
 import { localToday } from './utils/date';
 
@@ -26,7 +26,6 @@ import type { TaskTemplateCategoryIntent } from './components/taskTemplateUtils'
 
 // Modals
 import AddTaskModal from './components/modals/AddTaskModal';
-import GenerateTaskModal from './components/modals/GenerateTaskModal';
 import TuneTaskModal from './components/modals/TuneTaskModal';
 import SubmitTaskModal from './components/modals/SubmitTaskModal';
 import ReviewTaskModal from './components/modals/ReviewTaskModal';
@@ -35,6 +34,15 @@ import TimeConfigModal from './components/modals/TimeConfigModal';
 import CoinLogsModal from './components/modals/CoinLogsModal';
 import SeasonConfigModal from './components/modals/SeasonConfigModal';
 import PrivilegeConfigModal from './components/modals/PrivilegeConfigModal';
+
+/**
+ * 同一时间一个任务（前端体验约束，后端不限制）。被驳回的任务优先作为「当前任务」，
+ * 避免多模板并存时被另一个普通 IN_PROGRESS 顶掉而看不到驳回原因（DEV-57）。
+ */
+const pickActiveQuest = (tasks: TaskRead[], childId: string | null | undefined) => {
+  const inProgress = tasks.filter(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childId);
+  return inProgress.find(t => t.rejected) ?? inProgress[0];
+};
 
 const App: React.FC = () => {
   const { t } = useTranslation();
@@ -102,14 +110,15 @@ const App: React.FC = () => {
   // 任务模板链路：AddTaskModal 双出口（instance/template/update）+ 管理视图重拉信号
   const [editingTemplate, setEditingTemplate] = useState<TaskTemplateRead | null>(null);
   const [addModalDefaultCategory, setAddModalDefaultCategory] = useState<TaskTemplateCategoryIntent>('once');
+  /** 弹窗用途（DEV-58）：任务板入口=createTask，模板管理入口=createTemplate */
+  const [addModalPurpose, setAddModalPurpose] = useState<AddTaskPurpose>('createTemplate');
+  /** createTask 且从模板行「生成」进入时的预选模板（P2 修复：原实现丢弃该参数） */
+  const [addModalTemplate, setAddModalTemplate] = useState<TaskTemplateRead | null>(null);
   const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templatesRefreshSignal, setTemplatesRefreshSignal] = useState(0);
 
   // 契约 §6B：选模板 → 生成（含目标日期与微调）+ 生成后微调
-  const [isGenerateOpen, setIsGenerateOpen] = useState(false);
-  /** 从模板行进入时已定模板；null = 从任务板进入，弹窗内先选模板 */
-  const [generateTemplate, setGenerateTemplate] = useState<TaskTemplateRead | null>(null);
-  /** 生成成功 → 模板详情抽屉的「最近实例」重拉（否则生成完看不到结果） */
+  /** 由 AddTaskModal 新建非 once 模板后的生成成功回调（DEV-51） */
   const [instancesRefreshSignal, setInstancesRefreshSignal] = useState(0);
   const [tuningTask, setTuningTask] = useState<TaskRead | null>(null);
   // 每次渲染取一次（纯字符串计算）：不要用 useMemo([]) 冻结在挂载那一刻，
@@ -237,8 +246,9 @@ const App: React.FC = () => {
     try {
       if (action.mode === 'instance') {
         const ok = await handleAddTask(action.task);
-        // task-instances 路径同样会落一条模板，仅在创建成功时让管理视图列表重拉
-        if (ok) setTemplatesRefreshSignal(signal => signal + 1);
+        // 非 ephemeral 的 task-instances 路径仍会落一条模板，仅在创建成功时让管理视图列表重拉；
+        // ephemeral（DEV-58 临时任务）不落模板，无需重拉。
+        if (ok && !action.task.ephemeral) setTemplatesRefreshSignal(signal => signal + 1);
         return;
       }
       if (action.mode === 'template') {
@@ -262,34 +272,38 @@ const App: React.FC = () => {
 
   const openCreateModal = (defaultCategory: TaskTemplateCategoryIntent) => {
     setEditingTemplate(null);
+    setAddModalPurpose('createTemplate');
+    setAddModalTemplate(null);
     setAddModalDefaultCategory(defaultCategory);
     setIsAddModalOpen(true);
   };
 
   const openEditModal = (template: TaskTemplateRead) => {
     setEditingTemplate(template);
+    setAddModalPurpose('createTemplate');
+    setAddModalTemplate(null);
     setIsAddModalOpen(true);
   };
 
   const closeAddModal = () => {
     setIsAddModalOpen(false);
     setEditingTemplate(null);
+    setAddModalTemplate(null);
   };
 
-  // 选模板 → 生成（契约 §6B）：template 非空 = 从模板行进入；null = 从任务板进入先选模板
+  // 「创建新任务」统一入口（DEV-58）：template 非空 = 从模板行「生成」进入（分支 A 直达）；
+  // null = 从任务板进入，弹窗顶部「选择模板」下拉由用户决定走哪一支。
   const openGenerateModal = (template: TaskTemplateRead | null) => {
-    setGenerateTemplate(template);
-    setIsGenerateOpen(true);
+    setEditingTemplate(null);
+    setAddModalPurpose('createTask');
+    setAddModalTemplate(template); // P2 修复：原实现丢弃该参数，模板行「生成」退化成新建 daily 模板
+    setAddModalDefaultCategory('once');
+    setIsAddModalOpen(true);
   };
 
-  /** 生成成功（含 action='exists' 命中既有实例）：回显由弹窗负责，这里只负责刷新与 toast。
-   *  ⚠️ `generated_for_date` 可为 null（skipped_expired 无产物；复用的链式实例也可能是 NULL）——
-   *  不判空会算出 `null <= today` 恒 false，进而说「已排期到 null」。 */
-  const handleGenerated = async (result: TaskGenerateResult) => {
+  /** 新建模板后生成的成功回调（DEV-51） */
+  const handleGeneratedFromCreate = async (result: TaskGenerateResult) => {
     const date = result.generated_for_date;
-    // 判空口径与弹窗回显**完全一致**：先看 instance_id（无产物），再看日期
-    // （复用的链式实例 instance_id 非空但 generated_for_date 为 NULL）。
-    // 只看日期会让 toast 说「未生成」、而弹窗绿框说「已复用既有实例」——两处说反话。
     if (result.instance_id === null) {
       toast(t('toast.taskGeneratedTitle'), t('generateTask.resultSkipped'));
     } else if (date === null) {
@@ -301,6 +315,16 @@ const App: React.FC = () => {
     }
     setInstancesRefreshSignal(signal => signal + 1);
     await loadBoard();
+    // DEV-58：任务板「创建新任务」选模板生成实例后，直接进入 TuneTaskModal 二次微调
+    if (addModalPurpose === 'createTask' && result.instance_id !== null) {
+      setIsAddModalOpen(false);
+      setAddModalTemplate(null);
+      try {
+        setTuningTask(await api.tasks.getTask(result.instance_id));
+      } catch {
+        // 取实例失败不阻断：任务已生成、任务板已刷新，用户可从任务卡片上的「微调」再进
+      }
+    }
   };
 
   const startQuest = async (id: string) => {
@@ -320,7 +344,7 @@ const App: React.FC = () => {
   };
 
   const handleAcceptAttempt = (id: string) => {
-    const activeQuest = tasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childUser?.childId);
+    const activeQuest = pickActiveQuest(tasks, childUser?.childId);
     if (activeQuest) {
       if (activeQuest.id === id) return;
       // UI 门禁：同一时间一个任务（后端不限制，纯前端体验约束）
@@ -416,6 +440,23 @@ const App: React.FC = () => {
     }
   };
 
+  /** 驳回（DEV-57）：后端退回 IN_PROGRESS 并写 review_comment，不动押金/XP（docs/13 §3.1），
+   *  故只需刷新任务板，无需 refreshUser。comment 由弹窗保证非空。 */
+  const handleRejectTask = async (taskId: string, comment: string) => {
+    if (approving) return;
+    setApproving(true);
+    try {
+      await api.tasks.rejectTask(taskId, { comment });
+      setIsReviewModalOpen(false);
+      toast(t('toast.rejectSuccessTitle'), t('toast.rejectSuccessMsg'));
+      await loadBoard();
+    } catch (error) {
+      showApiError(error, t('toast.rejectFailedTitle'));
+    } finally {
+      setApproving(false);
+    }
+  };
+
   /** 记录一次特权使用（POST /scn/privileges/uses，返回使用记录）；成功后余额/流水一律 refetch，禁止本地加减 */
   const handleRecordUsage = async (privilege: PrivilegeRead) => {
     try {
@@ -454,7 +495,7 @@ const App: React.FC = () => {
 
   // --- HELPER DATA FOR RENDER（任务列表已按激活赛季服务端过滤） ---
   const currentSeasonTheme = THEMES[activeSeason?.theme_id ?? 'DEFAULT'] || THEMES.DEFAULT;
-  const activeQuest = tasks.find(t => t.status === TaskStatus.IN_PROGRESS && t.assignee_child_id === childUser?.childId);
+  const activeQuest = pickActiveQuest(tasks, childUser?.childId);
   const availableTasks = tasks.filter(t => t.status === TaskStatus.AVAILABLE);
   const completedTasks = tasks.filter(t => t.status === TaskStatus.COMPLETED);
   const pendingTasks = tasks.filter(t => t.status === TaskStatus.PENDING_REVIEW);
@@ -516,6 +557,7 @@ const App: React.FC = () => {
                 privilegeTemplates={privilegeTemplates}
                 unlockedTemplateIds={privilegeUnlocks.map(u => u.privilege_template_id)}
                 privilegesLoading={privilegesLoading}
+                activeSeason={activeSeason}
                 onAcceptAttempt={handleAcceptAttempt}
                 onSubmit={(id) => { setSelectedTaskId(id); setIsSubmitModalOpen(true); }}
                 onAbandonCurrent={handleAbandonCurrent}
@@ -574,8 +616,7 @@ const App: React.FC = () => {
                         onRetrySeasons={loadSeasons}
                         onOpenSeasonConfig={() => setIsSeasonConfigModalOpen(true)}
                         onViewHistory={() => setShowSeasonHistory(true)}
-                        onOpenAddModal={() => openCreateModal('once')}
-                        onOpenGenerate={() => openGenerateModal(null)}
+                        onOpenAddModal={() => openGenerateModal(null)}
                         onTuneTask={(id) => setTuningTask(tasks.find(item => item.id === id) ?? null)}
                         today={today}
                         onRecordUsage={handleRecordUsage}
@@ -584,6 +625,7 @@ const App: React.FC = () => {
                         onOpenTimeConfig={() => setIsTimeConfigModalOpen(true)}
                         onViewCoinLogs={() => setIsCoinLogsOpen(true)}
                         onOpenPrivilegeConfig={() => setIsPrivilegeConfigOpen(true)}
+                        adventurers={family?.adventurers ?? []}
                      />
                  )}
              </div>
@@ -597,19 +639,15 @@ const App: React.FC = () => {
         onClose={closeAddModal}
         onSubmit={handleTemplateAction}
         seasonId={activeSeason?.id ?? ''}
+        childLevel={childUser?.level ?? 1}
         submitting={templateActionBusy}
         editingTemplate={editingTemplate}
         defaultCategory={addModalDefaultCategory}
-      />
-
-      {/* 契约 §6B：选模板 → 生成（目标日期 + 三项微调） */}
-      <GenerateTaskModal
-        isOpen={isGenerateOpen}
-        onClose={() => { setIsGenerateOpen(false); setGenerateTemplate(null); }}
-        initialTemplate={generateTemplate}
-        activeSeason={activeSeason}
-        onGenerated={handleGenerated}
+        purpose={addModalPurpose}
+        initialTemplate={addModalTemplate}
+        onSubmitGenerated={handleGeneratedFromCreate}
         onToast={showToast}
+        today={today}
       />
 
       {/* 契约 §6B：生成后微调（PATCH /scn/task-instances/{id}） */}
@@ -622,6 +660,7 @@ const App: React.FC = () => {
       />
 
       <SubmitTaskModal
+        key={`submit-task-modal-${isSubmitModalOpen ? "open" : "closed"}`}
         isOpen={isSubmitModalOpen}
         onClose={() => setIsSubmitModalOpen(false)}
         onSubmit={handleSubmitTask}
@@ -633,6 +672,7 @@ const App: React.FC = () => {
         onClose={() => setIsReviewModalOpen(false)}
         task={tasks.find(t => t.id === selectedTaskId)}
         onApprove={handleApproveTask}
+        onReject={handleRejectTask}
         approving={approving}
       />
 

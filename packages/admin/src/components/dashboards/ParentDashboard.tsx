@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, UserRole, SeasonTheme } from '../../types';
-import type { TaskRead, SeasonRead, PrivilegeRead, RedemptionRead } from '../../services/api';
+import type { TaskRead, SeasonRead, PrivilegeRead, RedemptionRead, UserRead } from '../../services/api';
 import StatsBoard from '../StatsBoard';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
+import WeeklyTaskView from './WeeklyTaskView';
+import type { WeeklyViewChild } from './WeeklyTaskView';
 import { isScheduled } from '../../utils/date';
-import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, CalendarClock, Gift } from 'lucide-react';
+import { History, Plus, Sparkles, Clock, Coins, Palette, Archive, Zap, Gift } from 'lucide-react';
 
 interface ParentDashboardProps {
   childUser: User;
@@ -26,9 +28,8 @@ interface ParentDashboardProps {
   onRetrySeasons: () => void;
   onOpenSeasonConfig: () => void;
   onViewHistory: () => void;
+  /** 任务板工具栏唯一入口：打开「创建新任务」弹窗（顶部选模板分两支） */
   onOpenAddModal: () => void;
-  /** 选模板 → 生成（契约 §6B）：任务板顶部入口（先选模板再填目标日期） */
-  onOpenGenerate: () => void;
   /** 微调已生成实例的难度/押金/经验值 */
   onTuneTask: (id: string) => void;
   /** 家庭本地时区的今天，YYYY-MM-DD：用于区分「已投放」与「已排期」 */
@@ -40,6 +41,8 @@ interface ParentDashboardProps {
   onViewCoinLogs: () => void;
   /** 打开权益设置弹窗 */
   onOpenPrivilegeConfig: () => void;
+  /** 家庭全部冒险者（家长端多孩子周视图：头像区分 + 筛选）；空数组 = 无孩子可筛选 */
+  adventurers: UserRead[];
 }
 
 const ParentDashboard: React.FC<ParentDashboardProps> = ({
@@ -59,7 +62,6 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onOpenSeasonConfig,
   onViewHistory,
   onOpenAddModal,
-  onOpenGenerate,
   onTuneTask,
   today,
   onRecordUsage,
@@ -67,9 +69,27 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onDeleteTask,
   onOpenTimeConfig,
   onViewCoinLogs,
-  onOpenPrivilegeConfig
+  onOpenPrivilegeConfig,
+  adventurers
 }) => {
   const { t } = useTranslation();
+
+  // 多孩子周视图：选中的孩子（null = 全部）
+  const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
+
+  const childOptions = useMemo<WeeklyViewChild[]>(
+    () =>
+      adventurers
+        .filter((a) => a.child_id !== null)
+        .map((a) => ({ childId: a.child_id as string, name: a.name, avatar: a.avatar })),
+    [adventurers],
+  );
+
+  // 家长端周视图展示「历史完成任务」（孩子端为全量执行视图，家长端聚焦已完成历史）
+  const completedTasks = useMemo(
+    () => tasks.filter((task) => task.status === 'COMPLETED'),
+    [tasks],
+  );
 
   // 已排期（generated_for_date > 今天）与已投放分开呈现：前者孩子端看不到、也不能接取，
   // 混在「可接取」里会让家长误判成"孩子没做"（契约 §6B 防误判）。
@@ -127,16 +147,10 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
              <Archive size={16} /> {t('parent.history')}
           </button>
           <button
-            onClick={onOpenGenerate}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-green-700 transition-colors shadow-lg shadow-green-600/20"
-          >
-            <CalendarClock size={16} /> {t('generateTask.entry')}
-          </button>
-          <button
             onClick={onOpenAddModal}
             className="bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/20"
           >
-            <Plus size={16} /> {t('parent.newQuest')}
+            <Plus size={16} /> {t('createTask.entry')}
           </button>
         </div>
       </div>
@@ -205,6 +219,20 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
         {/* RIGHT COLUMN: TASK MANAGEMENT */}
         <div className="lg:col-span-2">
+          {/* 周视图：按周查看全部孩子的历史完成任务（多孩子头像区分 + 点击筛选） */}
+          <div className="mb-6 bg-white p-4 rounded-xl shadow-md border border-slate-200">
+            <WeeklyTaskView
+              tasks={completedTasks}
+              currentTheme={currentTheme}
+              variant="light"
+              childOptions={childOptions}
+              selectedChildId={selectedChildId}
+              onChildSelected={setSelectedChildId}
+              seasonStart={activeSeason?.start_date ?? null}
+              seasonEnd={activeSeason?.end_date ?? null}
+            />
+          </div>
+
           {/* Active Quest Monitoring */}
           {activeQuest && (
             <div className="mb-6">

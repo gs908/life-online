@@ -315,10 +315,49 @@ class TaskTuneRequest(BaseModel):
 
 
 class TaskCreate(TaskTemplateCreate):
-    """兼容旧创建接口:创建模板并生成一条初始实例。"""
+    """创建接口请求体,由 `ephemeral` 分流(DEV-59):
+
+    - `ephemeral=False`(缺省):兼容旧语义 —— 建模板 + 生成一条初始实例(deprecated,DEV-50);
+    - `ephemeral=True`:临时任务 —— **只建实例、不落模板**,不进模板库。
+
+    字段集刻意共用一份(TaskTemplateCreate),因为两条分支共用大多数字段;
+    `ephemeral=True` 时**模板级**字段无处安放,故显式 422 而非静默丢弃(见
+    `_check_ephemeral`)。
+    """
     target_user_id: str | None = None
     deadline: datetime | None = None
     expire_at: datetime | None = None
+    # DEV-59 临时任务:只建实例、不落模板。
+    ephemeral: bool = False
+    # 临时任务的逻辑日(= 实例 `generated_for_date`);仅 `ephemeral=True` 有效,
+    # 缺省今天。刻意与生成路径的 `target_date` 同名同义(入参是"意图")。
+    target_date: date | None = None
+
+    @model_validator(mode="after")
+    def _check_ephemeral(self) -> "TaskCreate":
+        if not self.ephemeral:
+            # 非临时任务没有"逻辑日"概念(实例 generated_for_date 由旧路径留空),
+            # 传了不生效 —— 不静默丢弃,直接 422。
+            if "target_date" in self.model_fields_set and self.target_date is not None:
+                raise ValueError("target_date 仅适用于临时任务(ephemeral=true)")
+            return self
+        # 临时任务没有模板行,模板级配置无处安放。逐项显式拒绝,避免"配了却没生效":
+        if self.triggers:
+            raise ValueError("临时任务没有模板,不支持触发规则(triggers);如需周期任务请先建模板")
+        if self.library_id is not None:
+            raise ValueError("临时任务不套用模板库(library_id);请直接给出任务内容")
+        if self.type != TaskType.DAILY:
+            raise ValueError("临时任务仅支持 type=DAILY(其余类型依赖模板:触发/链式/协作)")
+        if self.timed_mode != TimedMode.NONE:
+            raise ValueError("临时任务为一次性任务,不支持时间窗(timed_mode);截止请用 deadline/expire_at")
+        if self.chain_key is not None or self.chain_order != 1 or self.chain_total != 1:
+            raise ValueError("临时任务不支持链式(chain_key/chain_order/chain_total)")
+        # `estimated_minutes` 会经 `resolve_deposit` 改变落库押金,但实例无该列,
+        # `TaskRead.estimated_minutes` 恒为 null —— 家长按 60 分钟算出押金、响应却
+        # 说没设时长,是"生效了却说不清"的坏契约。押金请显式用 `time_deposit`。
+        if self.estimated_minutes is not None:
+            raise ValueError("临时任务不支持 estimated_minutes(实例无该字段,无法回显);押金请直接用 time_deposit")
+        return self
 
 
 class TaskProofRead(BaseModel):
@@ -381,6 +420,9 @@ class TaskRead(BaseModel):
     proofs: list[TaskProofRead] = Field(default_factory=list)
     rating: int | None
     review_comment: str | None = None
+    # 驳回展示态(DEV-56 路线 2):驳回后实例仍停在 IN_PROGRESS,后端单点派生,
+    # 前端只消费本字段,不各自重算规则。派生口径见 `api/v1/tasks.py:_to_read`。
+    rejected: bool = False
     xp_awarded: int | None = None
     coin_delta: int = 0
     abandon_count_at_submit: int = 0
@@ -466,6 +508,41 @@ class TaskDepositPreviewResponse(BaseModel):
     time_deposit: int
     daily_allowance: int
     capped_by_allowance: bool
+
+
+class TaskBriefGenerateRequest(BaseModel):
+    """「任务要点 → 任务建议」入参(DEV-60,docs/08 §6C)。
+
+    任务板「创建新任务」未选模板时,家长填任务要点、点「生成」,后端把要点交给
+    LLM 润色成任务建议**反显回表单**;确认后再走既有的创建路径落库。
+
+    - `brief` 即 `ai_service.generate_quest` 的 `topic`(任务实质,Season 无关);
+    - `season_id` 缺省 = 当前激活赛季的剧情,作为叙事背景(与生成器同口径);
+    - `target_date` 只用于**建议押金**的当日配额封顶(配额按星期几不同),缺省
+      = 家庭本地时区今天;校验口径与 `POST /scn/task-templates/{id}/generate`
+      一致(仅允许 ≥ 今天、最多提前 30 天);
+    - `child_level` 只影响 LLM 的语气与难度建议。
+
+    `extra="forbid"`:多传字段直接 422,不静默忽略(DEV-50 审查口径)。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    brief: str = Field(..., min_length=1, max_length=500)
+    season_id: str | None = None
+    target_date: date | None = None
+    child_level: int = Field(default=1, ge=1, le=200)
+
+
+class TaskBriefSuggestion(BaseModel):
+    """任务建议出参(DEV-60):只回渲染建议,**不入库**。
+
+    前端拿这 5 个字段回填「创建新任务」表单,由用户确认/改写后再提交创建。
+    """
+    title: str
+    description: str
+    xp_reward: int
+    difficulty: int
+    time_deposit: int
 
 
 # ---- 模板库(docs/06 §2 / docs/12 块 A) ----

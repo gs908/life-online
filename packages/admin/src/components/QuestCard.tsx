@@ -27,6 +27,9 @@ interface QuestCardProps {
 const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, onAccept, onSubmit, onApprove, onDelete, onAbandon, onTune }) => {
   const { t } = useTranslation();
 
+  /** 驳回展示态（DEV-57）：后端在 IN_PROGRESS 上以 rejected 派生，重交后自动回落 */
+  const rejectedInProgress = task.status === TaskStatus.IN_PROGRESS && !!task.rejected;
+
   const getTypeColor = (type: TaskRead['type']) => {
     switch (type) {
       case 'CHALLENGE': return 'border-red-400 bg-red-50';
@@ -41,7 +44,9 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
   const getStatusBadge = () => {
     switch (task.status) {
       case TaskStatus.AVAILABLE: return <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.AVAILABLE')}</span>;
-      case TaskStatus.IN_PROGRESS: return <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold animate-pulse">{t('taskStatus.IN_PROGRESS')}</span>;
+      case TaskStatus.IN_PROGRESS: return rejectedInProgress
+        ? <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.REJECTED')}</span>
+        : <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold animate-pulse">{t('taskStatus.IN_PROGRESS')}</span>;
       case TaskStatus.PENDING_REVIEW: return <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.PENDING_REVIEW')}</span>;
       case TaskStatus.COMPLETED: return <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.COMPLETED')}</span>;
       case TaskStatus.EXPIRED: return <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-xs font-bold">{t('taskStatus.EXPIRED')}</span>;
@@ -76,7 +81,8 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
             <div className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-600">
                  +{task.xp_reward} {t('common.xp')}
             </div>
-            {!isActive && getStatusBadge()}
+            {/* 已驳回徽标即使作为「当前任务」高亮也照常显示（否则驳回事实被 isActive 隐藏） */}
+            {(!isActive || rejectedInProgress) && getStatusBadge()}
         </div>
       </div>
 
@@ -84,6 +90,18 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
         <h3 className="font-bold text-lg text-slate-800 leading-tight">{task.title}</h3>
         {task.lore_snippet && <p className="text-xs italic text-slate-500 mt-1 border-l-2 border-slate-300 pl-2">"{task.lore_snippet}"</p>}
         <p className="text-sm text-slate-700 mt-2">{task.description}</p>
+
+        {/* 驳回原因（DEV-57）：家长填写的 review_comment；引导孩子修改后重交（重交按钮沿用 IN_PROGRESS 分支） */}
+        {rejectedInProgress && (
+          <div className="mt-2 flex items-start gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5" role="note">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" aria-hidden />
+            <span>
+              <span className="font-bold">{t('questCard.rejectReasonLabel')}</span>
+              {task.review_comment}
+              <span className="block mt-0.5 text-red-600/80">{t('questCard.rejectResubmitHint')}</span>
+            </span>
+          </div>
+        )}
 
         {/* Time & Cost Info */}
         <div className="flex flex-wrap gap-2 mt-2">

@@ -185,14 +185,14 @@
 
 > `ThemeId` 是**赛季主题枚举**（预设皮肤，前端 `constants/themes.ts` 对应渲染素材）；与第 7 节的动态主题样式 `ThemeStyle` 是两个概念。
 
-## 6. 任务 `/scn/task-instances`（路由器前缀 `/scn`，另承载 `/scn/task-templates`）
+## 6. 任务 `/scn/task-instances`（路由器前缀 `/scn`，另承载 `/scn/task-templates` 与 `/scn/tasks`）
 
 | 方法 | 路径 | 说明 | 鉴权 |
 |------|------|------|------|
 | GET | `/scn/task-instances?page&page_size&season_id&status&template_id&assignee_child_id&generated_for_date_lte` | 任务实例分页列表（`template_id` 供模板详情/重新生成确认数未消费实例，DEV-35）。**DEV-50 可见性：孩子端由服务端强制 `generated_for_date IS NULL OR <= 今天`（客户端参数不可覆盖）；管理端默认全量，可用 `generated_for_date_lte` 显式筛选** | 登录 |
 | GET | `/scn/task-instances/{task_id}` | 详情（限本家庭） | 登录 |
 | PATCH | `/scn/task-instances/{task_id}` | **逐实例微调（DEV-50）**：见 §6B | 父母 |
-| POST | `/scn/task-instances` | 创建模板并生成初始实例（CHAIN 仅链首步）。**DEV-50 起 deprecated**，改用 `POST /scn/task-templates/{id}/generate` | 父母（deprecated） |
+| POST | `/scn/task-instances` | **按 `ephemeral` 分流（DEV-59）**：`ephemeral=true` → **临时任务：只建实例、不落模板**（返回体 `template_id=null`，不进模板库）；缺省 → 建模板 + 初始实例（CHAIN 仅链首步）。后者 **DEV-50 起 deprecated**，改用 `POST /scn/task-templates/{id}/generate` | 父母 |
 | POST | `/scn/task-templates` | 只建模板不投放实例（CHAIN 第 2..N 步，DEV-36） | 父母 |
 | DELETE | `/scn/task-instances/{task_id}` | 删除实例 | 父母 |
 | POST | `/scn/task-instances/{task_id}/start` | 孩子接取（扣时间币押金；COOP 记 OWNER 参与者）。**DEV-50：`generated_for_date > 今天` 的"已排期"实例 409，未到期不可接取** | 登录 |
@@ -226,7 +226,7 @@
 ```jsonc
 {
   "id": "str", "family_id": "str", "season_id": "str",
-  "template_id": "str | null",
+  "template_id": "str | null",                    // null = 实例不由模板生成（临时任务，见下方 DEV-59 说明）
   "creator_account_id": "str | null",
   "target_child_id": "str | null",    // 指派给某个孩子（null=可任接）
   "assignee_child_id": "str | null",  // 实际接取的孩子
@@ -262,8 +262,21 @@
 **TaskProofRead** `{ id, task_instance_id, kind: "IMAGE|VIDEO|AUDIO", url: "str | null", size, content_type, created_at }`
 > `kind` 由 `content_type` 推导（image/*→IMAGE，video/*→VIDEO，audio/*→AUDIO）；`url` 按 `object_key` 现算，与 `UploadRead.access_url` 同口径（minio 预签名 / local 稳定路径）。
 
-**TaskCreate**（POST body；= TaskTemplateCreate + 实例参数）：
-`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?(50, ≥0), type?(DAILY), target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?(15), time_deposit?(10), is_active?(true), target_user_id?, deadline?, expire_at? }`
+**TaskCreate**（POST body；= TaskTemplateCreate + 实例参数 + DEV-59 分流参数）：
+`{ season_id, library_id?, category?, title, description?, lore_snippet?, xp_reward?(50, ≥0), type?(DAILY), target_child_id?, required_start_time?, reminder_message?, reminder_minutes_before?(15), time_deposit?(10), is_active?(true), target_user_id?, deadline?, expire_at?, ephemeral?(false), target_date? }`
+
+**DEV-59｜临时任务分支（`ephemeral: true`）**
+
+> 业主裁决：任务板「创建新任务」的**未选模板**分支属于临时添加的任务，**不进模板库**。
+> 因此 `ephemeral=true` 时**只建实例、不落 `scn_task_template` 行**，实例 `template_id` 恒为 `null`。
+
+- **不需要迁移**：`scn_task_instance.template_id` 本就**可空**（`ondelete="SET NULL"`）。无需"占位模板"——那会把临时任务塞进模板库，正是裁决要禁止的。
+- **`template_id = null` 的读取语义**：该实例不由模板生成。无模板可穿读 → `type` 回落 `DAILY`，`category / required_start_time / reminder_message / estimated_minutes` 为 `null`（`reminder_minutes_before` 默认 15）。不参与实例池（无触发规则、不跨天顺延）、无链式。审核/结算/过期路径只读实例自身列（押金 `time_deposit`、难度快照 `difficulty`），**不受影响**。
+- **生效字段**：`title`、`description`、`lore_snippet`、`xp_reward`、`difficulty`、`time_deposit`（缺省走 `resolve_deposit`，封顶按**目标日**配额）、`target_date`、`target_child_id`、`season_id`（仅作归属校验；实例赛季取创建当时的**激活赛季**，无激活赛季 409）、`deadline`/`expire_at`（实例截止）。
+- **`target_date`** = 实例逻辑日（`generated_for_date`），缺省今天，`< 今天` 422，`> 今天 + 30 天` 422（与手动生成同一上界）。写入后自动继承「未来实例不可见 / 不可接取」边界；同日可建**多条**（`NULL` 不撞 `UNIQUE(template_id, generated_for_date)`）。
+- **模板级字段一律 422**（不静默丢弃）：`triggers` 非空、`library_id`、`type != DAILY`、`timed_mode != NONE`、`chain_key/chain_order/chain_total`、`estimated_minutes`（会经 `resolve_deposit` 改落库押金，但实例无该列、响应无法回显 → 押金请显式用 `time_deposit`）。`target_date` 出现在 `ephemeral=false` 的旧路径上同样 422。
+- **不落库的模板级字段**（实例无对应列，故不生效）：`reminder_message`/`reminder_minutes_before`（阅读端 `reminder_message` 恒为 `null`）、`content_mode`/`content_brief`（不经生成器，`content_source` 恒为 `TEMPLATE`）、`category`、`required_start_time`、`is_active`、`pool_policy`。前端临时任务分支无需发送这些字段。
+- 响应即普通 **TaskRead**（`template_id: null`、`generated_for_date` = 逻辑日、`content_source: "TEMPLATE"`）。
 
 **TaskSubmitRequest** `{ proof_object_keys: string[] }`（块 E 起多证据；旧字段 `proof_object_key?: str` 过渡保留，等价单元素列表）— **不是 base64**：先循环 `POST /sys/uploads`（purpose=`task_proof`，建议带同一 `task_id`，DEV-30 起 key 含任务实例标识）逐个拿 `object_key`，再一次提交全部 keys。逐个校验：必须存在于 `sys_upload`、上传者为当前用户、`purpose=task_proof`、content-type 可推导 kind、未被其他任务占用（`sys_upload.task_instance_id` 或既有 `scn_task_proof` 行任一命中即 422，防 local 模式下用任意字符串引用/探测他人对象）；任何一个不合法**整单 422**，不留半提交状态。数量上限 `upload.max_proof_files`（默认 9），重复 key / 空列表 422。提交成功时按所选集合整体落 `scn_task_proof` 行：新 key 建行、本任务已软删的 key 复活、未再携带的旧证据软删（提交即"当前所选集合"）；并把未绑定的凭证回填 `task_instance_id`。
 **TaskApproveRequest** `{ rating: int 1–5（必填）, comment?: str }`
@@ -368,6 +381,36 @@
 **`POST /scn/task-templates/preview-deposit`（DEV-50 增参）**：请求体增可选 `for_date?: "YYYY-MM-DD"`（缺省 = 今天）。封顶依赖的"当日配额"**按星期几不同**（`ScnTimeConfig.exceptions`），为未来日期生成时用今天的配额算上限会失真 —— 目标日期变化时应重新调用。入参 `{ type, estimated_minutes?, time_deposit?, difficulty?, for_date? }`；难度不影响押金（仅透传）。
 
 **TaskRead（实例读）DEV-50 增补**：`season_name?`（实例所属赛季名，模板可跨赛季后用于分辨）；`difficulty` 改为**直读实例快照**（不再从模板穿读，否则微调读不回来）。`generation_meta` 仍不出接口。
+
+---
+
+## 6C. 任务要点 → 任务建议（DEV-60，已实现）
+
+> 任务板「创建新任务」**未选模板**时，家长填「任务要点」、点「生成」：后端把要点交给 LLM 润色成任务建议**反显回表单**，家长确认后再走上面的创建路径落库。
+> 与 §6B 的分界：§6B 是「选模板 → 生成实例」（落库）；本节**只回渲染建议，不落库**。
+
+**`POST /scn/tasks/generate-from-brief`**（父母）
+
+请求体 **TaskBriefGenerateRequest** `{ brief: str（1–500）, season_id?: str, target_date?: "YYYY-MM-DD", child_level?: int = 1（1–200） }`（`extra="forbid"`：多传字段 422）
+
+- `brief` 即任务要点（`ai_service.generate_quest` 的 `topic`），与赛季无关的任务实质。
+- `season_id` 缺省 = **当前激活赛季**的 `narrative_context` 作为叙事背景；显式传入时按家庭校验归属（跨家庭一律 404）。无激活赛季不报错，按空主题处理。
+- `target_date` **只用于建议押金的当日配额封顶**（配额按星期几不同，见 §6B 的 `for_date` 口径），缺省 = 家庭本地时区今天（`today_bj()`）；日期校验与 §6B 的 `generate` 同口径：`< 今天` / `> 今天 + 30 天` → **422**。
+- `child_level` 只影响 LLM 的语气与难度建议。
+
+响应 `ApiResponse[TaskBriefSuggestion]`：`{ title, description, xp_reward, difficulty, time_deposit }` —— **恒为这 5 个字段**，且**不入库**（不产生模板/实例）。
+
+- `difficulty` 恒为 1–5 整数；`time_deposit` 恒为 `>= 0` 且已被**目标日配额**封顶，但**未**按任务类型区间 clamp —— 类型区间在创建路径解析（`coin_service.resolve_deposit`）。这三个数字只是建议，家长可改。
+- LLM 输出无强 schema 约束，故后端做**确定性收敛**（`ai_service.normalize_quest_suggestion`）：`title` / `description` 缺失或为空 → 502；`xp_reward` 缺失取 50、`difficulty` 缺失取 1、`time_deposit` 缺失取 0；越界一律 clamp。
+
+**失败口径**（与 docs/15 R12 同源；本接口没有可回落的模板文本，故**不降级**，只给明确错误）：
+
+| 情形 | HTTP | `error_code` |
+|------|------|--------------|
+| LLM 能力未启用 / 未配置 | 503 | `service_unavailable` |
+| 超时（`task_content.llm_timeout_seconds`）、HTTP 错误、返回非法 JSON、结构非法、`title`/`description` 缺失 | 502 | `external_service_error` |
+
+> 本接口是 §13 AI 生成能力的**任务侧封装**：复用 `generate_quest` 的提示词与 JSON schema（见 §13 的 `QUEST_JSON_SCHEMA` 说明），由 `ai_service.generate_quest_from_brief` 实现。前端本期（DEV-51 分支 B）**先不接**，按钮位置预留。
 
 ---
 
@@ -488,7 +531,9 @@
 
 **GenerateQuestRequest** `{ topic: str（1–500）, child_level?: int = 1（1–200）, narrative_context?: str = "" }`
 → `data`（无静态类型，来自 LLM，schema 见 `ai_service.QUEST_JSON_SCHEMA`）：
-`{ title, description, lore_snippet, xp_reward, type: "DAILY|CHALLENGE|CHAIN|TIMED|COOP", reminder_message? }`
+`{ title, description, lore_snippet, xp_reward, type: "DAILY|CHALLENGE|CHAIN|TIMED|COOP", reminder_message?, difficulty?, time_deposit? }`
+
+> **DEV-60 schema 加法扩展**：`QUEST_JSON_SCHEMA` 新增 `difficulty`（1–5）与 `time_deposit`（`>= 0`）两个属性，system 提示词同步要求输出；**`required` 集合不变**（仍为 `title/description/lore_snippet/xp_reward/type`），本接口的既有契约与调用方行为不变（多出来的字段被忽略，前端 `generateQuest` 只做关键字段运行时校验）。这两个字段在「任务要点 → 任务建议」接口里被列为必需（`ai_service.BRIEF_QUEST_JSON_SCHEMA`），见 §6C。
 
 **EvaluateProofRequest** `{ task_title: str, image_data_url: str }`
 → `{ rating: 1–5, comment: str }`

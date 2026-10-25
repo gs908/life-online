@@ -16,6 +16,7 @@ import type {
   TaskListQuery,
   TaskProofRead,
   TaskRead,
+  TaskRejectRequest,
   TaskSubmitRequest,
 } from '../types';
 
@@ -69,6 +70,14 @@ export const listTaskProofs = (taskId: string) =>
 /** 父母审核（后端发 XP、退/扣币；rating 1-5 必填） */
 export const approveTask = (taskId: string, data: TaskApproveRequest) =>
   request<TaskRead>(`/scn/task-instances/${encodeURIComponent(taskId)}/approve`, {
+    method: 'POST',
+    body: data,
+  });
+
+/** 父母驳回（DEV-57）：后端切回 IN_PROGRESS、写 review_comment、清 submitted_at；COOP 参与者回 JOINED。
+ *  不动押金/XP（docs/13 §3.1）。 */
+export const rejectTask = (taskId: string, data: TaskRejectRequest) =>
+  request<TaskRead>(`/scn/task-instances/${encodeURIComponent(taskId)}/reject`, {
     method: 'POST',
     body: data,
   });

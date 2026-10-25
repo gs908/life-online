@@ -199,6 +199,91 @@ async def test_reject_sends_back_to_in_progress_without_touching_deposit(
     assert approve_resp.json()["data"]["status"] == TaskStatus.COMPLETED.value
 
 
+async def test_rejected_flag_not_carried_into_fresh_start_after_abandon(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """DEV-56 回归:「驳回 → 放弃 → 重新接取」后派生 `rejected` 必须回落 false。
+
+    `abandon_task` 退回 AVAILABLE 时不清 `review_comment`,`start_task` 从
+    AVAILABLE 重新接取时若也不清 → 全新接取的任务被 `_to_read` 误判为驳回态、
+    标红并展示上一轮原因(target_child_id 为空时接取者换人,甚至看到别人的)。
+    修复点在 `start_task` 的 AVAILABLE→IN_PROGRESS 复位(清在 abandon 侧同样成立,
+    故这里只断言对外行为,不锚定中途残留)。
+    """
+    await _top_up(db_session, seeded_family)
+    parent_headers = _auth_headers(seeded_family.parent)
+    child_headers = _auth_headers(seeded_family.child_account)
+
+    task = await _create_task(api_client, parent_headers, seeded_family)
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
+    await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "1")},
+        headers=child_headers,
+    )
+    reject_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/reject",
+        json={"comment": "照片看不清,重新拍一张"},
+        headers=parent_headers,
+    )
+    assert reject_resp.status_code == 200
+    assert reject_resp.json()["data"]["rejected"] is True  # 驳回中:派生 true
+
+    abandon_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/abandon", headers=child_headers
+    )
+    assert abandon_resp.status_code == 200
+    assert abandon_resp.json()["data"]["status"] == TaskStatus.AVAILABLE.value
+
+    restart_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers
+    )
+    assert restart_resp.status_code == 200
+    restarted = restart_resp.json()["data"]
+    assert restarted["status"] == TaskStatus.IN_PROGRESS.value
+    assert restarted["rejected"] is False, "全新接取的任务不得残留上一轮驳回态"
+    assert restarted["review_comment"] is None
+
+    # 详情读取路径同样派生正确(不是只有 start 返回体对)
+    detail = await api_client.get(
+        f"/api/v1/scn/task-instances/{task['id']}", headers=child_headers
+    )
+    assert detail.status_code == 200
+    assert detail.json()["data"]["rejected"] is False
+
+
+async def test_reject_without_comment_still_derives_rejected(
+    api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
+) -> None:
+    """DEV-56 回归:驳回不带 comment 时兜底落空串,派生 `rejected` 仍为 true。
+
+    前端已做驳回原因必填,但 `TaskRejectRequest.comment` 可空;若落 None,
+    `_to_read` 的 `review_comment is not None` 判定会让 `rejected=false`,
+    孩子端完全看不到驳回态——正是本 issue 要修的症状。
+    """
+    await _top_up(db_session, seeded_family)
+    parent_headers = _auth_headers(seeded_family.parent)
+    child_headers = _auth_headers(seeded_family.child_account)
+
+    task = await _create_task(api_client, parent_headers, seeded_family)
+    await api_client.post(f"/api/v1/scn/task-instances/{task['id']}/start", headers=child_headers)
+    await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/submit",
+        json={"proof_object_key": await _proof_key(db_session, seeded_family, "1")},
+        headers=child_headers,
+    )
+    reject_resp = await api_client.post(
+        f"/api/v1/scn/task-instances/{task['id']}/reject",
+        json={},  # 非前端调用:不带 comment
+        headers=parent_headers,
+    )
+    assert reject_resp.status_code == 200
+    rejected = reject_resp.json()["data"]
+    assert rejected["status"] == TaskStatus.IN_PROGRESS.value
+    assert rejected["rejected"] is True
+    assert rejected["review_comment"] == ""  # 兜底空串,而非 None
+
+
 async def test_reject_after_deadline_grants_resubmit_window_instead_of_expiring(
     api_client: AsyncClient, seeded_family: SeededFamily, db_session: AsyncSession
 ) -> None:

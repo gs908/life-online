@@ -2,10 +2,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, UserRole, SeasonTheme } from '../../types';
-import type { TaskRead, PrivilegeRead } from '../../services/api';
+import type { TaskRead, PrivilegeRead, SeasonRead } from '../../services/api';
 import XPBar from '../XPBar';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
+import WeeklyTaskView from './WeeklyTaskView';
 import { Sparkles, BrainCircuit, Trophy, Star, Coins, ScrollText, ChevronLeft, ChevronRight, Bookmark, Calendar, Shield, Clock, Users, Link } from 'lucide-react';
 
 interface ChildDashboardProps {
@@ -20,6 +21,8 @@ interface ChildDashboardProps {
   privilegeTemplates: PrivilegeRead[];
   unlockedTemplateIds: string[];
   privilegesLoading: boolean;
+  /** 激活赛季：周视图用它限制左右翻页边界（赛季起止；跨赛季暂不支持） */
+  activeSeason: SeasonRead | null;
   onAcceptAttempt: (id: string) => void;
   onSubmit: (id: string) => void;
   onAbandonCurrent: (id: string) => void;
@@ -35,6 +38,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
   privilegeTemplates,
   unlockedTemplateIds,
   privilegesLoading,
+  activeSeason,
   onAcceptAttempt,
   onSubmit,
   onAbandonCurrent
@@ -286,30 +290,20 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
               </div>
           </div>
 
-          {/* History */}
-          {(completedTasks.length > 0 || pendingTasks.length > 0) && (
-            <div className="pt-8 border-t border-white/20">
-              <h3 className="text-lg font-bold text-white/60 mb-4 flex items-center gap-2">
-                  <HistoryIcon /> {t('child.questLog')}
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 opacity-75 hover:opacity-100 transition-all duration-300">
-                {pendingTasks.map(task => (
-                  <QuestCard key={task.id} task={task} role={UserRole.CHILD} onAccept={() => { }} onSubmit={() => { }} onApprove={() => { }} />
-                ))}
-                {completedTasks.map(task => (
-                  <QuestCard key={task.id} task={task} role={UserRole.CHILD} onAccept={() => { }} onSubmit={() => { }} onApprove={() => { }} />
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Weekly Task View (replaces historical quest log) */}
+          <WeeklyTaskView
+            tasks={[...completedTasks, ...pendingTasks, ...availableTasks]}
+            currentTheme={currentTheme}
+            seasonStart={activeSeason?.start_date ?? null}
+            seasonEnd={activeSeason?.end_date ?? null}
+            onAcceptAttempt={onAcceptAttempt}
+            onSubmit={onSubmit}
+            onAbandonCurrent={onAbandonCurrent}
+          />
         </div>
       </div>
     </div>
   );
 };
-
-const HistoryIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12"/><path d="M3 3v9h9"/><path d="M12 7v5l4 2"/></svg>
-)
 
 export default ChildDashboard;

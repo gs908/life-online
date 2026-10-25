@@ -54,7 +54,7 @@
 | A3 | 前端缺：`template_id、category、expire_at、review_comment、xp_awarded、coin_delta、abandon_count_at_submit、submitted_at、completed_at、created_at、updated_at、family_id、creator_account_id` | **[后端为准]** TaskRead 全字段补齐；`type/required_start_time/reminder_*` 在实例上来自模板（后端已做兼容透传） |
 | A4 | 前端 `assigneeId` 单字段；后端区分 `target_child_id`（指派对象）/`assignee_child_id`（实际接取人），且是 **child_id**（冒险者档案 ID），非账号 ID | **[后端为准]** 前端改为两字段；注意 `UserRead` 同时返回 `id`（账号）与 `child_id`（档案），任务指派用 `child_id` |
 | A5 | 前端 `deadline?: string` vs 后端 `deadline: datetime|null`；创建时后端另有 `expire_at` | **[后端为准]** 语义：`deadline`=完成截止，`expire_at`=实例过期回收 |
-| A6 | 前端创建任务 Mock 直接 push 数组；后端 `POST /scn/task-instances`（TaskCreate，必填 `season_id、title`） | **[后端为准]** 创建即"建模板+初始实例"，无独立模板接口 |
+| A6 | 前端创建任务 Mock 直接 push 数组；后端 `POST /scn/task-instances`（TaskCreate，`season_id` 可选、`title` 必填） | **[后端为准]** 该端点按 `ephemeral` 分流（DEV-59）：`ephemeral=true` → **临时任务：只建实例、不落模板**（`template_id=null`，不进模板库）；缺省 → 创建即"建模板+初始实例"（DEV-50 起 deprecated，改用 `POST /scn/task-templates/{id}/generate`）。详见 docs/08 §6 |
 
 ### 1.7 User（types.ts:66-80 vs UserRead）
 
@@ -111,7 +111,7 @@
 | `DEFAULT_SEASON` / `activeSeason` | `GET /scn/seasons/active`、`POST /scn/seasons`、`PATCH /scn/seasons/{id}`、`POST /{id}/activate` | ✅ 已有 |
 | `seasonHistory`（`Season[]`） | `GET /scn/seasons/history`（SeasonHistoryItem） | ✅ 已有（形状不同，见 S3） |
 | `INITIAL_TASKS` / `tasks` | `GET /scn/task-instances`（分页+过滤） | ✅ 已有；**已接入（DEV-18 阶段③），本地任务状态机已删除，视图组件统一消费 `TaskRead`** |
-| 新建任务（AddTaskModal） | `POST /scn/task-instances` | ✅ 已有；**已接入（DEV-18），表单产出 `TaskCreate`（docs/09 A6）** |
+| 新建任务（AddTaskModal） | `POST /scn/task-instances` | ✅ 已有；**已接入（DEV-18），表单产出 `TaskCreate`（docs/09 A6）**；**DEV-59：未选模板分支走 `ephemeral: true`（只建实例、不落模板）** |
 | 接取任务 | `POST /scn/task-instances/{id}/start` | ✅ 已有；**已接入（DEV-18），押金由后端扣除，余额变更后 refetch `UserRead.time_coins`** |
 | 提交证明（SubmitTaskModal，base64） | `POST /sys/uploads` + `POST /scn/task-instances/{id}/submit` | ✅ 已有；**已接入（DEV-18 按 docs/10 §4 ③→⑤ 交替约定打通上传流；DEV-20 阶段⑤收尾：multipart 透传 `task_id` 落存储路径规范 `{prefix}/{用户}/{年}/{月}/{日}/{任务号}-{序号}.{扩展名}`，base64 方案与 Mock 已删除，QuestCard/ReviewTaskModal 经 `proof_url` 展示凭证）** |
 | 审核打分（ReviewTaskModal） | `POST /scn/task-instances/{id}/approve` | ✅ 已有；**已接入（DEV-18），本地 XP 倍率/升级计算已删除（后端 `approve` 结算 `xp_awarded`）；AI 辅助评分留待阶段⑥** |
