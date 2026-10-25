@@ -282,6 +282,8 @@ const enUS = {
     tasks: 'tasks',
     noTasks: 'No tasks',
     legend: 'Type Legend',
+    allChildren: 'All',
+    filterByChild: 'Filter by child',
   },
   stats: {
     title: 'Guild Statistics Center',

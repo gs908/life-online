@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, UserRole, SeasonTheme } from '../../types';
-import type { TaskRead, PrivilegeRead } from '../../services/api';
+import type { TaskRead, PrivilegeRead, SeasonRead } from '../../services/api';
 import XPBar from '../XPBar';
 import PrivilegeTree from '../PrivilegeTree';
 import QuestCard from '../QuestCard';
@@ -21,6 +21,8 @@ interface ChildDashboardProps {
   privilegeTemplates: PrivilegeRead[];
   unlockedTemplateIds: string[];
   privilegesLoading: boolean;
+  /** 激活赛季：周视图用它限制左右翻页边界（赛季起止；跨赛季暂不支持） */
+  activeSeason: SeasonRead | null;
   onAcceptAttempt: (id: string) => void;
   onSubmit: (id: string) => void;
   onAbandonCurrent: (id: string) => void;
@@ -36,6 +38,7 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
   privilegeTemplates,
   unlockedTemplateIds,
   privilegesLoading,
+  activeSeason,
   onAcceptAttempt,
   onSubmit,
   onAbandonCurrent
@@ -291,6 +294,8 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
           <WeeklyTaskView
             tasks={[...completedTasks, ...pendingTasks, ...availableTasks]}
             currentTheme={currentTheme}
+            seasonStart={activeSeason?.start_date ?? null}
+            seasonEnd={activeSeason?.end_date ?? null}
             onAcceptAttempt={onAcceptAttempt}
             onSubmit={onSubmit}
             onAbandonCurrent={onAbandonCurrent}
