@@ -93,11 +93,8 @@ const ChildDashboard: React.FC<ChildDashboardProps> = ({
   };
 
   return (
-    <div className={`relative min-h-screen -m-4 md:-m-6 lg:-m-8 p-4 md:p-6 lg:p-8 transition-colors duration-500 ${currentTheme.backgroundColor}`}>
-      
-      {/* Dynamic Background Overlay */}
-      <div className={`absolute inset-0 opacity-20 pointer-events-none ${currentTheme.bgImage}`}></div>
-      
+    <div className="relative min-h-screen">
+
       {/* Content Container */}
       <div className="relative z-10 grid grid-cols-1 lg:grid-cols-3 gap-6">
 

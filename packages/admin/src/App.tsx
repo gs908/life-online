@@ -542,7 +542,12 @@ const App: React.FC = () => {
             <div className="text-slate-400 text-sm animate-pulse">{t('common.loading')}</div>
           </div>
         ) : currentUser.role === UserRole.CHILD ? (
-          <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
+          /* 赛季主题底色铺满整个滚动区，内容仍用 max-w-7xl 居中；
+             底色与内容容器解耦，避免 1280px 以外露出 body 浅色（DEV-79 / DEV-77 P0-1） */
+          <div className={`relative min-h-full transition-colors duration-500 ${currentTheme.backgroundColor}`}>
+            {/* 主题渐变叠层：与底色同层、随视口铺满 */}
+            <div className={`absolute inset-0 opacity-20 pointer-events-none ${currentTheme.bgImage}`} aria-hidden="true"></div>
+            <div className="relative z-10 max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
              <ChildDashboard
                 childUser={childUser}
                 currentTheme={currentTheme}
@@ -559,6 +564,7 @@ const App: React.FC = () => {
                 onSubmit={(id) => { setSelectedTaskId(id); setIsSubmitModalOpen(true); }}
                 onAbandonCurrent={handleAbandonCurrent}
              />
+            </div>
           </div>
         ) : (
           <div className="bg-slate-100 min-h-full p-4 md:p-6 lg:p-8">
