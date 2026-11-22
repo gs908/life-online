@@ -378,89 +378,95 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
         </div>
       )}
 
-      {/* Week Grid - desktop only: 7 columns, conditional render */}
+      {/* Week Grid - desktop only: 7 columns, conditional render
+          1024–1279（lg）：列最小 136px（chip 内容约 123px），7 列横向滚动，保证标题不被挤成 3 行；
+          ≥1280（xl）：容器够宽，7 列收进一屏，不滚动。 */}
       {isLg ? (
       <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-lg border-2 border-slate-200 overflow-hidden">
-        {/* Day Headers */}
-        <div className="grid grid-cols-7 border-b-2 border-slate-200">
-          {days.map((day) => (
-            <div
-              key={day.date}
-              className={`py-2 text-center border-r last:border-r-0 ${
-                day.isToday
-                  ? `${currentTheme.primaryColor} text-white font-bold`
-                  : 'bg-slate-50 text-slate-600 font-medium'
-              }`}
-            >
-              <div className="text-xs opacity-75">{day.label}</div>
-              <div className="text-sm">{day.date.slice(5).replace('-', '/')}</div>
+        <div className="overflow-x-auto">
+          <div className="min-w-[952px] xl:min-w-0">
+            {/* Day Headers */}
+            <div className="grid grid-cols-7 border-b-2 border-slate-200">
+              {days.map((day) => (
+                <div
+                  key={day.date}
+                  className={`py-2 text-center border-r last:border-r-0 ${
+                    day.isToday
+                      ? `${currentTheme.primaryColor} text-white font-bold`
+                      : 'bg-slate-50 text-slate-600 font-medium'
+                  }`}
+                >
+                  <div className="text-xs opacity-75">{day.label}</div>
+                  <div className="text-sm">{day.date.slice(5).replace('-', '/')}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        {/* Task Rows per Day */}
-        <div className="grid grid-cols-7 min-h-[200px]">
-          {days.map((day) => (
-            <div
-              key={day.date}
-              className={`border-r last:border-r-0 border-b last:border-b-0 p-1.5 min-h-[120px] ${
-                day.isToday ? `${currentTheme.primaryColor}/10` : 'bg-white'
-              }`}
-            >
-              {day.tasks.length === 0 ? (
-                <div className="h-full flex items-center justify-center opacity-30">
-                  <Calendar size={20} />
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {day.tasks.map((task) => (
-                    <div
-                      key={task.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedTask(task)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setSelectedTask(task);
-                        }
-                      }}
-                      aria-label={t('taskDetail.openLabel', { title: task.title })}
-                      className={`rounded-lg border-l-2 p-1.5 text-xs cursor-pointer transition-all hover:scale-[1.02] ${getTypeBadgeColor(task.type)}`}
-                      title={`${task.title} (${task.type})`}
-                    >
-                      <div className="flex items-center gap-1">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task)}`} />
-                        {renderChildBadge(task)}
-                        <span className="font-bold truncate flex-1 leading-tight">{task.title}</span>
-                        {task.status === 'COMPLETED' && completedDateMMDD(task) && (
-                          <span className="shrink-0 text-[9px] font-bold opacity-70">{completedDateMMDD(task)}</span>
-                        )}
-                        {isRejectedTask(task) && (
-                          <span className="shrink-0 text-[9px] font-bold text-red-700 bg-red-100 rounded px-1">
-                            {t('taskStatus.REJECTED')}
-                          </span>
-                        )}
-                      </div>
-                      {isRejectedTask(task) && task.review_comment && (
-                        <div className="mt-0.5 text-[9px] text-red-700 truncate" title={task.review_comment}>
-                          <span className="font-bold">{t('questCard.rejectReasonLabel')}</span>
-                          {task.review_comment}
-                        </div>
-                      )}
-                      {task.status === 'COMPLETED' && task.rating && (
-                        <div className="flex items-center gap-0.5 mt-0.5">
-                          {[...Array(5)].map((_, i) => (
-                            <span key={i} className={`text-[8px] ${i < task.rating! ? 'text-yellow-500' : 'text-slate-300'}`}>★</span>
-                          ))}
-                        </div>
-                      )}
+            {/* Task Rows per Day */}
+            <div className="grid grid-cols-7 min-h-[200px]">
+              {days.map((day) => (
+                <div
+                  key={day.date}
+                  className={`border-r last:border-r-0 border-b last:border-b-0 p-1.5 min-h-[120px] ${
+                    day.isToday ? `${currentTheme.primaryColor}/10` : 'bg-white'
+                  }`}
+                >
+                  {day.tasks.length === 0 ? (
+                    <div className="h-full flex items-center justify-center opacity-30">
+                      <Calendar size={20} />
                     </div>
-                  ))}
+                  ) : (
+                    <div className="space-y-1">
+                      {day.tasks.map((task) => (
+                        <div
+                          key={task.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedTask(task)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedTask(task);
+                            }
+                          }}
+                          aria-label={t('taskDetail.openLabel', { title: task.title })}
+                          className={`rounded-lg border-l-2 p-1.5 text-xs cursor-pointer transition-all hover:scale-[1.02] ${getTypeBadgeColor(task.type)}`}
+                          title={`${task.title} (${task.type})`}
+                        >
+                          <div className="flex items-center gap-1">
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDot(task)}`} />
+                            {renderChildBadge(task)}
+                            <span className="font-bold truncate flex-1 leading-tight">{task.title}</span>
+                            {task.status === 'COMPLETED' && completedDateMMDD(task) && (
+                              <span className="shrink-0 text-[9px] font-bold opacity-70">{completedDateMMDD(task)}</span>
+                            )}
+                            {isRejectedTask(task) && (
+                              <span className="shrink-0 text-[9px] font-bold text-red-700 bg-red-100 rounded px-1">
+                                {t('taskStatus.REJECTED')}
+                              </span>
+                            )}
+                          </div>
+                          {isRejectedTask(task) && task.review_comment && (
+                            <div className="mt-0.5 text-[9px] text-red-700 truncate" title={task.review_comment}>
+                              <span className="font-bold">{t('questCard.rejectReasonLabel')}</span>
+                              {task.review_comment}
+                            </div>
+                          )}
+                          {task.status === 'COMPLETED' && task.rating && (
+                            <div className="flex items-center gap-0.5 mt-0.5">
+                              {[...Array(5)].map((_, i) => (
+                                <span key={i} className={`text-[8px] ${i < task.rating! ? 'text-yellow-500' : 'text-slate-300'}`}>★</span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
+              ))}
             </div>
-          ))}
+          </div>
         </div>
 
         {/* Legend */}
@@ -498,11 +504,13 @@ const WeeklyTaskView: React.FC<WeeklyTaskViewProps> = ({
               <p className="text-xs opacity-50 text-center py-2">{t('weeklyView.noTasks')}</p>
             ) : (
               <div className="space-y-1.5">
+                {/* 左侧色条用 border-l-4：Tailwind 默认边框宽度只有 0/2/4/8，
+                    border-l-3 不生成 CSS，移动端会丢失按颜色识别类型的能力 */}
                 {day.tasks.map((task) => (
                   <div
                     key={task.id}
                     onClick={() => setSelectedTask(task)}
-                    className={`rounded-lg border-l-3 p-2 text-xs cursor-pointer ${getTypeBadgeColor(task.type)}`}
+                    className={`rounded-lg border-l-4 p-2 text-xs cursor-pointer ${getTypeBadgeColor(task.type)}`}
                   >
                     {/* 标题行是真按钮：整卡可点（鼠标），键盘也能聚焦到这一条打开详情 */}
                     <button
