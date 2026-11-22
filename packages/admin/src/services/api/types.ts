@@ -415,6 +415,8 @@ export interface TaskCreate extends TaskTemplateCreate {
   deadline?: string; // ⚠️ 仅兼容字段，新代码不写
   expire_at?: string; // ⚠️ 仅兼容字段，新代码不写
   ephemeral?: boolean;
+  /** 临时任务的逻辑日（= 实例 generated_for_date）；仅 ephemeral=true 有效，缺省今天 */
+  target_date?: string; // YYYY-MM-DD
 }
 
 /** 管理端表单实时预览押金（DEV-34 块 C；难度不影响押金，仅为表单完整性透传） */
@@ -446,6 +448,10 @@ export interface TaskGenerateRequest {
   time_deposit?: number; // >= 0
   xp_reward?: number; // >= 0
   target_child_id?: string;
+  /** 内容覆盖（DEV-61「预览 → 确认 → 保存」）：AI 建议经家长确认/改写后随生成
+   *  一次落库，快照到实例、不改模板；未提供 = 用模板值（显式 null 同样 422） */
+  title?: string;
+  description?: string;
 }
 
 /** 手工生成的动作枚举（契约 §6B）。未来实例不入池，重复生成同一未来日期走 exists */
@@ -473,6 +479,24 @@ export interface TaskGenerateResult {
   /** **只有 `created` 才真正写入覆盖值**；其余动作复用既有实例，覆盖值不会被应用。
    *  后端显式回传，前端据此把用户引导到 `PATCH /scn/task-instances/{id}`。 */
   overrides_applied: boolean;
+}
+
+/** 「任务要点 → 任务建议」入参（DEV-60，`POST /scn/tasks/generate-from-brief`）：
+ *  只回渲染建议、**不入库**；确认后再走既有创建路径（task-instances / templates/{id}/generate） */
+export interface TaskBriefGenerateRequest {
+  brief: string; // 任务要点（任务实质，不含赛季背景），1-500
+  child_level?: number; // 只影响 LLM 的语气与难度建议，默认 1
+  season_id?: string; // 缺省 = 当前激活赛季的剧情作为叙事背景
+  target_date?: string; // YYYY-MM-DD；只用于建议押金的当日配额封顶，缺省 = 今天
+}
+
+/** 任务建议出参（DEV-60）：前端回填表单，由用户确认/改写后再提交创建 */
+export interface TaskBriefSuggestion {
+  title: string;
+  description: string;
+  xp_reward: number;
+  difficulty: number; // 1-5
+  time_deposit: number;
 }
 
 /** 微调实例（契约 §6B，`PATCH /scn/task-instances/{id}`）

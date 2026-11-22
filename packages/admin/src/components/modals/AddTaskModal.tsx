@@ -5,6 +5,7 @@ import type {
   TaskCreate,
   TaskGenerateRequest,
   TaskGenerateResult,
+  TaskRead,
   TaskTemplateCreate,
   TaskTemplateRead,
   TaskTemplateUpdate,
@@ -146,6 +147,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   onClose,
   onSubmit,
   seasonId,
+  childLevel,
   submitting,
   editingTemplate,
   defaultCategory = 'once',
@@ -197,6 +199,16 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // 内容预览（DEV-61「预览 → 确认 → 保存」）：AI 建议反显为可编辑草稿，
+  // 确认后随生成一次落库（title/description 快照到实例，不改模板）
+  const [contentDraft, setContentDraft] = useState<{ title: string; description: string } | null>(null);
+  /** AI 调用中（内容预览与分支 B 润色共用：两者不会同时渲染） */
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  // 一次性任务查重（DEV-61）：命中相似任务时挂起提交，等用户二次确认
+  const [dupCandidates, setDupCandidates] = useState<TaskRead[] | null>(null);
+  const [dupChecking, setDupChecking] = useState(false);
+
   // 模板行「生成」预选（DEV-58 P2）：用户本次打开未动过下拉时以传入模板为准。
   // 在渲染期直接派生（而非等 effect 回填），避免打开瞬间先闪一下「未选模板」支。
   const presetTemplate = !pickerTouched && isCreateTask ? initialTemplate : null;
@@ -222,6 +234,11 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     setTemplates(null);
     setPickerTouched(false);
     setSelectedTemplateId('');
+    setContentDraft(null);
+    setPreviewing(false);
+    setPreviewError(null);
+    setDupCandidates(null);
+    setDupChecking(false);
     if (isCreateTask && initialTemplate) {
       // 模板行「生成」直达分支 A：三项微调预填该模板当前值（dirty 保持 false）
       setTuneValues({
@@ -332,6 +349,38 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     [timedMode, deadlineTime, triggers],
   );
 
+  // 三个表单 helper 必须声明在下面的提前 return 之前：
+  // 「创建新任务」/「新建模板」分支会在本函数体内提前 return，若这些 const 声明
+  // 落在 return 之后，其绑定永远处于 TDZ —— 分支里的提交/触发规则按钮一点就抛
+  // `Cannot access 'buildError' before initialization`（原实现即如此）。
+  const patchTrigger = (index: number, patch: Partial<TriggerDraft>) => {
+    setTriggers(prev => prev.map((draft, i) => (i === index ? { ...draft, ...patch } : draft)));
+  };
+
+  const changeTimedMode = (mode: TimedMode) => {
+    setTimedMode(mode);
+    if (mode === 'NONE') {
+      setDeadlineTime('');
+      setStartTime('');
+      setDurationMinutes(0);
+    } else {
+      setDeadlineTime(prev => prev || '20:00');
+      setStartTime(prev => prev || '16:30');
+      setDurationMinutes(prev => (prev > 0 ? prev : 45));
+    }
+  };
+
+  const buildError = (): TemplateFormErrors | null =>
+    validateTemplateForm({
+      title: newTaskTitle,
+      xp: newTaskXP,
+      timed_mode: timedMode,
+      deadline_time: deadlineTime,
+      start_time: startTime,
+      duration_minutes: durationMinutes,
+      triggers: category === 'once' ? [] : triggers,
+    });
+
   // 新建非 once 模板提交：先建模板，再进入生成步骤
   const handleSubmitTemplate = async (): Promise<void> => {
     if (isEdit) return; // 编辑走 handleSubmit（不变）
@@ -415,10 +464,16 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   };
 
   const handleGenerateSubmit = async () => {
-    if (dateError) return;
+    // 阻断式查重（DEV-61）：该模板在目标日已有实例 → 不允许重复创建
+    if (dateError || dateHasInstance === true) return;
     // 已选模板路径：用下拉选中的模板（任务板入口场景）；否则走新建模板路径（从模板管理进入场景）
     const templateId = createdTemplateId ?? presetTemplate?.id ?? selectedTemplateId;
-    if (!templateId || dateError) return;
+    if (!templateId) return;
+    // 预览草稿的标题是实例标题快照，空标题不能提交（后端也会 422）
+    if (contentDraft && !contentDraft.title.trim()) {
+      setGenerateError(t('taskTemplate.errTitleRequired'));
+      return;
+    }
     setGenerateError(null);
     setGenerating(true);
     const body: TaskGenerateRequest = { target_date: targetDate };
@@ -427,6 +482,11 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     }
     if (tuneDirty.time_deposit) body.time_deposit = tuneValues.time_deposit;
     if (tuneDirty.xp_reward) body.xp_reward = tuneValues.xp_reward;
+    // 内容覆盖（DEV-61）：只有走过「生成任务内容」预览才提交，未预览 = 用模板文案
+    if (contentDraft) {
+      body.title = contentDraft.title.trim();
+      body.description = contentDraft.description.trim();
+    }
     setSentOverrides(Object.keys(body).some(key => key !== 'target_date'));
     try {
       const generated = await api.taskTemplates.generateTemplate(templateId, body);
@@ -447,11 +507,120 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     }
   };
 
+  /** AI 建议调用的统一失败口径：未配置 503 与其他失败分开提示（与审核弹窗一致） */
+  const reportPreviewError = (error: unknown) => {
+    if (error instanceof ApiError && error.errorCode === 'service_unavailable') {
+      setPreviewError(t('addTask.aiNotConfigured'));
+    } else {
+      setPreviewError(t('generateTask.previewFailed'));
+    }
+  };
+
+  /**
+   * 「生成任务内容」（DEV-61，`POST /scn/tasks/generate-from-brief`）：
+   * 以模板要点（content_brief，回落 description/title）为输入，结合当季背景让
+   * LLM 产出标题/内容与推荐数值，**反显到本弹窗**等家长确认 —— 不落库。
+   * 确认后由 `handleGenerateSubmit` 随生成一次写入（title/description 快照到实例）。
+   */
+  const handlePreviewContent = async (briefSource: string) => {
+    const brief = briefSource.trim();
+    if (!brief) {
+      setPreviewError(t('generateTask.previewNeedsBrief'));
+      return;
+    }
+    setPreviewing(true);
+    setPreviewError(null);
+    try {
+      const suggestion = await api.tasks.generateFromBrief({
+        brief,
+        season_id: seasonId || undefined,
+        target_date: targetDate,
+        child_level: childLevel,
+      });
+      setContentDraft({ title: suggestion.title, description: suggestion.description });
+      // 建议值即本次生成的快照：标脏让保存时作为覆盖提交（未预览则仍用模板值）
+      setTuneValues({
+        difficulty: suggestion.difficulty,
+        time_deposit: suggestion.time_deposit,
+        xp_reward: suggestion.xp_reward,
+      });
+      setTuneDirty({ difficulty: true, time_deposit: true, xp_reward: true });
+      setGenerateResult(null);
+    } catch (error) {
+      reportPreviewError(error);
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  /** 分支 B「AI 润色」（DEV-60 接口）：要点 → 建议反显到表单，确认后走创建路径 */
+  const handlePolishBrief = async () => {
+    const brief = contentBrief.trim();
+    if (!brief) return;
+    setPreviewing(true);
+    setPreviewError(null);
+    try {
+      const suggestion = await api.tasks.generateFromBrief({
+        brief,
+        season_id: seasonId || undefined,
+        target_date: targetDate,
+        child_level: childLevel,
+      });
+      setNewTaskTitle(suggestion.title);
+      setNewTaskDesc(suggestion.description);
+      setNewTaskXP(suggestion.xp_reward);
+      setDifficulty(suggestion.difficulty);
+      setDupCandidates(null);
+    } catch (error) {
+      reportPreviewError(error);
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  /** 查重比对用归一化：小写、去空白与标点（"读英语 30 分钟" ≈ "读英语30分钟"） */
+  const normalizeForDup = (value: string) => value.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+
+  /** 任务的归属日（与周视图同口径）：generated_for_date 优先，一次性/链式回退 created_at */
+  const taskEffectiveDate = (task: TaskRead): string | null => {
+    if (task.generated_for_date) return task.generated_for_date;
+    if (task.status === 'COMPLETED' || task.status === 'EXPIRED') {
+      const done = task.completed_at?.slice(0, 10);
+      if (done) return done;
+    }
+    return task.created_at?.slice(0, 10) ?? null;
+  };
+
+  /**
+   * 一次性任务查重（DEV-61 第一期：本地归一化匹配）。
+   * 命中即挂起提交、由用户在弹窗内二次确认；查询失败不阻断创建
+   * （查重是防呆，不是门禁）。LLM 模糊分析留待二期。
+   */
+  const findSimilarTasksOnDate = async (): Promise<TaskRead[]> => {
+    const titleKey = normalizeForDup(newTaskTitle);
+    if (!titleKey) return [];
+    const descKey = normalizeForDup(newTaskDesc);
+    const page = await api.tasks.listTasks({
+      page_size: 200,
+      ...(seasonId ? { season_id: seasonId } : {}),
+    });
+    return page.items.filter(task => {
+      if (taskEffectiveDate(task) !== targetDate) return false;
+      const existingTitle = normalizeForDup(task.title);
+      if (
+        existingTitle &&
+        (existingTitle === titleKey || existingTitle.includes(titleKey) || titleKey.includes(existingTitle))
+      ) {
+        return true;
+      }
+      // 描述参与比对要求一定长度，避免"完成任务"这类泛化文本误伤
+      const existingDesc = normalizeForDup(task.description ?? '');
+      return descKey.length >= 6 && existingDesc.includes(descKey);
+    });
+  };
+
   /** 「创建新任务」未选模板支：一次性临时任务（`ephemeral: true`，只建实例、不落模板）。 */
-  const handleSubmitCreateTask = () => {
-    const formErrors = buildError();
-    setErrors(formErrors);
-    if (formErrors) return;
+  const submitEphemeral = () => {
     const seasonTag = seasonId ? { season_id: seasonId } : {};
     const task: TaskCreate = {
       title: newTaskTitle.trim(),
@@ -465,8 +634,30 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
       type: 'DAILY',
       ...(difficulty !== null ? { difficulty } : {}),
       ephemeral: true,
+      // 逻辑日：与生成路径的 target_date 同名同义（后端仅 ephemeral=true 生效）
+      target_date: targetDate,
     };
     onSubmit({ mode: 'instance', task });
+  };
+
+  /** 提交前查重：命中相似任务先挂起，「仍要创建」二次确认后再提交（DEV-61） */
+  const handleSubmitCreateTask = async () => {
+    const formErrors = buildError();
+    setErrors(formErrors);
+    if (formErrors || dateError) return;
+    setDupChecking(true);
+    try {
+      const similar = await findSimilarTasksOnDate();
+      if (similar.length > 0) {
+        setDupCandidates(similar.slice(0, 5));
+        return;
+      }
+    } catch {
+      // 查重查询失败（网络等）不阻断创建：防呆不是门禁
+    } finally {
+      setDupChecking(false);
+    }
+    submitEphemeral();
   };
 
   if (!isOpen) return null;
@@ -512,6 +703,9 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
             setSelectedTemplateId(value);
             setGenerateResult(null);
             setDateHasInstance(null);
+            // 换模板即作废旧的内容预览（建议是上一个模板的要点产出的）
+            setContentDraft(null);
+            setPreviewError(null);
             const tmpl = templates.find(item => item.id === value);
             if (tmpl) {
               setTuneValues({
@@ -536,7 +730,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     </div>
   );
 
-  /** 生成步骤主体（目标日期 + 三项微调 + 结果/错误）：
+  /** 生成步骤主体（目标日期 + 内容预览 + 三项微调 + 结果/错误）：
    *  新建模板第二步与「创建新任务」分支 A 共用，避免两份实现漂移。 */
   const renderGenerateStepContent = (opts: {
     templateId: string;
@@ -544,6 +738,8 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
     templateType: TaskType;
     estimatedMinutes: number | null;
     fillBackDifficultyDisabled: boolean;
+    /** 「生成任务内容」的 LLM 输入：模板 content_brief，回落 description/title */
+    briefSource: string;
   }) => (
     <>
       <div className="flex items-center justify-between gap-2">
@@ -578,10 +774,63 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
           </p>
         )}
         {dateHasInstance && !dateError && (
-          <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-2 flex items-start gap-1 mt-1" aria-live="polite">
-            <Info size={12} className="mt-0.5 shrink-0" aria-hidden />
-            <span>{t('generateTask.dateHasInstance', { date: targetDate })}</span>
+          <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 flex items-start gap-1 mt-1" role="alert">
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden />
+            <span>{t('generateTask.dateHasInstanceBlock', { date: targetDate })}</span>
           </p>
+        )}
+      </div>
+
+      {/* 内容预览（DEV-61「预览 → 确认 → 保存」）：AI 结合当季背景润色出
+          标题/任务背景与内容，反显为可编辑草稿；确认后随保存一次落库 */}
+      <div className="border border-violet-200 bg-violet-50/60 rounded-xl p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-bold text-violet-700 flex items-center gap-1">
+            <Sparkles size={13} aria-hidden /> {t('generateTask.contentPreview')}
+          </span>
+          <button
+            type="button"
+            onClick={() => handlePreviewContent(opts.briefSource)}
+            disabled={previewing || generating || Boolean(dateError) || dateHasInstance === true}
+            className="text-[11px] font-bold text-violet-700 px-2 py-1 rounded border border-violet-200 bg-white hover:bg-violet-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {previewing
+              ? t('common.loading')
+              : contentDraft
+                ? t('generateTask.regenerateContent')
+                : t('generateTask.previewContent')}
+          </button>
+        </div>
+        {previewError && (
+          <p className="text-[11px] text-orange-700 bg-orange-50 border border-orange-200 rounded-lg p-2" role="alert" data-testid="preview-error">
+            {previewError}
+          </p>
+        )}
+        {contentDraft ? (
+          <>
+            <input
+              value={contentDraft.title}
+              onChange={event =>
+                setContentDraft(prev => (prev ? { ...prev, title: event.target.value } : prev))
+              }
+              aria-label={t('generateTask.contentTitleLabel')}
+              className={`w-full border bg-white p-2 rounded text-sm font-bold ${
+                contentDraft.title.trim() ? 'border-violet-200' : 'border-red-400'
+              }`}
+            />
+            <textarea
+              value={contentDraft.description}
+              onChange={event =>
+                setContentDraft(prev => (prev ? { ...prev, description: event.target.value } : prev))
+              }
+              rows={3}
+              aria-label={t('generateTask.contentDescLabel')}
+              className="w-full border border-violet-200 bg-white p-2 rounded text-sm"
+            />
+            <p className="text-[11px] text-violet-500">{t('generateTask.contentPreviewHint')}</p>
+          </>
+        ) : (
+          <p className="text-[11px] text-slate-400">{t('generateTask.contentPreviewEmpty')}</p>
         )}
       </div>
 
@@ -684,7 +933,11 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
                       id="create-task-title"
                       className={`w-full border p-2 rounded ${errors?.title ? 'border-red-400' : 'border-slate-200'}`}
                       value={newTaskTitle}
-                      onChange={e => setNewTaskTitle(e.target.value)}
+                      onChange={e => {
+                        setNewTaskTitle(e.target.value);
+                        // 改了标题即作废上一次查重结论
+                        setDupCandidates(null);
+                      }}
                       placeholder={t('createTask.questNamePlaceholder')}
                     />
                   </div>
@@ -731,22 +984,55 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
                 )}
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-bold text-slate-700">{t('createTask.questContent')}</label>
-                  <textarea className="w-full border border-slate-200 p-2 rounded h-20" value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} placeholder={t('createTask.questContentPlaceholder')} />
+                  <label className="text-sm font-bold text-slate-700" htmlFor="create-task-target-date">{t('createTask.targetDate')}</label>
+                  <input
+                    id="create-task-target-date"
+                    type="date"
+                    value={targetDate}
+                    min={today}
+                    max={maxDate}
+                    onChange={e => {
+                      setTargetDate(e.target.value);
+                      // 换日期即重新查重（相似任务按"当天"判定）
+                      setDupCandidates(null);
+                    }}
+                    aria-invalid={Boolean(dateError)}
+                    className={`border rounded-lg p-2 text-sm w-full ${dateError ? 'border-red-400' : 'border-slate-200'}`}
+                  />
+                  {dateFieldError ? (
+                    <p className="text-xs text-red-600" aria-live="polite">{dateFieldError}</p>
+                  ) : (
+                    <p className="text-[11px] text-slate-400">{t('generateTask.dateHint', { days: TARGET_DATE_MAX_AHEAD_DAYS })}</p>
+                  )}
                 </div>
 
-                {/* 分支 B 的「要点 → LLM 润色」接口尚未落地（P3 单开）：此处只预留位置，禁用并说明 */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-bold text-slate-700">{t('createTask.questContent')}</label>
+                  <textarea
+                    className="w-full border border-slate-200 p-2 rounded h-20"
+                    value={newTaskDesc}
+                    onChange={e => {
+                      setNewTaskDesc(e.target.value);
+                      setDupCandidates(null);
+                    }}
+                    placeholder={t('createTask.questContentPlaceholder')}
+                  />
+                </div>
+
+                {/* 分支 B「要点 → AI 润色」（DEV-60 接口 `/scn/tasks/generate-from-brief`）：
+                    建议反显到上方表单，用户确认/改写后再创建 */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-sm font-bold text-slate-700" htmlFor="create-task-brief">{t('createTask.brief')}</label>
                     <button
                       type="button"
-                      disabled
-                      title={t('createTask.polishDisabledHint')}
-                      aria-disabled="true"
-                      className="text-[11px] font-bold text-sky-700 px-2 py-1 rounded border border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed"
+                      onClick={handlePolishBrief}
+                      disabled={previewing || !contentBrief.trim()}
+                      title={t('createTask.polishHint')}
+                      className="text-[11px] font-bold text-sky-700 px-2 py-1 rounded border border-slate-200 bg-white hover:bg-sky-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <Sparkles size={12} className="inline -mt-0.5 mr-0.5" aria-hidden /> {t('createTask.polish')}
+                      <Sparkles size={12} className="inline -mt-0.5 mr-0.5" aria-hidden />
+                      {previewing ? t('common.loading') : t('createTask.polish')}
                     </button>
                   </div>
                   <textarea
@@ -757,8 +1043,47 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
                     placeholder={t('createTask.briefPlaceholder')}
                   />
                   <p className="text-[11px] text-slate-400">{t('createTask.briefHint')}</p>
-                  <p className="text-[11px] text-amber-600">{t('createTask.polishDisabledHint')}</p>
+                  {previewError && (
+                    <p className="text-[11px] text-orange-700 bg-orange-50 border border-orange-200 rounded-lg p-2" role="alert" data-testid="preview-error">
+                      {previewError}
+                    </p>
+                  )}
                 </div>
+
+                {/* 查重二次确认（DEV-61）：命中相似任务时挂起提交，用户明确「仍要创建」才放行 */}
+                {dupCandidates && dupCandidates.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2" role="alert">
+                    <div className="text-sm font-bold text-amber-800 flex items-center gap-1">
+                      <AlertTriangle size={14} aria-hidden /> {t('createTask.duplicateTitle')}
+                    </div>
+                    <p className="text-xs text-amber-700">{t('createTask.duplicateMsg', { date: targetDate })}</p>
+                    <ul className="text-xs text-amber-800 list-disc pl-4 space-y-0.5">
+                      {dupCandidates.map(task => (
+                        <li key={task.id}>{task.title}</li>
+                      ))}
+                    </ul>
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDupCandidates(null);
+                          submitEphemeral();
+                        }}
+                        disabled={submitting}
+                        className="px-3 py-1.5 bg-amber-600 text-white text-xs font-bold rounded hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        {t('createTask.duplicateConfirm')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDupCandidates(null)}
+                        className="px-3 py-1.5 bg-white border border-amber-300 text-amber-700 text-xs font-bold rounded hover:bg-amber-100"
+                      >
+                        {t('createTask.duplicateCancel')}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2 p-3 bg-violet-50 border border-violet-100 rounded-lg">
                   <Info size={14} className="text-violet-500 shrink-0" />
@@ -773,6 +1098,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
                 templateType: activeTemplate.type,
                 estimatedMinutes: activeTemplate.estimated_minutes,
                 fillBackDifficultyDisabled: activeTemplate.difficulty === null,
+                briefSource: activeTemplate.content_brief?.trim() || activeTemplate.description || activeTemplate.title,
               })
             )}
           </div>
@@ -784,18 +1110,22 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
             {!activeTemplate ? (
               <button
                 onClick={handleSubmitCreateTask}
-                disabled={submitting || !newTaskTitle.trim()}
+                disabled={submitting || dupChecking || !newTaskTitle.trim() || Boolean(dateError)}
                 className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md transform active:scale-95 disabled:opacity-50"
               >
-                {submitting ? t('common.loading') : t('createTask.submit')}
+                {submitting || dupChecking ? t('common.loading') : t('createTask.submit')}
               </button>
             ) : (
               <button
                 onClick={handleGenerateSubmit}
-                disabled={Boolean(dateError) || generating}
+                disabled={Boolean(dateError) || generating || dateHasInstance === true}
                 className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {generating ? t('common.loading') : t('generateTask.submit')}
+                {generating
+                  ? t('common.loading')
+                  : contentDraft
+                    ? t('generateTask.confirmCreate')
+                    : t('generateTask.submit')}
               </button>
             )}
           </div>
@@ -1222,6 +1552,7 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
               templateType: CATEGORY_TYPE[category],
               estimatedMinutes: null,
               fillBackDifficultyDisabled: false,
+              briefSource: contentBrief.trim() || newTaskDesc || newTaskTitle.trim(),
             })}
           </div>
 
@@ -1231,10 +1562,14 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
             </button>
             <button
               onClick={handleGenerateSubmit}
-              disabled={!createdTemplateId || Boolean(dateError) || generating}
+              disabled={!createdTemplateId || Boolean(dateError) || generating || dateHasInstance === true}
               className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {generating ? t('common.loading') : t('generateTask.submit')}
+              {generating
+                ? t('common.loading')
+                : contentDraft
+                  ? t('generateTask.confirmCreate')
+                  : t('generateTask.submit')}
             </button>
           </div>
         </div>
@@ -1243,34 +1578,6 @@ const AddTaskModal: React.FC<AddTaskModalProps> = ({
   }
 
   // 编辑模板 或 一次性新建（走原路径）
-  const patchTrigger = (index: number, patch: Partial<TriggerDraft>) => {
-    setTriggers(prev => prev.map((draft, i) => (i === index ? { ...draft, ...patch } : draft)));
-  };
-
-  const changeTimedMode = (mode: TimedMode) => {
-    setTimedMode(mode);
-    if (mode === 'NONE') {
-      setDeadlineTime('');
-      setStartTime('');
-      setDurationMinutes(0);
-    } else {
-      setDeadlineTime(prev => prev || '20:00');
-      setStartTime(prev => prev || '16:30');
-      setDurationMinutes(prev => (prev > 0 ? prev : 45));
-    }
-  };
-
-  const buildError = (): TemplateFormErrors | null =>
-    validateTemplateForm({
-      title: newTaskTitle,
-      xp: newTaskXP,
-      timed_mode: timedMode,
-      deadline_time: deadlineTime,
-      start_time: startTime,
-      duration_minutes: durationMinutes,
-      triggers: category === 'once' ? [] : triggers,
-    });
-
   const handleSubmit = () => {
     const formErrors = buildError();
     setErrors(formErrors);

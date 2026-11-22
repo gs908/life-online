@@ -372,6 +372,8 @@ async def generate_instance_for_template(
         time_deposit=payload.time_deposit,
         xp_reward=payload.xp_reward,
         target_child_id=payload.target_child_id,
+        title=payload.title,
+        description=payload.description,
     )
     if action == "no_season":
         # 实例 season_id 非空且"任务不跨赛季":没有激活赛季就有没有可归属的对象,

@@ -403,13 +403,18 @@ const zhCN = {
     questNamePlaceholder: '任务名称',
     questContent: '任务内容',
     questContentPlaceholder: '描述...',
+    targetDate: '目标日期',
     brief: '任务要点',
     briefPlaceholder: '例：口算 4 页，100 以内',
     briefHint: '告诉生成器这条任务现实里要做什么，不要写赛季背景。',
     polish: 'AI 润色',
-    polishDisabledHint: 'AI 润色即将上线，本期请自行填写任务内容。',
+    polishHint: '把任务要点交给 AI，结合当季背景润色出任务名称与内容，结果反显到上方表单，可继续修改。',
     onceHint: '这条任务不进模板库，只作为一次性临时任务投放。',
     submit: '创建',
+    duplicateTitle: '可能重复的任务',
+    duplicateMsg: '{{date}} 已有相似任务，确认要再创建一条吗？',
+    duplicateConfirm: '仍要创建',
+    duplicateCancel: '返回修改',
   },
   // 选模板 → 生成（契约 §6B，POST /scn/task-templates/{id}/generate）
   generateTask: {
@@ -428,6 +433,18 @@ const zhCN = {
     errDateTooFar: '目标日期最多提前 {{days}} 天',
     beyondSeasonEnd: '{{date}} 已超出本赛季「{{name}}」（至 {{end}}），生成的任务仍归属本赛季。',
     dateHasInstance: '{{date}} 已有任务实例，将直接使用该实例（不覆盖、不重建）。',
+    dateHasInstanceBlock: '{{date}} 已存在该模板的任务，无法重复创建。',
+    // 内容预览（DEV-61「预览 → 确认 → 保存」）
+    contentPreview: '任务内容预览',
+    previewContent: '生成任务内容',
+    regenerateContent: '重新生成内容',
+    previewNeedsBrief: '该模板没有任务要点（content_brief）也没有描述，无法生成内容。',
+    previewFailed: '内容生成失败，请重试；也可以直接按模板内容创建。',
+    contentTitleLabel: '任务名称（可修改）',
+    contentDescLabel: '任务背景与内容（可修改）',
+    contentPreviewEmpty: '点击「生成任务内容」，AI 会结合当季背景与模板事项给出任务名称、内容与推荐数值。',
+    contentPreviewHint: '以上为 AI 建议，确认创建后只写入本次任务，不影响模板。',
+    confirmCreate: '确认创建',
     // 无产物动作（skipped_expired）：不能套成功框，也不能报"已排期到 null"
     resultSkippedTitle: '本次未生成任务',
     // 复用了既有实例、且该实例没有归属日（链式实例 generated_for_date 为 NULL）

@@ -9,6 +9,8 @@ import { request } from '../http';
 import type {
   PageResult,
   TaskApproveRequest,
+  TaskBriefGenerateRequest,
+  TaskBriefSuggestion,
   TaskCreate,
   TaskDepositPreviewRequest,
   TaskDepositPreviewResponse,
@@ -45,6 +47,14 @@ export const patchTask = (taskId: string, data: TaskInstancePatch) =>
 /** 管理端表单实时预览押金（父母权限）：押金 = 耗时驱动，难度不影响押金（DEV-34 块 C） */
 export const previewDeposit = (data: TaskDepositPreviewRequest) =>
   request<TaskDepositPreviewResponse>('/scn/task-templates/preview-deposit', {
+    method: 'POST',
+    body: data,
+  });
+
+/** 「任务要点 → 任务建议」（DEV-60）：LLM 润色反显表单，**不落库**；
+ *  确认后再走 createTask / generateTemplate。失败口径：未配置 503，其余 502。 */
+export const generateFromBrief = (data: TaskBriefGenerateRequest) =>
+  request<TaskBriefSuggestion>('/scn/tasks/generate-from-brief', {
     method: 'POST',
     body: data,
   });

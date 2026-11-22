@@ -110,6 +110,54 @@ async def test_generate_without_overrides_snapshots_template(
     assert (data["difficulty"], data["time_deposit"], data["xp_reward"]) == (3, 12, 66)
 
 
+# ---- 1b. 内容覆盖(DEV-61「预览 → 确认 → 保存」):title/description 快照到实例 ----
+
+
+async def test_generate_applies_content_overrides(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """AI 建议经家长确认后随生成落库:实例用覆盖文案,模板保持不动。"""
+    template = await _make_template(
+        db_session, seeded, title="模板原标题", description="模板原内容",
+    )
+    resp = await api_client.post(
+        f"/api/v1/scn/task-templates/{template.id}/generate",
+        json={"title": "确认后的任务名", "description": "确认后的任务背景与内容"},
+        headers=_headers(seeded.parent),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["action"] == "created"
+    instance_id = data["instance_id"]
+
+    instance = await db_session.get(ScnTaskInstance, instance_id)
+    assert instance is not None
+    assert instance.title == "确认后的任务名"
+    assert instance.description == "确认后的任务背景与内容"
+
+    # 模板文案不被回写(覆盖只作用于本次实例)
+    await db_session.refresh(template)
+    assert template.title == "模板原标题"
+    assert template.description == "模板原内容"
+
+
+async def test_generate_rejects_null_or_blank_content(
+    api_client: AsyncClient, db_session: AsyncSession, seeded: SeededFamily,
+):
+    """显式 null / 纯空白标题 → 422:与三个数值快照同口径,不静默回落模板值。"""
+    template = await _make_template(db_session, seeded)
+    path = f"/api/v1/scn/task-templates/{template.id}/generate"
+    headers = _headers(seeded.parent)
+
+    null_title = await api_client.post(path, json={"title": None}, headers=headers)
+    assert null_title.status_code == 422, null_title.text
+    assert "不可为空" in null_title.text
+
+    blank_title = await api_client.post(path, json={"title": "   "}, headers=headers)
+    assert blank_title.status_code == 422, blank_title.text
+    assert "不可为空白" in blank_title.text
+
+
 # ---- 2. 日期校验 ----
 
 
