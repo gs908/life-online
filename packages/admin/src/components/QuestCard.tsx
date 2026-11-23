@@ -115,8 +115,9 @@ const QuestCard: React.FC<QuestCardProps> = ({ task, role, isActive, scheduled, 
         {task.lore_snippet && <p className="text-xs italic text-slate-500 mt-1 border-l-2 border-slate-300 pl-2">"{task.lore_snippet}"</p>}
         <p className="text-sm text-slate-700 mt-2">{task.description}</p>
 
-        {/* 驳回原因（DEV-57）：家长填写的 review_comment；引导孩子修改后重交（重交按钮沿用 IN_PROGRESS 分支） */}
-        {rejectedInProgress && (
+        {/* 驳回原因（DEV-57）：家长填写的 review_comment；引导孩子修改后重交（重交按钮沿用 IN_PROGRESS 分支）
+            DEV-62：非前端调用可能产生空评语驳回，此时只保留驳回徽标，不渲染空的「驳回原因」行（对齐 WeeklyTaskView） */}
+        {rejectedInProgress && task.review_comment?.trim() && (
           <div className="mt-2 flex items-start gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5" role="note">
             <AlertTriangle size={14} className="shrink-0 mt-0.5" aria-hidden />
             <span>
