@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -98,6 +100,29 @@ async def _count_instances(db: AsyncSession, template_id: str) -> int:
         )
     ).scalars().all()
     return len(rows)
+
+
+@contextmanager
+def _record_generation_actions():
+    """按模板 id 记录 run_generation 内每个模板的实际动作(DEV-61)。
+
+    `run_generation` 的 stats 是**全库**聚合,而测试库共享且可能留有历史数据,
+    全库计数会随环境失真。这里包一层真实 `generate_for_template`(不 mock 数据库),
+    只把断言口径收敛到本用例自建的模板上,结果与库内既有内容无关。
+    """
+    recorded: dict[str, list[str]] = {}
+    real_generate = task_generator_service.generate_for_template
+
+    async def _spy(db, template, **kw):
+        # id 必须在调用前取:exists/撞库路径会 rollback 并 expire 会话内对象,
+        # 调用后再访问 template.id 会触发隐式重载(MissingGreenlet)。
+        template_id = template.id
+        instance, action = await real_generate(db, template, **kw)
+        recorded.setdefault(template_id, []).append(action)
+        return instance, action
+
+    with patch.object(task_generator_service, "generate_for_template", _spy):
+        yield recorded
 
 
 @pytest_asyncio.fixture
@@ -278,8 +303,11 @@ async def test_multi_trigger_same_day_dedup(db_session, seeded):
     )
     assert action == "created"
     # 再跑一轮(全量 job 视角),三条规则同日命中仍只有 1 条。
-    stats = await task_generator_service.run_generation(db_session, today=TODAY, now=NOW)
-    assert stats.get("exists", 0) == 1 and stats.get("created", 0) == 0
+    # 断言按本模板 id 过滤:run_generation 的 stats 是全库聚合,共享测试库里的
+    # 残留模板会让全库计数失真(DEV-61)。
+    with _record_generation_actions() as actions:
+        await task_generator_service.run_generation(db_session, today=TODAY, now=NOW)
+    assert actions.get(template.id) == ["exists"]  # 如实报 exists,而非重复 created
     assert await _count_instances(db_session, template.id) == 1
 
 
@@ -490,10 +518,13 @@ async def test_run_generation_survives_today_completed_template(db_session, seed
         db_session, seeded, triggers=[_trigger(TriggerKind.DAILY)],
     )
 
-    stats = await task_generator_service.run_generation(db_session, today=TODAY, now=NOW)
-    assert stats["errors"] == 0
-    assert stats["exists"] == 1  # 已消费模板:撞索引回捞,如实 exists
-    assert stats["created"] == 1  # 后续 due 模板不受污染,正常生成
+    # 动作断言按本用例的两个模板 id 过滤:stats 是全库聚合,共享测试库里的
+    # 残留模板会让 exists/created 计数失真(DEV-61)。
+    with _record_generation_actions() as actions:
+        stats = await task_generator_service.run_generation(db_session, today=TODAY, now=NOW)
+    assert stats["errors"] == 0  # 本轮作业未被打挂(不回滚污染后续模板)
+    assert actions.get(done_tpl.id) == ["exists"]  # 已消费模板:撞索引回捞,如实 exists
+    assert actions.get(fresh_tpl.id) == ["created"]  # 后续 due 模板不受污染,正常生成
     assert await _count_instances(db_session, done_tpl.id) == 1  # 未重复生成
     assert await _count_instances(db_session, fresh_tpl.id) == 1
 
